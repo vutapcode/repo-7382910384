@@ -816,8 +816,10 @@ def _passive_thesis_reason(state, signal, setup, now_mono):
             setup['passive_below_floor_seconds'] = 0.0
     if not getattr(state, 'system_ready', False) or not getattr(state, 'trading_enabled', False):
         return 'SYSTEM_NOT_READY'
-    if time.time() - float(getattr(state, 'execution_price_time', 0.0) or 0.0) > 3.0:
-        return 'EXECUTION_FEED_STALE'
+    # Testnet is output-only sandbox; a stale Testnet feed must NOT block a Mainnet thesis.
+    if not getattr(state, '_api_is_testnet', False):
+        if time.time() - float(getattr(state, 'execution_price_time', 0.0) or 0.0) > 3.0:
+            return 'EXECUTION_FEED_STALE'
     return None
 
 
@@ -943,10 +945,14 @@ def _market_conversion_assessment(state, signal, setup, qty, tick_size):
     )
     result['minimum_market_edge_lcb'] = minimum_market_edge
     result['mainnet_risk_plan'] = risk_plan
+    # On Testnet, execution_price is Futures Mainnet economics reference only;
+    # a missing/stale Testnet BBO must NOT block the thesis gate.
+    testnet_mode = getattr(state, '_api_is_testnet', False)
+    bbo_ok = execution_price > 0.0 or testnet_mode
     result['eligible'] = bool(
         edge >= minimum_market_edge
         and entry_policy == 'MARKET_OR_CONFIGURED'
-        and execution_price > 0.0
+        and bbo_ok
         and risk_eligible
     )
     if not result['eligible']:
@@ -956,7 +962,7 @@ def _market_conversion_assessment(state, signal, setup, qty, tick_size):
             else 'MARKET_POLICY_NOT_AUTHORIZED'
             if entry_policy != 'MARKET_OR_CONFIGURED'
             else 'EXECUTION_BBO_MISSING'
-            if execution_price <= 0.0
+            if not bbo_ok
             else 'MAINNET_MARKET_RISK_BUDGET_INVALID'
         )
     return result

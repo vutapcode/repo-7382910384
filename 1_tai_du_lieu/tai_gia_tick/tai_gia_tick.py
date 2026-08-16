@@ -78,11 +78,16 @@ async def hung_gia_tick_futures(symbol: str, bo_nho_ram):
             await asyncio.sleep(2)
 
 
-async def hung_gia_tick_execution(symbol: str, bo_nho_ram):
-    """Feed Futures Mainnet để execute."""
-    stream_url = f"wss://fstream.binance.com/ws/{symbol.lower()}@bookTicker"
-    rest_url = f"https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol={symbol.upper()}"
-    venue = "MAINNET"
+async def hung_gia_tick_execution(symbol: str, bo_nho_ram, testnet: bool = False):
+    """Feed Futures Mainnet BBO de execute. Truyen testnet=True cho Futures Testnet."""
+    if testnet:
+        stream_url = f"wss://stream.binancefuture.com/ws/{symbol.lower()}@bookTicker"
+        rest_url = f"https://testnet.binancefuture.com/fapi/v1/ticker/bookTicker?symbol={symbol.upper()}"
+        venue = "FUTURES_TESTNET"
+    else:
+        stream_url = f"wss://fstream.binance.com/ws/{symbol.lower()}@bookTicker"
+        rest_url = f"https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol={symbol.upper()}"
+        venue = "MAINNET"
     timeout = aiohttp.ClientTimeout(total=2.0)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         while True:
@@ -91,7 +96,7 @@ async def hung_gia_tick_execution(symbol: str, bo_nho_ram):
                     stream_url, ping_interval=20, ping_timeout=10
                 ) as ws:
                     logging.info(
-                        "🧪 [EXECUTION TICK] Đã kết nối bookTicker %s: %s",
+                        "🧪 [EXECUTION TICK] Da ket noi bookTicker %s: %s",
                         venue, symbol.upper(),
                     )
                     while True:
@@ -101,9 +106,6 @@ async def hung_gia_tick_execution(symbol: str, bo_nho_ram):
                                 timeout=EXECUTION_IDLE_FALLBACK_SECONDS,
                             )
                         except asyncio.TimeoutError:
-                            # bookTicker chỉ phát khi BBO đổi; thị trường
-                            # im lặng không đồng nghĩa mất kết nối. Refresh BBO
-                            # bằng REST cùng venue để watchdog không hủy setup.
                             await _refresh_execution_book_ticker(
                                 session, rest_url, bo_nho_ram
                             )
@@ -119,7 +121,7 @@ async def hung_gia_tick_execution(symbol: str, bo_nho_ram):
                 raise
             except Exception as exc:
                 logging.error(
-                    "❌ [EXECUTION TICK] Mất luồng %s: %s; reconnect sau 2s",
+                    "[EXECUTION TICK] Mat luong %s: %s; reconnect sau 2s",
                     venue, exc,
                 )
                 await asyncio.sleep(2)

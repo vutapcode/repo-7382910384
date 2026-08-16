@@ -99,6 +99,8 @@ api = binance_api.BinanceAPI(
 state.execution_venue = (
     'BINANCE_FUTURES_TESTNET' if api.testnet else 'BINANCE_FUTURES_MAINNET'
 )
+# Flag consumed by dat_lenh.py gate bypass when Testnet is the execution sandbox.
+state._api_is_testnet = api.testnet
 
 if api.testnet:
     import os
@@ -614,8 +616,8 @@ async def main():
         # --- FUTURES MAINNET --- (Volume / CVD / Dòng tiền)
         asyncio.create_task(supervise('aggTrade_futures', lambda: tai_dong_tien.hung_dong_tien_futures_real("btcusdt", state))),
         
-        # --- FUTURES MAINNET EXECUTION --- (Shadow Trading Data Layer)
-        asyncio.create_task(supervise('executionBookTicker', lambda: tai_gia_tick.hung_gia_tick_execution("btcusdt", state))),
+        # --- FUTURES EXECUTION DATA (Mainnet cho economics; Testnet BBO chỉ là reference) ---
+        asyncio.create_task(supervise('executionBookTicker', lambda: tai_gia_tick.hung_gia_tick_execution("btcusdt", state, testnet=api.testnet))),
         asyncio.create_task(supervise('executionDepth20', lambda: tai_so_lenh.hung_so_lenh_futures_execution("btcusdt", state))),
     ]
     
