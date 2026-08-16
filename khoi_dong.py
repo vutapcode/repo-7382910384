@@ -628,7 +628,13 @@ async def main():
     import os
     mode = os.getenv('SMC_EXECUTION_MODE')
     if mode == 'SHADOW_MAINNET':
-        from 3_thuc_thi import dat_lenh_shadow
+        import importlib.util
+        from pathlib import Path
+        CURRENT_DIR = Path(__file__).resolve().parent
+        spec = importlib.util.spec_from_file_location("dat_lenh_shadow", CURRENT_DIR / "3_thuc_thi" / "dat_lenh_shadow.py")
+        dat_lenh_shadow = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(dat_lenh_shadow)
+        
         tasks_thuc_thi = [
             asyncio.create_task(supervise('shadow_executor', lambda: dat_lenh_shadow.vong_lap_shadow_thuc_thi(state, api))),
             asyncio.create_task(supervise('shadow_guardian', lambda: dat_lenh_shadow.vong_lap_shadow_guardian(state, api))),

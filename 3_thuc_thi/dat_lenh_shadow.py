@@ -18,6 +18,10 @@ economic_mod = load_module(
     "kinh_te_lenh",
     CURRENT_DIR.parent / "2_suy_luan_mapping" / "tong_ket_chi_huy" / "kinh_te_lenh.py",
 )
+journal_mod = load_module(
+    "nhat_ky_giao_dich",
+    CURRENT_DIR / "quan_ly_vi_the" / "nhat_ky_giao_dich.py",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +47,8 @@ async def vong_lap_shadow_thuc_thi(state, api=None):
                 continue
                 
             qty = float(signal.get('quantity', 0.0))
-            side = signal.get('bias')
+            original_bias = signal.get('bias', '')
+            side = 'BUY' if original_bias == 'LONG' else 'SELL'
             entry_style = str(signal.get('entry_style') or '').upper()
             
             if entry_style == 'PASSIVE_RETEST':
@@ -68,7 +73,7 @@ async def vong_lap_shadow_thuc_thi(state, api=None):
                 logger.info(f"[SHADOW MAINNET] Tạo Lệnh chờ Ảo {side} Limit: {desired}")
             else:
                 # Market fill
-                entry_levels = state.execution_asks_top_10 if side == 'LONG' or side == 'BUY' else state.execution_bids_top_10
+                entry_levels = state.execution_asks_top_10 if side == 'BUY' else state.execution_bids_top_10
                 fill = economic_mod.estimate_market_fill(entry_levels, qty)
                 entry_price = float(fill.get('avg_price', 0.0))
                 
@@ -126,6 +131,8 @@ async def vong_lap_shadow_guardian(state, api=None):
                 if filled:
                     order['status'] = 'FILLED'
                     order['entryPrice'] = order['price']
+                    order['sl'] = order['signal'].get('hard_sl') or order['signal'].get('soft_sl')
+                    order['tp'] = order['signal'].get('soft_tp1') or order['signal'].get('hard_tp')
                     state.shadow_positions.append(order)
                     logger.info(f"[SHADOW MAINNET] Lệnh {order['id']} FILLED tại {order['price']}")
                 else:
@@ -141,8 +148,8 @@ async def vong_lap_shadow_guardian(state, api=None):
                 close_price = 0.0
                 
                 # Tính toán lại SL/TP từ signal levels nếu cần, nhưng giả định đơn giản lấy từ pos
-                sl = float(pos.get('sl', 0.0))
-                tp = float(pos.get('tp', 0.0))
+                sl = float(pos.get('sl') or 0.0)
+                tp = float(pos.get('tp') or 0.0)
                 
                 if sl > 0.0 and tp > 0.0:
                     if pos['side'] == 'BUY' or pos['side'] == 'LONG':
@@ -166,7 +173,14 @@ async def vong_lap_shadow_guardian(state, api=None):
                             
                 if closed:
                     logger.info(f"[SHADOW MAINNET] Vị thế {pos['id']} đóng do {close_reason} tại {close_price}")
-                    # Thực tế nên ghi journal ở đây, ta in log tạm
+                    if hasattr(journal_mod, 'record_shadow_trade_result'):
+                        journal_mod.record_shadow_trade_result(state, pos, close_reason, close_price)
+                    elif hasattr(journal_mod, 'record_decision_stage'):
+                        journal_mod.record_decision_stage(state, close_reason, {
+                            'position_id': pos['id'],
+                            'close_price': close_price,
+                            'entry_price': pos.get('entryPrice')
+                        })
                 else:
                     surviving_positions.append(pos)
             state.shadow_positions = surviving_positions

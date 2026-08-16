@@ -11,6 +11,7 @@ class MockState:
     def __init__(self):
         self.hang_doi_tin_hieu = asyncio.Queue()
         self.execution_price_time = time.time()
+        self.execution_depth_time = time.time()
         self.execution_best_bid = 100.0
         self.execution_best_ask = 101.0
         self.best_bid = 100.0
@@ -64,7 +65,7 @@ class TestShadowMainnet(unittest.IsolatedAsyncioTestCase):
         state.execution_best_ask = 101.0
         api = MagicMock()
         
-        signal = {'bias': 'BUY', 'quantity': 1.0, 'entry_style': 'PASSIVE_RETEST', 'entry_price': 99.0}
+        signal = {'bias': 'LONG', 'quantity': 1.0, 'entry_style': 'PASSIVE_RETEST', 'entry_price': 99.0}
         await state.hang_doi_tin_hieu.put(signal)
         
         exec_task = asyncio.create_task(dat_lenh_shadow.vong_lap_shadow_thuc_thi(state, api))

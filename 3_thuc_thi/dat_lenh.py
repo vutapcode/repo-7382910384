@@ -185,10 +185,13 @@ def _retention_size_feasibility(equity, desired_pct, price, filters):
 def require_fresh_execution_bbo(state):
     """
     Ensure the Futures execution feed is healthy and not stale.
-    Fail-closed: If stale > 3s or missing BBO, reject.
+    Fail-closed: If stale > 3s or missing BBO/Depth, reject.
     """
     import time
-    if time.time() - getattr(state, 'execution_price_time', 0.0) > 3.0:
+    now = time.time()
+    if now - getattr(state, 'execution_price_time', 0.0) > 3.0:
+        return False
+    if now - getattr(state, 'execution_depth_time', 0.0) > 3.0:
         return False
     bid = getattr(state, 'execution_best_bid', 0.0)
     ask = getattr(state, 'execution_best_ask', 0.0)
