@@ -100,6 +100,14 @@ state.execution_venue = (
     'BINANCE_FUTURES_TESTNET' if api.testnet else 'BINANCE_FUTURES_MAINNET'
 )
 
+if api.testnet:
+    import os
+    from pathlib import Path
+    testnet_journal = Path(__file__).resolve().parent / '3_thuc_thi' / 'quan_ly_vi_the' / 'nhat_ky_testnet'
+    nhat_ky_giao_dich.JOURNAL_DIR = testnet_journal
+    nhat_ky_giao_dich.SNAPSHOT_PATH = testnet_journal / 'cycles.json'
+    nhat_ky_giao_dich.EVENT_PATH = testnet_journal / 'events.jsonl'
+
 
 async def supervise(name, factory):
     """Restart task khi code/network ném exception; không để gather kéo sập toàn bot."""
@@ -625,39 +633,24 @@ async def main():
     ]
     
     # Task Khối 3: Thực thi và bảo vệ
+    tasks_thuc_thi = [
+        asyncio.create_task(supervise('executor', lambda: dat_lenh.vong_lap_thuc_thi(state, api))),
+        asyncio.create_task(supervise('guardian', lambda: bao_ve_khan_cap.vong_lap_bao_ve(state, api))),
+        asyncio.create_task(supervise('trailing', lambda: tho_san_trailing.vong_lap_trailing(state, api))),
+        asyncio.create_task(supervise('rom_backup', lambda: dong_bo_trang_thai.vong_lap_dong_bo(state))),
+        asyncio.create_task(supervise('reconcile', lambda: dong_bo_trang_thai.vong_lap_doi_chieu(state, api))),
+        asyncio.create_task(supervise('trade_journal', lambda: nhat_ky_giao_dich.vong_lap_nhat_ky(state, api))),
+        asyncio.create_task(supervise('watchdog', lambda: giam_sat_he_thong.vong_lap_giam_sat(state))),
+        asyncio.create_task(supervise('runtime_heartbeat', vong_lap_runtime_heartbeat)),
+    ]
+    
     import os
-    mode = os.getenv('SMC_EXECUTION_MODE')
-    if mode == 'SHADOW_MAINNET':
-        import importlib.util
-        from pathlib import Path
-        CURRENT_DIR = Path(__file__).resolve().parent
-        spec = importlib.util.spec_from_file_location("dat_lenh_shadow", CURRENT_DIR / "3_thuc_thi" / "dat_lenh_shadow.py")
-        dat_lenh_shadow = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(dat_lenh_shadow)
-        
-        tasks_thuc_thi = [
-            asyncio.create_task(supervise('shadow_executor', lambda: dat_lenh_shadow.vong_lap_shadow_thuc_thi(state, api))),
-            asyncio.create_task(supervise('shadow_guardian', lambda: dat_lenh_shadow.vong_lap_shadow_guardian(state, api))),
-            asyncio.create_task(supervise('watchdog', lambda: giam_sat_he_thong.vong_lap_giam_sat(state))),
-            asyncio.create_task(supervise('runtime_heartbeat', vong_lap_runtime_heartbeat)),
-        ]
-    else:
-        tasks_thuc_thi = [
-            asyncio.create_task(supervise('executor', lambda: dat_lenh.vong_lap_thuc_thi(state, api))),
-            asyncio.create_task(supervise('guardian', lambda: bao_ve_khan_cap.vong_lap_bao_ve(state, api))),
-            asyncio.create_task(supervise('trailing', lambda: tho_san_trailing.vong_lap_trailing(state, api))),
-            asyncio.create_task(supervise('rom_backup', lambda: dong_bo_trang_thai.vong_lap_dong_bo(state))),
-            asyncio.create_task(supervise('reconcile', lambda: dong_bo_trang_thai.vong_lap_doi_chieu(state, api))),
-            asyncio.create_task(supervise('trade_journal', lambda: nhat_ky_giao_dich.vong_lap_nhat_ky(state, api))),
-            asyncio.create_task(supervise('watchdog', lambda: giam_sat_he_thong.vong_lap_giam_sat(state))),
-            asyncio.create_task(supervise('runtime_heartbeat', vong_lap_runtime_heartbeat)),
-        ]
-        if os.getenv('SMC_MINIMAL_MAINNET_AUDIT', 'false').lower() not in (
-            '1', 'true', 'yes', 'on'
-        ):
-            tasks_thuc_thi.append(asyncio.create_task(supervise(
-                'shadow', lambda: nhat_ky_giao_dich.vong_lap_shadow(state)
-            )))
+    if os.getenv('SMC_MINIMAL_MAINNET_AUDIT', 'false').lower() not in (
+        '1', 'true', 'yes', 'on'
+    ):
+        tasks_thuc_thi.append(asyncio.create_task(supervise(
+            'shadow_counterfactual', lambda: nhat_ky_giao_dich.vong_lap_shadow(state)
+        )))
     
     await asyncio.gather(*(tasks_mang + tasks_noi_bo + tasks_thuc_thi))
 

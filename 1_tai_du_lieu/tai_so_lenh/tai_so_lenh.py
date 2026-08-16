@@ -92,6 +92,7 @@ async def hung_so_lenh_futures_execution(symbol: str, state):
                         state.execution_asks = asks
                         state.execution_bids_top_10 = bids[:10]
                         state.execution_asks_top_10 = asks[:10]
+                        state.execution_depth_time = time.time()
                         
                     except (KeyError, TypeError, ValueError):
                         continue

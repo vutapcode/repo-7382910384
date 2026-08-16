@@ -1652,6 +1652,8 @@ async def _xu_ly_tin_hieu(signal, state, api):
                     zone if zone > 0.0 and zone - current_price <= 0.50 * atr
                     else float(state.best_ask)
                 )
+        if api.testnet:
+            signal['entry_style'] = 'MARKET'
         if mainnet_fixed:
             # Mainnet BTCUSDT quantity step is 0.001.  Preserve the scorer and
             # economics decision, but never translate a tier into more size.
