@@ -32,7 +32,7 @@ def _apply_execution_book_ticker(data, bo_nho_ram):
 
 
 async def _refresh_execution_book_ticker(session, url, bo_nho_ram):
-    """REST fallback chỉ khi testnet WS im lặng; giá vẫn cùng execution venue."""
+    """REST fallback khi WS im lặng; giá vẫn cùng execution venue."""
     try:
         async with session.get(url) as response:
             if response.status != 200:
@@ -71,16 +71,6 @@ async def hung_gia_tick_futures(symbol: str, bo_nho_ram):
                     bo_nho_ram.best_bid = bid
                     bo_nho_ram.best_ask = ask
                     bo_nho_ram.thoi_gian_tick_cuoi = time.time()
-                    # Mainnet execution and strategy share one authoritative
-                    # BBO.  Do not open a duplicate WebSocket in live mode.
-                    if getattr(bo_nho_ram, 'execution_venue', '') == (
-                        'BINANCE_FUTURES_MAINNET'
-                    ):
-                        bo_nho_ram.execution_best_bid = bid
-                        bo_nho_ram.execution_best_ask = ask
-                        bo_nho_ram.execution_price_time = (
-                            bo_nho_ram.thoi_gian_tick_cuoi
-                        )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -88,19 +78,11 @@ async def hung_gia_tick_futures(symbol: str, bo_nho_ram):
             await asyncio.sleep(2)
 
 
-async def hung_gia_tick_execution(symbol: str, bo_nho_ram, testnet=True):
-    """Feed Testnet để audit/execute; quyết định bảo vệ vẫn dùng Mainnet."""
-    base = (
-        "wss://testnet.binance.vision/ws"
-        if testnet else "wss://stream.binance.com:9443/ws"
-    )
-    stream_url = f"{base}/{symbol.lower()}@bookTicker"
-    rest_base = (
-        "https://testnet.binance.vision"
-        if testnet else "https://api.binance.com"
-    )
-    rest_url = f"{rest_base}/api/v3/ticker/bookTicker?symbol={symbol.upper()}"
-    venue = "TESTNET" if testnet else "MAINNET"
+async def hung_gia_tick_execution(symbol: str, bo_nho_ram):
+    """Feed Futures Mainnet để execute."""
+    stream_url = f"wss://fstream.binance.com/ws/{symbol.lower()}@bookTicker"
+    rest_url = f"https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol={symbol.upper()}"
+    venue = "MAINNET"
     timeout = aiohttp.ClientTimeout(total=2.0)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         while True:
@@ -119,9 +101,9 @@ async def hung_gia_tick_execution(symbol: str, bo_nho_ram, testnet=True):
                                 timeout=EXECUTION_IDLE_FALLBACK_SECONDS,
                             )
                         except asyncio.TimeoutError:
-                            # Testnet bookTicker chỉ phát khi BBO đổi; thị trường
+                            # bookTicker chỉ phát khi BBO đổi; thị trường
                             # im lặng không đồng nghĩa mất kết nối. Refresh BBO
-                            # bằng REST cùng venue để watchdog không hủy setup giả.
+                            # bằng REST cùng venue để watchdog không hủy setup.
                             await _refresh_execution_book_ticker(
                                 session, rest_url, bo_nho_ram
                             )

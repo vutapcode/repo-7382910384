@@ -607,7 +607,7 @@ def mark_actual_closed(
 
 def _walk_for_side(state, side, quantity, closing=False):
     is_buy = (side == 'LONG') != bool(closing)
-    levels = state.asks_top_10 if is_buy else state.bids_top_10
+    levels = state.execution_asks_top_10 if is_buy else state.execution_bids_top_10
     return economic_mod.estimate_market_fill(levels, quantity)
 
 

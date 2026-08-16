@@ -61,10 +61,45 @@ async def hung_so_lenh_futures(symbol: str, bo_nho_ram):
                     # Cập nhật nhịp tim để giam_sat_he_thong.py (Watchdog) biết luồng vẫn sống
                     bo_nho_ram.thoi_gian_so_lenh_cuoi = snapshot['timestamp']
 
+
         except websockets.exceptions.ConnectionClosed:
             logging.warning("⚠️ [ORDERBOOK] Mất kết nối mạng. Đang kết nối lại...")
             await asyncio.sleep(1)
             
         except Exception as e:
             logging.error(f"❌ [ORDERBOOK] Lỗi ngoại lệ: {e}. Thử lại sau 2s...")
+            await asyncio.sleep(2)
+
+async def hung_so_lenh_futures_execution(symbol: str, state):
+    """
+    Hàm kết nối WebSocket để hứng Sổ lệnh Top 20 từ Binance Futures Mainnet phục vụ execution.
+    """
+    stream_url = f"wss://fstream.binance.com/ws/{symbol.lower()}@depth20@100ms"
+    
+    while True:
+        try:
+            async with websockets.connect(stream_url, ping_interval=20, ping_timeout=10) as ws:
+                logging.info(f"📚 [ORDERBOOK-EXEC] Đã kết nối luồng Futures Mainnet: {symbol.upper()}")
+                
+                async for message in ws:
+                    try:
+                        data = orjson.loads(message)
+                        
+                        bids = [[float(price), float(qty)] for price, qty in data.get('b', [])]
+                        asks = [[float(price), float(qty)] for price, qty in data.get('a', [])]
+                        
+                        state.execution_bids = bids
+                        state.execution_asks = asks
+                        state.execution_bids_top_10 = bids[:10]
+                        state.execution_asks_top_10 = asks[:10]
+                        
+                    except (KeyError, TypeError, ValueError):
+                        continue
+
+        except websockets.exceptions.ConnectionClosed:
+            logging.warning("⚠️ [ORDERBOOK-EXEC] Mất kết nối mạng. Đang kết nối lại...")
+            await asyncio.sleep(1)
+            
+        except Exception as e:
+            logging.error(f"❌ [ORDERBOOK-EXEC] Lỗi ngoại lệ: {e}. Thử lại sau 2s...")
             await asyncio.sleep(2)

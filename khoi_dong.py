@@ -596,20 +596,20 @@ async def main():
     
     # Task Khối 1: Hứng luồng mạng (Độc lập tuyệt đối, có cơ chế tự backoff)
     tasks_mang = [
+        # --- SPOT MAINNET --- (Chiến lược / Structure / Signal)
         asyncio.create_task(supervise('bookTicker', lambda: tai_gia_tick.hung_gia_tick_futures("btcusdt", state))),
         asyncio.create_task(supervise('depth20', lambda: tai_so_lenh.hung_so_lenh_futures("btcusdt", state))),
         asyncio.create_task(supervise('kline', lambda: tai_nen_live.hung_nen_live_futures("btcusdt", state))),
         asyncio.create_task(supervise('aggTrade_spot', lambda: tai_dong_tien.hung_dong_tien_spot("btcusdt", state))),
-        asyncio.create_task(supervise('aggTrade_futures', lambda: tai_dong_tien.hung_dong_tien_futures_real("btcusdt", state))),
         asyncio.create_task(supervise('coinbase_spot', lambda: tai_coinbase.hung_coinbase_spot("BTC-USD", state))),
+        
+        # --- FUTURES MAINNET --- (Volume / CVD / Dòng tiền)
+        asyncio.create_task(supervise('aggTrade_futures', lambda: tai_dong_tien.hung_dong_tien_futures_real("btcusdt", state))),
+        
+        # --- FUTURES MAINNET EXECUTION --- (Shadow Trading Data Layer)
+        asyncio.create_task(supervise('executionBookTicker', lambda: tai_gia_tick.hung_gia_tick_execution("btcusdt", state))),
+        asyncio.create_task(supervise('executionDepth20', lambda: tai_so_lenh.hung_so_lenh_futures_execution("btcusdt", state))),
     ]
-    if api.testnet:
-        tasks_mang.append(asyncio.create_task(supervise(
-            'executionBookTicker',
-            lambda: tai_gia_tick.hung_gia_tick_execution(
-                "btcusdt", state, testnet=True
-            ),
-        )))
     
     # Task Khối 2: Chạy nội bộ tiêu thụ Queue
     tasks_noi_bo = [

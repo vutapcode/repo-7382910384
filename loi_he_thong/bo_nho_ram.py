@@ -107,6 +107,10 @@ class SharedState:
         # Giá Testnet chỉ dùng quan sát chất lượng khớp/khả năng execution.
         # Guardian/Trailing ra quyết định bằng best_bid/best_ask Mainnet ở trên.
         self.execution_best_bid = 0.0
+        self.execution_bids = []
+        self.execution_asks = []
+        self.execution_bids_top_10 = []
+        self.execution_asks_top_10 = []
         self.execution_best_ask = 0.0
         self.execution_price_time = 0.0
         self.execution_venue = 'UNKNOWN'

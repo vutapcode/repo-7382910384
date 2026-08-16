@@ -260,8 +260,8 @@ def _dynamic_bundle(
         levels['hard_sl'] = split_policy['sl2']
     risk_plan = None
     if mainnet_safety.execution_venue() == 'MAINNET':
-        bid = float(getattr(state, 'best_bid', 0.0) or 0.0)
-        ask = float(getattr(state, 'best_ask', 0.0) or 0.0)
+        bid = float(getattr(state, 'execution_best_bid', 0.0) or 0.0)
+        ask = float(getattr(state, 'execution_best_ask', 0.0) or 0.0)
         mid = (bid + ask) / 2.0 if min(bid, ask) > 0.0 else entry_price
         spread_bps = (
             max(0.0, ask - bid) / mid * 10000.0 if mid > 0.0 else 0.0
@@ -634,6 +634,24 @@ def preflight_signal(signal, state):
 async def submit_entry_idempotent(api, state, signal, side, qty, kwargs):
     """POST một ID; mất response thì query order/position trước khi kết luận."""
     client_order_id = signal['client_order_id']
+    
+    import os
+    import time
+    if os.getenv('SMC_EXECUTION_MODE') == 'SHADOW_MAINNET':
+        if time.time() - getattr(state, 'execution_price_time', 0.0) > 3.0:
+            return None, 599, False
+        entry_price = getattr(state, 'execution_best_ask' if side == 'LONG' else 'execution_best_bid', 0.0)
+        mock_result = {
+            'orderId': int(time.time() * 1000),
+            'clientOrderId': client_order_id,
+            'status': 'FILLED',
+            'executedQty': qty,
+            'avgPrice': entry_price,
+            'side': side,
+            'type': 'MARKET'
+        }
+        return mock_result, 200, False
+
     result, status = await api.new_order(
         'BTCUSDT', side, 'MARKET', qty, newOrderRespType='RESULT',
         newClientOrderId=client_order_id, **kwargs
@@ -1195,10 +1213,29 @@ async def submit_passive_entry(api, state, signal, side, qty, kwargs, tick_size)
                 nonce=child_index,
             )
             signal['_passive_child_client_id'] = child_id
-            result, status = await api.new_order(
-                'BTCUSDT', side, 'LIMIT', qty, timeInForce='GTX', price=desired,
-                newOrderRespType='RESULT', newClientOrderId=child_id, **kwargs,
-            )
+            
+            import os
+            import time
+            if os.getenv('SMC_EXECUTION_MODE') == 'SHADOW_MAINNET':
+                if time.time() - getattr(state, 'execution_price_time', 0.0) > 3.0:
+                    return None, 599, recovered
+                entry_price = getattr(state, 'execution_best_ask' if side == 'LONG' else 'execution_best_bid', 0.0)
+                mock_result = {
+                    'orderId': int(time.time() * 1000),
+                    'clientOrderId': child_id,
+                    'status': 'FILLED',
+                    'executedQty': qty,
+                    'avgPrice': entry_price,
+                    'price': desired,
+                    'side': side,
+                    'type': 'LIMIT'
+                }
+                result, status = mock_result, 200
+            else:
+                result, status = await api.new_order(
+                    'BTCUSDT', side, 'LIMIT', qty, timeInForce='GTX', price=desired,
+                    newOrderRespType='RESULT', newClientOrderId=child_id, **kwargs,
+                )
             if status == 599:
                 queried, query_status = await api.query_order('BTCUSDT', child_id)
                 if query_status != 200:
