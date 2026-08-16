@@ -182,13 +182,28 @@ def _retention_size_feasibility(equity, desired_pct, price, filters):
     return probe
 
 
+def require_fresh_execution_bbo(state):
+    """
+    Ensure the Futures execution feed is healthy and not stale.
+    Fail-closed: If stale > 3s or missing BBO, reject.
+    """
+    import time
+    if time.time() - getattr(state, 'execution_price_time', 0.0) > 3.0:
+        return False
+    bid = getattr(state, 'execution_best_bid', 0.0)
+    ask = getattr(state, 'execution_best_ask', 0.0)
+    if not bid or not ask or bid <= 0.0 or ask <= 0.0:
+        return False
+    return True
+
+
 def _dynamic_bundle(
     state, signal, quantity, current_price, tick_size, *, allow_split_sl=True
 ):
     """Freeze one mainnet snapshot and price a complete two-leg exit plan."""
     bias = signal['bias']
-    entry_levels = state.asks_top_10 if bias == 'LONG' else state.bids_top_10
-    exit_levels = state.bids_top_10 if bias == 'LONG' else state.asks_top_10
+    entry_levels = state.execution_asks_top_10 if bias == 'LONG' else state.execution_bids_top_10
+    exit_levels = state.execution_bids_top_10 if bias == 'LONG' else state.execution_asks_top_10
     entry_fill = economic_mod.estimate_market_fill(entry_levels, quantity)
     entry_fill['captured_at'] = time.time()
     exit_fill = economic_mod.estimate_market_fill(exit_levels, quantity)
@@ -635,23 +650,6 @@ async def submit_entry_idempotent(api, state, signal, side, qty, kwargs):
     """POST một ID; mất response thì query order/position trước khi kết luận."""
     client_order_id = signal['client_order_id']
     
-    import os
-    import time
-    if os.getenv('SMC_EXECUTION_MODE') == 'SHADOW_MAINNET':
-        if time.time() - getattr(state, 'execution_price_time', 0.0) > 3.0:
-            return None, 599, False
-        entry_price = getattr(state, 'execution_best_ask' if side == 'LONG' else 'execution_best_bid', 0.0)
-        mock_result = {
-            'orderId': int(time.time() * 1000),
-            'clientOrderId': client_order_id,
-            'status': 'FILLED',
-            'executedQty': qty,
-            'avgPrice': entry_price,
-            'side': side,
-            'type': 'MARKET'
-        }
-        return mock_result, 200, False
-
     result, status = await api.new_order(
         'BTCUSDT', side, 'MARKET', qty, newOrderRespType='RESULT',
         newClientOrderId=client_order_id, **kwargs
@@ -1070,12 +1068,12 @@ async def submit_passive_entry(api, state, signal, side, qty, kwargs, tick_size)
 
         if side == 'BUY':
             strategy_ref = float(state.best_bid)
-            live = float(getattr(state, 'execution_best_bid', 0.0) or strategy_ref)
+            live = float(getattr(state, 'execution_best_bid', 0.0) or 0.0)
             translated = requested + (live - strategy_ref)
             desired = min(translated, live)
         else:
             strategy_ref = float(state.best_ask)
-            live = float(getattr(state, 'execution_best_ask', 0.0) or strategy_ref)
+            live = float(getattr(state, 'execution_best_ask', 0.0) or 0.0)
             translated = requested + (live - strategy_ref)
             desired = max(translated, live)
         desired = risk.round_to_tick(desired, tick_size)
@@ -1214,25 +1212,7 @@ async def submit_passive_entry(api, state, signal, side, qty, kwargs, tick_size)
             )
             signal['_passive_child_client_id'] = child_id
             
-            import os
-            import time
-            if os.getenv('SMC_EXECUTION_MODE') == 'SHADOW_MAINNET':
-                if time.time() - getattr(state, 'execution_price_time', 0.0) > 3.0:
-                    return None, 599, recovered
-                entry_price = getattr(state, 'execution_best_ask' if side == 'LONG' else 'execution_best_bid', 0.0)
-                mock_result = {
-                    'orderId': int(time.time() * 1000),
-                    'clientOrderId': child_id,
-                    'status': 'FILLED',
-                    'executedQty': qty,
-                    'avgPrice': entry_price,
-                    'price': desired,
-                    'side': side,
-                    'type': 'LIMIT'
-                }
-                result, status = mock_result, 200
-            else:
-                result, status = await api.new_order(
+            result, status = await api.new_order(
                     'BTCUSDT', side, 'LIMIT', qty, timeInForce='GTX', price=desired,
                     newOrderRespType='RESULT', newClientOrderId=child_id, **kwargs,
                 )
@@ -1618,7 +1598,7 @@ async def _xu_ly_tin_hieu(signal, state, api):
     })
 
     # Mainnet is the strategy truth. Testnet is only the execution venue.
-    entry_levels = state.asks_top_10 if bias == 'LONG' else state.bids_top_10
+    entry_levels = state.execution_asks_top_10 if bias == 'LONG' else state.execution_bids_top_10
     tick_size = float(state.exchange_filters.get('tick_size', 0.1))
     dynamic_v2 = _dynamic_path_enabled()
     if dynamic_v2:

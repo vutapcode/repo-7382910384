@@ -625,22 +625,33 @@ async def main():
     ]
     
     # Task Khối 3: Thực thi và bảo vệ
-    tasks_thuc_thi = [
-        asyncio.create_task(supervise('executor', lambda: dat_lenh.vong_lap_thuc_thi(state, api))),
-        asyncio.create_task(supervise('guardian', lambda: bao_ve_khan_cap.vong_lap_bao_ve(state, api))),
-        asyncio.create_task(supervise('trailing', lambda: tho_san_trailing.vong_lap_trailing(state, api))),
-        asyncio.create_task(supervise('rom_backup', lambda: dong_bo_trang_thai.vong_lap_dong_bo(state))),
-        asyncio.create_task(supervise('reconcile', lambda: dong_bo_trang_thai.vong_lap_doi_chieu(state, api))),
-        asyncio.create_task(supervise('trade_journal', lambda: nhat_ky_giao_dich.vong_lap_nhat_ky(state, api))),
-        asyncio.create_task(supervise('watchdog', lambda: giam_sat_he_thong.vong_lap_giam_sat(state))),
-        asyncio.create_task(supervise('runtime_heartbeat', vong_lap_runtime_heartbeat)),
-    ]
-    if os.getenv('SMC_MINIMAL_MAINNET_AUDIT', 'false').lower() not in (
-        '1', 'true', 'yes', 'on'
-    ):
-        tasks_thuc_thi.append(asyncio.create_task(supervise(
-            'shadow', lambda: nhat_ky_giao_dich.vong_lap_shadow(state)
-        )))
+    import os
+    mode = os.getenv('SMC_EXECUTION_MODE')
+    if mode == 'SHADOW_MAINNET':
+        from 3_thuc_thi import dat_lenh_shadow
+        tasks_thuc_thi = [
+            asyncio.create_task(supervise('shadow_executor', lambda: dat_lenh_shadow.vong_lap_shadow_thuc_thi(state, api))),
+            asyncio.create_task(supervise('shadow_guardian', lambda: dat_lenh_shadow.vong_lap_shadow_guardian(state, api))),
+            asyncio.create_task(supervise('watchdog', lambda: giam_sat_he_thong.vong_lap_giam_sat(state))),
+            asyncio.create_task(supervise('runtime_heartbeat', vong_lap_runtime_heartbeat)),
+        ]
+    else:
+        tasks_thuc_thi = [
+            asyncio.create_task(supervise('executor', lambda: dat_lenh.vong_lap_thuc_thi(state, api))),
+            asyncio.create_task(supervise('guardian', lambda: bao_ve_khan_cap.vong_lap_bao_ve(state, api))),
+            asyncio.create_task(supervise('trailing', lambda: tho_san_trailing.vong_lap_trailing(state, api))),
+            asyncio.create_task(supervise('rom_backup', lambda: dong_bo_trang_thai.vong_lap_dong_bo(state))),
+            asyncio.create_task(supervise('reconcile', lambda: dong_bo_trang_thai.vong_lap_doi_chieu(state, api))),
+            asyncio.create_task(supervise('trade_journal', lambda: nhat_ky_giao_dich.vong_lap_nhat_ky(state, api))),
+            asyncio.create_task(supervise('watchdog', lambda: giam_sat_he_thong.vong_lap_giam_sat(state))),
+            asyncio.create_task(supervise('runtime_heartbeat', vong_lap_runtime_heartbeat)),
+        ]
+        if os.getenv('SMC_MINIMAL_MAINNET_AUDIT', 'false').lower() not in (
+            '1', 'true', 'yes', 'on'
+        ):
+            tasks_thuc_thi.append(asyncio.create_task(supervise(
+                'shadow', lambda: nhat_ky_giao_dich.vong_lap_shadow(state)
+            )))
     
     await asyncio.gather(*(tasks_mang + tasks_noi_bo + tasks_thuc_thi))
 
