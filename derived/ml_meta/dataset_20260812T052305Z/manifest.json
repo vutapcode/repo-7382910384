@@ -1,0 +1,38 @@
+{
+  "schema_version": "ML_META_DATASET_V1",
+  "created_at": 1786512244.8207364,
+  "source_roots": [
+    "/home/ubuntu/SMC2026",
+    "/home/ubuntu/SMC2026(2)-",
+    "/home/ubuntu/SMC2026(20)-",
+    "/home/ubuntu/SMC2026(21)-",
+    "/home/ubuntu/SMC2026(22)-",
+    "/home/ubuntu/SMC2026(23)-",
+    "/home/ubuntu/SMC2026(24)-",
+    "/home/ubuntu/SMC2026(25)-",
+    "/home/ubuntu/SMC2026(26)-",
+    "/home/ubuntu/SMC2026(27)-",
+    "/home/ubuntu/SMC2026(28)-",
+    "/home/ubuntu/SMC2026(29)-",
+    "/home/ubuntu/SMC2026(3)-",
+    "/home/ubuntu/SMC2026(4)-",
+    "/home/ubuntu/SMC2026(5)-",
+    "/home/ubuntu/SMC2026(6)-",
+    "/home/ubuntu/SMC2026(7)-",
+    "/home/ubuntu/SMC2026(8)-"
+  ],
+  "opportunity_count": 1064,
+  "train_eligible_count": 3,
+  "unresolved_forensic_count": 967,
+  "stats": {
+    "files": 20,
+    "lines": 1195464,
+    "malformed": 0,
+    "duplicates": 111507
+  },
+  "files": {
+    "opportunities.jsonl": "964b02f0abf0281eb41592afa28cd49ef83d6add5c1b0fffb759598f5ade1355",
+    "unresolved_forensic.jsonl": "7f093a643b56af5c05c122314819666dde31d7ab1e94d97164427b21b8b5982e"
+  },
+  "manifest_sha256": "59607fd4acc7a87de6c07402c26abcb35ab5fef69e7b56efe2ac67d7b50f0fe9"
+}

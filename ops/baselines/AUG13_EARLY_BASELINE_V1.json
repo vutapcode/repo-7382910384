@@ -1,0 +1,29 @@
+{
+  "profile": "AUG13_EARLY_HYBRID_V1",
+  "forensic_scope": "2026-08-13 02:40-03:50 Asia/Ho_Chi_Minh",
+  "reference_cycle_id": "pc_1786564511599_121783",
+  "reference_run_id": "27657ae961384816a00e160abd427b66",
+  "reference_setup_id": "BTCUSDT:TREND-PULLBACK:LONG:1:sv9:a16",
+  "backup_candidates": {
+    "SMC2026(30)-": "a34133e464588115",
+    "SMC2026(31)-": "14e4de76851da8c6"
+  },
+  "strategy_file_sha256": {
+    "2_suy_luan_mapping/map_gia_tick.py": "39b57aecd827a244973de164a933396f7255bb638a55995970cdc27c68f35f58",
+    "2_suy_luan_mapping/tong_ket_chi_huy/cham_diem_continuous_v2.py": "1129c55acbeacf80263d8f624f5062d20d0f43fad04227fc5106e4d471657d3a",
+    "2_suy_luan_mapping/tong_ket_chi_huy/chi_huy_truong.py": "33e8505d9c29f8247d74a06db84e135abd9bf7b8dbc39bed4af140ba7eb43943",
+    "2_suy_luan_mapping/tong_ket_chi_huy/dynamic_path_fee.py": "6c0749cf4f997fd5233e561538a00cea3696b8a72786932a005fd012e2a425b9",
+    "2_suy_luan_mapping/tong_ket_chi_huy/kinh_te_lenh.py": "77fae51d369033fb1b10424c14fc9345f3f10f8367e8dd64950289907545d6a3",
+    "2_suy_luan_mapping/tong_ket_chi_huy/shark_context.py": "d5b73dcf8a9b4178f1115f9870486afd97aeb118e36bad9cc62926fb68adb3d6",
+    "3_thuc_thi/dat_lenh.py": "fb38e8ac2ffa1ff350761edb36d2ca58b801927590a1d8bb091e04eff4dd1d9e",
+    "3_thuc_thi/ve_si_lenh/bao_ve_khan_cap.py": "879be2e8d68fce5d75281ade98467e188ceeac8abcbcb1608eb3410d77a7cb6c",
+    "3_thuc_thi/ve_si_lenh/tho_san_trailing.py": "d8b413a4e9c05bae2b72a169def724d84ede5b465ff7800436a877fc12d3c71c"
+  },
+  "reference_outcome": {
+    "mainnet_shadow_net_bps": 17.78167636404874,
+    "mfe_bps": 25.38463480203364,
+    "mae_bps": -1.987858287792313,
+    "exit_reason": "TP2"
+  },
+  "secrets_included": false
+}

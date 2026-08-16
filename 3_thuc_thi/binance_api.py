@@ -1,0 +1,199 @@
+"""Async adapter cho Binance USD-M Futures REST/Algo API."""
+
+import asyncio
+import logging
+
+from binance.error import ClientError
+from binance.um_futures import UMFutures
+
+
+class BinanceAPI:
+    def __init__(self, api_key, secret_key, testnet=True):
+        self.testnet = testnet
+        self.base_url = (
+            "https://testnet.binancefuture.com" if testnet else "https://fapi.binance.com"
+        )
+        self.client = UMFutures(
+            key=api_key,
+            secret=secret_key,
+            base_url=self.base_url,
+            timeout=10,
+        )
+
+    @staticmethod
+    def _error_payload(exc):
+        if isinstance(exc, ClientError):
+            return {
+                "code": exc.error_code,
+                "message": exc.error_message,
+            }, exc.status_code
+        return {"code": "NETWORK", "message": str(exc)}, 599
+
+    async def _call(self, func, *args, **kwargs):
+        def invoke():
+            try:
+                return func(*args, **kwargs), 200
+            except Exception as exc:
+                return self._error_payload(exc)
+
+        return await asyncio.to_thread(invoke)
+
+    async def get_balance(self):
+        result, status = await self._call(self.client.balance)
+        if status != 200:
+            logging.error("❌ [API] Không lấy được balance: %s", result)
+            return 0.0
+        for item in result:
+            if item.get("asset") == "USDT":
+                # Entry is single-position and requires no position/order in
+                # flight, so wallet balance is the frozen equity allocation
+                # base. availableBalance is margin capacity, not position
+                # notional, and must never be multiplied by leverage here.
+                return float(item.get("balance", item.get("availableBalance", 0.0)))
+        return 0.0
+
+    async def get_balance_details(self):
+        result, status = await self._call(self.client.balance)
+        if status != 200:
+            return {}, status
+        row = next((item for item in result if item.get("asset") == "USDT"), {})
+        return row, status
+
+    async def get_position_mode(self):
+        result, status = await self._call(self.client.get_position_mode)
+        if status != 200:
+            return None
+        return bool(result.get("dualSidePosition"))
+
+    async def change_position_mode(self, dual_side=True):
+        return await self._call(
+            self.client.change_position_mode,
+            dualSidePosition="true" if dual_side else "false",
+        )
+
+    async def get_multi_asset_mode(self):
+        return await self._call(self.client.get_multi_asset_mode)
+
+    async def change_multi_asset_mode(self, enabled=False):
+        return await self._call(
+            self.client.change_multi_asset_mode,
+            multiAssetsMargin="true" if enabled else "false",
+        )
+
+    async def change_margin_type(self, symbol, margin_type="ISOLATED"):
+        return await self._call(
+            self.client.change_margin_type,
+            symbol=symbol,
+            marginType=str(margin_type).upper(),
+        )
+
+    async def change_leverage(self, symbol, leverage):
+        return await self._call(
+            self.client.change_leverage,
+            symbol=symbol,
+            leverage=int(leverage),
+        )
+
+    async def get_commission_rate(self, symbol):
+        return await self._call(self.client.commission_rate, symbol=symbol)
+
+    async def get_exchange_info(self):
+        return await self._call(self.client.exchange_info)
+
+    async def get_positions(self, symbol=None):
+        params = {"symbol": symbol} if symbol else {}
+        result, status = await self._call(self.client.get_position_risk, **params)
+        return (result if status == 200 else []), status
+
+    async def get_open_orders(self, symbol=None):
+        params = {"symbol": symbol} if symbol else {}
+        return await self._call(self.client.get_orders, **params)
+
+    async def get_all_orders(self, symbol, start_time=None, limit=1000):
+        params = {"symbol": symbol, "limit": int(limit)}
+        if start_time is not None:
+            params["startTime"] = int(start_time)
+        return await self._call(self.client.get_all_orders, **params)
+
+    async def get_income_history(self, symbol=None, start_time=None, limit=1000):
+        params = {"limit": int(limit)}
+        if symbol:
+            params["symbol"] = symbol
+        if start_time is not None:
+            params["startTime"] = int(start_time)
+        return await self._call(self.client.get_income_history, **params)
+
+    async def new_order(self, symbol, side, type, quantity=None, **kwargs):
+        params = {"symbol": symbol, "side": side, "type": type}
+        if quantity is not None:
+            params["quantity"] = quantity
+        params.update(kwargs)
+        return await self._call(self.client.new_order, **params)
+
+    async def new_order_test(self, symbol, side, type, quantity=None, **kwargs):
+        params = {"symbol": symbol, "side": side, "type": type}
+        if quantity is not None:
+            params["quantity"] = quantity
+        params.update(kwargs)
+        return await self._call(self.client.new_order_test, **params)
+
+    async def cancel_all_open_orders(self, symbol):
+        return await self._call(self.client.cancel_open_orders, symbol=symbol)
+
+    async def cancel_order(self, symbol, order_id):
+        return await self._call(self.client.cancel_order, symbol=symbol, orderId=order_id)
+
+    async def query_order(self, symbol, client_order_id):
+        return await self._call(
+            self.client.query_order,
+            symbol=symbol,
+            origClientOrderId=client_order_id,
+        )
+
+    async def get_account_trades(self, symbol, start_time=None):
+        params = {'symbol': symbol, 'limit': 1000}
+        if start_time is not None:
+            params['startTime'] = int(start_time)
+        return await self._call(self.client.get_account_trades, **params)
+
+    async def new_algo_order(self, **params):
+        payload = {"algoType": "CONDITIONAL", **params}
+        return await self._call(
+            self.client.sign_request, "POST", "/fapi/v1/algoOrder", payload
+        )
+
+    async def query_algo_order(self, algo_id):
+        return await self._call(
+            self.client.sign_request,
+            "GET",
+            "/fapi/v1/algoOrder",
+            {"algoId": algo_id},
+        )
+
+    async def get_open_algo_orders(self, symbol=None):
+        params = {"symbol": symbol} if symbol else {}
+        return await self._call(
+            self.client.sign_request,
+            "GET",
+            "/fapi/v1/openAlgoOrders",
+            params,
+        )
+
+    async def cancel_algo_order(self, algo_id):
+        return await self._call(
+            self.client.sign_request,
+            "DELETE",
+            "/fapi/v1/algoOrder",
+            {"algoId": algo_id},
+        )
+
+    async def cancel_all_algo_orders(self, symbol):
+        return await self._call(
+            self.client.sign_request,
+            "DELETE",
+            "/fapi/v1/algoOpenOrders",
+            {"symbol": symbol},
+        )
+
+    async def close(self):
+        return None

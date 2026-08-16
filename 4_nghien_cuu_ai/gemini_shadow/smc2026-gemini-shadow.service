@@ -1,0 +1,31 @@
+[Unit]
+Description=SMC2026 Gemini 3.6 Flash shadow analyst
+After=network-online.target smc2026-recorder.service
+Wants=network-online.target
+ConditionFileNotEmpty=%h/.config/smc2026/gemini-shadow.env
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/SMC2026/4_nghien_cuu_ai
+ExecStart=/usr/bin/python3 -m gemini_shadow.main
+Restart=on-failure
+RestartSec=30s
+Environment=PYTHONUNBUFFERED=1
+Environment=SMC_RECORDER_DATA_ROOT=/home/ubuntu/smc2026_data
+EnvironmentFile=%h/.config/smc2026/gemini-shadow.env
+UMask=0077
+Nice=10
+CPUQuota=20%
+IOSchedulingClass=idle
+MemoryHigh=384M
+MemoryMax=512M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/smc2026_data/derived/ai_shadow
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=1024
+
+[Install]
+WantedBy=default.target

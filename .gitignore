@@ -1,0 +1,11 @@
+.env
+*.pem
+*.key
+__pycache__/
+*.pyc
+3_thuc_thi/quan_ly_vi_the/nhat_ky/
+3_thuc_thi/quan_ly_vi_the/rom_backup/
+*.log
+*.jsonl
+*.tmp
+*.bak
