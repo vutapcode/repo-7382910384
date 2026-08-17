@@ -8,7 +8,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 WorkingDirectory=/home/ubuntu/SMC2026
-ExecStart=/usr/bin/python3 /home/ubuntu/SMC2026/khoi_dong.py
+ExecStart=/usr/bin/python3 /home/ubuntu/SMC2026/guardian_s_launcher.py
 Restart=always
 RestartSec=5s
 RestartPreventExitStatus=73
