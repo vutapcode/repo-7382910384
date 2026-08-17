@@ -47,6 +47,26 @@ class RuntimeHardeningV3ContractTests(unittest.TestCase):
         self.assertIn("shadow_state_guard.py", text)
         self.assertIn("runtime_hardening_v3.py", text)
 
+    def test_recent_fixes_stay_locked(self):
+        runtime_path = ROOT / "loi_he_thong" / "runtime_hardening_v3.py"
+        runtime = runtime_path.read_text(encoding="utf-8")
+        compile(runtime, str(runtime_path), "exec")
+        self.assertNotIn("MIN_IAB", runtime)
+        self.assertIn("MIN_IMB", runtime)
+        self.assertIn("cutoff <= float(row.get(\"ts\", 0.0) or 0.0) <= float(now)", runtime)
+
+        guard_path = ROOT / "ops" / "shadow_state_guard.py"
+        guard = guard_path.read_text(encoding="utf-8")
+        compile(guard, str(guard_path), "exec")
+        self.assertIn('breakevens = counter(raw, "breakevens", optional=True)', guard)
+        self.assertNotIn('required.add("breakevens")', guard)
+
+        state_path = ROOT / "loi_he_thong" / "shadow_runtime_state.py"
+        state = state_path.read_text(encoding="utf-8")
+        compile(state, str(state_path), "exec")
+        self.assertIn("SHADOW_RUNTIME_STATE_CORRUPT", state)
+        self.assertIn("SHADOW_RUNTIME_STATE_UNSUPPORTED", state)
+
 
 if __name__ == "__main__":
     unittest.main()
