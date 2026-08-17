@@ -16,6 +16,55 @@ edge = base.app.load_module(
 
 _orig_open = base._open_shadow
 
+_orig_entry_evaluate = base.entry_council.evaluate
+
+_ENTRY_HISTORY_FIELDS = (
+    "entry_shadow_price_history",
+    "entry_causal_flow_history",
+)
+
+def _reset_entry_causal_context(state, next_side, reason, now):
+    """Discard side-signed causal evidence whenever the directional context changes."""
+    cleared = 0
+    for name in _ENTRY_HISTORY_FIELDS:
+        hist = getattr(state, name, None)
+        if hist is not None:
+            try:
+                cleared += len(hist)
+                hist.clear()
+            except (AttributeError, TypeError):
+                setattr(state, name, None)
+    state._entry_causal_context_side = next_side
+    state.entry_causal_reset_at = now
+    state.entry_causal_reset_reason = reason
+    state.entry_causal_reset_count = int(getattr(state, "entry_causal_reset_count", 0) or 0) + 1
+    state.entry_causal_reset_samples = cleared
+
+def _entry_evaluate_context_guard(state, now=None, side=None):
+    """Keep causal entry history pure to one fresh, confident bias side."""
+    now = time.time() if now is None else float(now)
+    current = str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
+    confidence = float(getattr(state, "bias_confidence", 0.0) or 0.0)
+    bias_ts = float(getattr(state, "bias_updated_at", 0.0) or 0.0)
+    min_conf = float(getattr(base.entry_council, "BIAS_MIN_CONF", 0.55))
+    max_age = float(getattr(base.entry_council, "BIAS_MAX_AGE", 3.0))
+    valid = (
+        current in ("LONG", "SHORT")
+        and confidence >= min_conf
+        and bias_ts > 0.0
+        and 0.0 <= now - bias_ts <= max_age
+    )
+    previous = str(getattr(state, "_entry_causal_context_side", "ABSTAIN") or "ABSTAIN").upper()
+
+    if not valid:
+        if previous in ("LONG", "SHORT"):
+            _reset_entry_causal_context(state, "ABSTAIN", "BIAS_INVALID_OR_EXPIRED", now)
+    elif previous != current:
+        reason = "BIAS_SIDE_CHANGE" if previous in ("LONG", "SHORT") else "BIAS_ACQUIRE"
+        _reset_entry_causal_context(state, current, reason, now)
+
+    return _orig_entry_evaluate(state, now=now, side=side)
+
 def _entry_quorum_ok(result, state, now):
     allowed, report = edge.authorize(result, state)
     state.entry_edge_tier = report
@@ -68,7 +117,7 @@ async def _guardian_loop():
         try:
             s = base.app.state
             pos = getattr(s, "mainnet_shadow_position", None)
-            if pos is None or not bool(getattr(pos, "active", False):
+            if pos is None or not bool(getattr(pos, "active", False)):
                 await asyncio.sleep(0.10)
                 continue
             now = time.time()
@@ -106,6 +155,7 @@ async def _guardian_loop():
             await asyncio.sleep(0.25)
         await asyncio.sleep(base.GUARD_POLL)
 
+base.entry_council.evaluate = _entry_evaluate_context_guard
 base._entry_quorum_ok = _entry_quorum_ok
 base._bias_loop = _bias_loop
 base._open_shadow = _open_shadow
