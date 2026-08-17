@@ -7,6 +7,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
+User=ubuntu
+Group=ubuntu
 WorkingDirectory=/home/ubuntu/SMC2026
 ExecStartPre=/usr/bin/python3 /home/ubuntu/SMC2026/ops/repo_integrity_check.py
 ExecStart=/usr/bin/python3 /home/ubuntu/SMC2026/mainnet_tier_s_shadow_risk_launcher.py
@@ -15,6 +17,7 @@ RestartSec=5s
 RestartPreventExitStatus=73
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SMC_RUNTIME_DIR=/home/ubuntu/.local/state/smc2026/runtime
 Environment=SMC_EXECUTION_VENUE=MAINNET
 Environment=SMC_ENABLE_TRADING=false
 Environment=SMC_MAINNET_ARMED=false
