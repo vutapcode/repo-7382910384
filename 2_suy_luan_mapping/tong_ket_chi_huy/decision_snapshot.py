@@ -19,6 +19,7 @@ FEED_MAX_AGE = {
 
 DECISION_FIELDS = (
     'system_ready', 'trading_enabled', 'co_lenh_mo', 'best_bid', 'best_ask',
+    'prev_best_bid', 'prev_best_ask', 'tri_oracle_signal',
     'current_vol_3s', 'vol_pct90', 'current_cvd_sell_3s',
     'current_cvd_buy_3s', 'cvd_buy_30m', 'cvd_sell_30m', 'p95_value',
     'fp_last_imbalance', 'sweep_m1', 'breakout_m1', 'absorption_event',
@@ -86,7 +87,7 @@ def _closed_extrema(rows, timeframe, wall_time, limit):
         is_low = low <= previous[1] and low <= following[1]
         if not (is_high or is_low):
             continue
-        extrema.append({
+        extrema.append	{
             'timeframe': timeframe,
             'high': high if is_high else 0.0,
             'low': low if is_low else 0.0,
@@ -97,7 +98,7 @@ def _closed_extrema(rows, timeframe, wall_time, limit):
 
 
 def capture(state, setup=None, wall_time=None, monotonic_time=None):
-    """Copy toàn bộ input trước khi score để không trộn nhiều thời điểm."""
+    """Copy toàn bộ input trước khi score để không trớn nhiều thời điểm."""
     wall_time = time.time() if wall_time is None else wall_time
     monotonic_time = time.monotonic() if monotonic_time is None else monotonic_time
     values = {
@@ -111,7 +112,7 @@ def capture(state, setup=None, wall_time=None, monotonic_time=None):
             getattr(state, 'trend_price_history', ()) or ()
         )
         if isinstance(item, dict)
-        and float(item.get('ts', 0.0) or 0.0) <= wall_time + 1e-6
+        and float(item.get('ts', 0.0) or 0.0) <= wall_time + 1e-06
         and float(item.get('ts', 0.0) or 0.0) >= wall_time - 190.0
     ]
     current_price = (
