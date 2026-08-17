@@ -2,30 +2,16 @@
 [AI_CONTEXT]
 - MODULE: 1_tai_du_lieu / tai_coinbase
 - ROLE: Coinbase BTC-USD price + rolling aggressive-flow CVD.
-- BIAS: price is a light always-on S-tier input; matches are flow evidence.
+- CONTRACT: DATA-ONLY collector. It must never evaluate entry/bias strategy state.
 """
 
 import asyncio
 import collections
-import importlib.util
 import logging
 import time
-from pathlib import Path
 
 import orjson
 import websockets
-
-
-def _load_entry_shado():
-    path = Path(__file__).resolve().parents[2] / "loi_he_thong" / "entry_council_shadow.py"
-    spec = importlib.util.spec_from_file_location("entry_council_shadow_runtime", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-entry_council_shadow = _load_entry_shadow()
-
 
 COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
 SUBSCRIBE_MSG = orjson.dumps({
@@ -41,12 +27,10 @@ def _coinbase_match_delta(data) -> float:
     side = str(data.get("side", "") or "").lower()
     if size <= 0.0 or side not in ("buy", "sell"):
         return 0.0
-    # maker sell => taker buy; maker buy => taker sell
     return size if side == "sell" else -size
 
 
 def _apply_ticker(data, state) -> bool:
-    """Store a tiny Coinbase price oracle; no extra connection is created."""
     try:
         price = float(data.get("price", 0.0) or 0.0)
         bid = float(data.get("best_bid", 0.0) or 0.0)
@@ -83,7 +67,7 @@ def _publish_flow(state, buf_3s, buf_1m, buf_5m, now_ms):
 
 
 async def hung_coinbase_spot(product_id: str, bo_nho_ram):
-    """One Coinbase socket: lightweight ticker plus rolling CVD 3s/1m/5m."""
+    """One Coinbase socket: ticker + rolling CVD 3s/1m/5m, data only."""
     buf_3s = collections.deque()
     buf_1m = collections.deque()
     buf_5m = collections.deque()
@@ -118,7 +102,9 @@ async def hung_coinbase_spot(product_id: str, bo_nho_ram):
                         buf_1m.append(row)
                         buf_5m.append(row)
                         _publish_flow(bo_nho_ram, buf_3s, buf_1m, buf_5m, now_ms)
-                        entry_council_shadow.update_state(bo_nho_ram, now=now_ms / 1000.0)
+
+                        # IMPORTANT: strategy evaluation is owned by the canonical
+                        # Tier-S entry loop. The collector only publishes data.
                     except (KeyError, TypeError, ValueError):
                         continue
 
