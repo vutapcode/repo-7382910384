@@ -1,71 +1,79 @@
 """
 [AI_CONTEXT]
 - MODULE: 1_tai_du_lieu / tai_vi_mo
-- ROLE: REST/WS: Quét Open Interest (OI) & Funding Rate.
-- I/O: IN: Binance API | OUT: RAM
-- RULE: CHỈ tuân thủ ranh giới của khối, không cắm chéo.
+- ROLE: Poll Binance USD-M Open Interest + Funding, then refresh bias council.
+- LOAD: no extra task/thread; council runs on this existing slow REST cadence.
 """
 
 import asyncio
-import orjson
-import aiohttp
+import importlib.util
 import logging
 import time
 from pathlib import Path
 
-# Cấu hình đường dẫn lưu ROM tương đối so với thư mục gốc của dự án
-THU_MUC_LUU_TRU = Path("1_tai_du_lieu/tai_vi_mo/data_luu_tru")
-FILE_ROM = THU_MUC_LUU_TRU / "vi_mo.json"
+import aiohttp
+
+
+def _load_bias_council():
+    path = Path(__file__).resolve().parents[2] / "2_suy_luan_mapping" / "bias_council.py"
+    spec = importlib.util.spec_from_file_location("bias_council_runtime", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+bias_council = _load_bias_council()
+
 
 async def tai_du_lieu_vi_mo(symbol: str, bo_nho_ram, chu_ky_giay: int = 5):
-    """
-    Hàm gọi REST API định kỳ để lấy Open Interest (OI) và Funding Rate từ Binance Futures.
-    Sau đó bơm vào RAM và lưu một bản cứng (ROM) vào thư mục data_luu_tru.
-    
-    :param symbol: Cặp giao dịch Futures (Ví dụ: 'btcusdt')
-    :param bo_nho_ram: Đối tượng RAM (Class TrangThai)
-    :param chu_ky_giay: Thời gian nghỉ giữa các lần tải (Mặc định 5 giây để tránh bị sàn khoá IP)
-    """
-    # Endpoint REST của Binance USD-M Futures
-    # Bỏ yêu cầu tạo thư mục ROM vì không dùng File I/O nữa
-    
+    """Poll OI/funding and update direction-only bias on the same cadence."""
     symbol_upper = symbol.upper()
-    
-    # Endpoint REST của Binance USD-M Futures
-    url_oi = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol_upper}"
-    url_funding = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol_upper}"
-    
-    # Mở 1 session duy trì kết nối để gọi API nhanh hơn
-    async with aiohttp.ClientSession() as session:
+    url_oi = (
+        "https://fapi.binance.com/fapi/v1/openInterest"
+        f"?symbol={symbol_upper}"
+    )
+    url_funding = (
+        "https://fapi.binance.com/fapi/v1/premiumIndex"
+        f"?symbol={symbol_upper}"
+    )
+    timeout = aiohttp.ClientTimeout(total=10)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         while True:
             try:
-                # 1. Tải Open Interest (Tổng khối lượng vị thế đang mở trên toàn sàn)
-                async with session.get(url_oi, timeout=aiohttp.ClientTimeout(total=10)) as res_oi:
+                async with session.get(url_oi) as res_oi:
+                    res_oi.raise_for_status()
                     data_oi = await res_oi.json()
-                    oi_hien_tai = float(data_oi['openInterest'])
-                    
-                # 2. Tải Funding Rate (Phí qua đêm / Cán cân Long/Short)
-                async with session.get(url_funding, timeout=aiohttp.ClientTimeout(total=10)) as res_funding:
+                    oi_now = float(data_oi["openInterest"])
+
+                async with session.get(url_funding) as res_funding:
+                    res_funding.raise_for_status()
                     data_funding = await res_funding.json()
-                    funding_hien_tai = float(data_funding['lastFundingRate'])
-                
-                # 3. BƠM VÀO RAM CHO KHỐI 2 (map_vi_mo.py)
-                bo_nho_ram.open_interest = oi_hien_tai
-                bo_nho_ram.funding_rate = funding_hien_tai
-                bo_nho_ram.thoi_gian_vi_mo_cuoi = time.time()
-                
-                # 4. GHI RA ROM (LƯU BÊN CẠNH)
-                # [DELETED] Đã xóa logic ghi File theo yêu cầu để không block/chống lãng phí I/O.
-                # Chỉ nạp thẳng RAM là đủ.
-                
-                logging.debug(f"🌍 [VĨ MÔ] Cập nhật thành công -> OI: {oi_hien_tai} | Funding: {funding_hien_tai}")
-                
-                # Chạy chậm: Ngủ X giây theo chu kỳ trước khi fetch lại
+                    funding_now = float(data_funding["lastFundingRate"])
+
+                now = time.time()
+                bo_nho_ram.open_interest = oi_now
+                bo_nho_ram.funding_rate = funding_now
+                bo_nho_ram.thoi_gian_vi_mo_cuoi = now
+
+                result = bias_council.update_state(bo_nho_ram, now=now)
+                logging.debug(
+                    "[BIAS] %s conf=%.3f quorum=%s mode=%s",
+                    result["bias"],
+                    result["confidence"],
+                    result["quorum"],
+                    result["mode"],
+                )
+
                 await asyncio.sleep(chu_ky_giay)
-                
-            except aiohttp.ClientError as e:
-                logging.warning(f"⚠️ [VĨ MÔ] Lỗi mạng khi gọi REST API: {e}. Thử lại sau 5s...")
+
+            except aiohttp.ClientError as exc:
+                logging.warning(
+                    "[VI MO] Loi mang khi goi REST API: %s. Thu lai sau 5s...", exc
+                )
                 await asyncio.sleep(5)
-            except Exception as e:
-                logging.error(f"❌ [VĨ MÔ] Lỗi ngoại lệ: {e}. Thử lại sau 10s...")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logging.error("[VI MO] Loi ngoai le: %s. Thu lai sau 10s...", exc)
                 await asyncio.sleep(10)
