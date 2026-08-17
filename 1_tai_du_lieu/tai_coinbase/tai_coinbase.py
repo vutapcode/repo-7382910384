@@ -52,6 +52,10 @@ class RollingFlow:
         self.rows = collections.deque()
         self.signed = 0.0
         self.volume = 0.0
+    def clear(self):
+        self.rows.clear()
+        self.signed = 0.0
+        self.volume = 0.0
     def push(self, ts_ms, delta):
         d = float(delta)
         self.rows.append((float(ts_ms), d))
@@ -91,7 +95,21 @@ async def hung_coinbase_spot(product_id: str, bo_nho_ram):
                 COINBASE_WS_URL, ping_interval=20, ping_timeout=20
             ) as ws:
                 await ws.send(SUBSCRIBE_MSG)
-                logging.info("[COINBASE] Ket noi Coinbase Spot: %s", product_id)
+                # A reconnect starts a new causal-flow epoch. Never bridge pre-outage
+                # trades into fresh 3s/1m/5m evidence.
+                f3.clear()
+                f1m.clear()
+                f5m.clear()
+                bo_nho_ram.coinbase_cvd_3s = 0.0
+                bo_nho_ram.coinbase_volume_3s = 0.0
+                bo_nho_ram.coinbase_flow_3s_ts = 0.0
+                bo_nho_ram.coinbase_cvd_1m = 0.0
+                bo_nho_ram.coinbase_cvd_5m = 0.0
+                bo_nho_ram.thoi_gian_coinbase_cuoi = 0.0
+                bo_nho_ram.thoi_gian_coinbase_ticker_cuoi = 0.0
+                bo_nho_ram.coinbase_flow_epoch = int(getattr(bo_nho_ram, "coinbase_flow_epoch", 0) or 0) + 1
+                bo_nho_ram.coinbase_flow_epoch_started_at = time.time()
+                logging.info("[COINBASE] Ket noi Coinbase Spot epoch=%s: %s", bo_nho_ram.coinbase_flow_epoch, product_id)
 
                 async for raw in ws:
                     try:
