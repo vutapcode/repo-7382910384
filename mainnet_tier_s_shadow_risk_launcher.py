@@ -146,8 +146,16 @@ base._entry_quorum_ok = _entry_quorum_ok
 base._open_shadow = _open_shadow
 base._bias_loop = _bias_loop
 
-# Apply conservative net accounting before health installs its close paths.
+# Force native shadow accounting to the same conservative 18bps round-trip budget,
+# even when launched manually outside systemd (9bps modeled all-in per side).
+base.SHADOW_FEE_BPS_PER_SIDE = max(float(getattr(base, "SHADOW_FEE_BPS_PER_SIDE", 0.0) or 0.0), 9.0)
 runtime_state.install_cost_accounting(base, model_cost_bps=18.0)
+_cost_close = base._close_shadow
+def _close_and_persist(pos, result, now):
+    out = _cost_close(pos, result, now)
+    runtime_state.save(base)
+    return out
+base._close_shadow = _close_and_persist
 
 # Reconnect-safe Entry refs, shadow readiness, macro-fresh Guardian, and
 # risk-first Guardian loop (hard SL/profit floor survive stale Spot).
@@ -174,5 +182,5 @@ def _entry_eval(state, now=None, side=None):
 
 base.entry_council.evaluate = _entry_eval
 
-if __name__ == "__main__":
+if __name_ == "__main__":
     base.main()
