@@ -133,5 +133,22 @@ def install(wrapper):
 
     _install_bias(base)
     _install_guardian(base)
+
+    old_health = wrapper.health.health
+    def health_with_saturation(base_obj, state, now=None):
+        out = old_health(base_obj, state, now)
+        if bool(getattr(state, "futures_flow_ring_saturated", False)):
+            out = dict(out)
+            out["entry_ready"] = False
+            out["full_tier_s_ready"] = False
+            out["futures_flow"] = False
+            out["futures_flow_ring_saturated"] = True
+            state.mainnet_shadow_ready = False
+            state.system_ready = False
+            state.last_readiness_reason = "SHADOW_FEED_DEGRADED:futures_flow_ring_saturated"
+            state.mainnet_shadow_health = out
+        return out
+    wrapper.health.health = health_with_saturation
+
     base.app.state.tier_s_runtime_patch_version = VERSION
     return VERSION
