@@ -10,7 +10,7 @@ Type=simple
 WorkingDirectory=/home/ubuntu/SMC2026
 ExecStart=/usr/bin/python3 /home/ubuntu/SMC2026/testnet_tier_s_launcher.py
 Restart=always
-RestartSec=5
+RestartSec=5s
 RestartPreventExitStatus=73
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
@@ -25,10 +25,10 @@ Environment=SMC_SIDE_CALIBRATION_MODE=OFF
 Environment=SMC_ML_META_MODE=OFF
 Environment=SMC_JOURNAL_DIR=/home/ubuntu/.local/state/smc2026/testnet
 Environment=SMC_JOURNAL_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/testnet/events.jsonl
-LoadCredential=binance_api_key:/home/ubuntu/.config/smc2026/credentials/binance_api_key
-LoadCredential=binance_api_secret:/home/ubuntu/.config/smc2026/credentials/binance_api_secret
+LoadCredential=binance_api_key:/home/ubuntu/.config/smc2026/credentials/binance_testnet_api_key
+LoadCredential=binance_api_secret:/home/ubuntu/.config/smc2026/credentials/binance_testnet_api_secret
 UMask=0077
-CPUAccounting=true
+CPUACcounting=true
 MemoryAccounting=true
 NoNewPrivileges=true
 PrivateTmp=true
