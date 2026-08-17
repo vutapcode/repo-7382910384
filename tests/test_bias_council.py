@@ -19,14 +19,14 @@ council = _load()
 def state():
     s = SimpleNamespace(
         best_bid=100.0, best_ask=100.1, coinbase_price=100.05,
-        thoi_gian_coinbase_ticker_cuoi=100.0, open_interest=1000.0,
+        thoi_gian_coinbase_ticker_cuoi=100.0, thoi_gian_tick_cuoi=100.0, open_interest=1000.0, thoi_gian_vi_mo_cuoi=100.0,
         atr_1m=0.05, funding_rate=0.0, flow_1s_buffer=deque(),
         danh_sach_khop_lenh_futures=deque(), coinbase_cvd_1m=0.0,
         thoi_gian_coinbase_cuoi=100.0,
     )
     s.bias_price_history = deque([
-        {"ts": 80.0, "spot": 99.0, "coinbase": 99.0, "futures": 99.0, "oi": 990.0}
-    ], maxlen=48)
+        {"ts": 85.0, "spot": 99.0, "coinbase": 99.0, "futures": 99.0, "oi": 990.0}
+    ], maxlen=192)
     s.danh_sach_khop_lenh_futures.append(
         {"gia": 100.2, "thoi_gian_ms": 100000.0, "khoi_luong": 1.0, "ban_chu_dong": False}
     )
@@ -64,6 +64,29 @@ class BiasCouncilTests(unittest.TestCase):
         self.assertGreaterEqual(r["confidence"], 0.0)
         self.assertLessEqual(r["confidence"], 1.0)
         for forbidden in ("entry", "zone", "setup", "action", "price_entry"):
+            self.assertNotIn(forbidden, r)
+
+
+
+    def test_stale_spot_cannot_vote_direction(self):
+        s = state()
+        s.thoi_gian_tick_cuoi = 90.0
+        r = council.evaluate(s, now=100.0)
+        self.assertFalse(r["freshness"]["spot"])
+        self.assertEqual(r["s_votes"]["S1_cross_price"]["vote"], "ABSTAIN")
+
+    def test_covering_is_story_not_new_long_build(self):
+        s = state()
+        s.open_interest = 980.0
+        r = council.evaluate(s, now=100.0)
+        self.assertEqual(r["s_votes"]["S2_price_x_oi"]["metrics"]["regime"], "SHORT_COVERING")
+        self.assertNotEqual(r["s_votes"]["S2_price_x_oi"]["vote"], "LONG")
+
+    def test_contract_remains_direction_only(self):
+        r = council.evaluate(state(), now=100.0)
+        self.assertEqual(r["contract"], "DIRECTION_ONLY_NO_ENTRY_TIMING")
+        self.assertIn("story", r)
+        for forbidden in ("entry", "zone", "setup", "action", "price_entry", "stop_loss", "take_profit"):
             self.assertNotIn(forbidden, r)
 
 
