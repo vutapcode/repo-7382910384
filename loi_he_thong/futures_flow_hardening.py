@@ -29,9 +29,16 @@ def _publish_ring_health(state, ring):
             coverage = 0.0
     full = bool(ring.maxlen and len(ring) >= ring.maxlen)
     state.futures_flow_ring_coverage_sec = coverage
-    state.futures_flow_ring_saturated = bool(full and coverage < REQUIRED_COVERAGE_SEC)
+    saturated = bool(full and coverage < REQUIRED_COVERAGE_SEC)
+    state.futures_flow_ring_saturated = saturated
     state.futures_flow_ring_size = len(ring)
     state.futures_flow_ring_maxlen = ring.maxlen
+    if saturated:
+        # Fail closed immediately. The canonical shadow health probe may later restore
+        # readiness only after the ring is no longer truncated.
+        state.mainnet_shadow_ready = False
+        state.system_ready = False
+        state.last_readiness_reason = "SHADOW_FEED_DEGRADED:futures_flow_ring_saturated"
 
 
 def _trim(state, now_ms):
@@ -40,7 +47,7 @@ def _trim(state, now_ms):
     while ring:
         try:
             ts = float(ring[0].get("thoi_gian_ms", 0.0) or 0.0)
-        except (AttributeError, TypeError,ValueError):
+        except (AttributeError, TypeError, ValueError):
             ring.popleft()
             continue
         if ts >= cutoff:
