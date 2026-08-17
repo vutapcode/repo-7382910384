@@ -8,6 +8,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 WorkingDirectory=/home/ubuntu/SMC2026
+ExecStartPre=/usr/bin/python3 /home/ubuntu/SMC2026/ops/repo_integrity_check.py
 ExecStart=/usr/bin/python3 /home/ubuntu/SMC2026/testnet_tier_s_launcher.py
 Restart=always
 RestartSec=5s
@@ -28,7 +29,7 @@ Environment=SMC_JOURNAL_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/testnet/ev
 LoadCredential=binance_api_key:/home/ubuntu/.config/smc2026/credentials/binance_testnet_api_key
 LoadCredential=binance_api_secret:/home/ubuntu/.config/smc2026/credentials/binance_testnet_api_secret
 UMask=0077
-CPUACcounting=true
+CPUAccounting=true
 MemoryAccounting=true
 NoNewPrivileges=true
 PrivateTmp=true
