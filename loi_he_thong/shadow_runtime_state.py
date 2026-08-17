@@ -108,7 +108,7 @@ def snapshot(base):
         "trades": int(getattr(state, "mainnet_shadow_trades", 0) or 0),
         "wins": int(getattr(state, "mainnet_shadow_wins", 0) or 0),
         "losses": int(getattr(state, "mainnet_shadow_losses", 0) or 0),
-        "breakevens": int(getatttr(state, "mainnet_shadow_breakevens", 0) or 0),
+        "breakevens": int(getattr(state, "mainnet_shadow_breakevens", 0) or 0),
         "position": None,
     }
     if pos is not None and bool(getattr(pos, "active", False)):
@@ -144,11 +144,13 @@ def restore(base):
         return False
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return False
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("SHADOW_RUNTIME_STATE_CORRUPT") from exc
+    if not isinstance(raw, dict):
+        raise RuntimeError("SHADOW_RUNTIME_STATE_CORRUPT:ROOT_NOT_OBJECT")
     version = raw.get("version")
     if version not in SUPPORTED_VERSIONS:
-        return False
+        raise RuntimeError(f"SHADOW_RUNTIME_STATE_UNSUPPORTED:{version}")
 
     state = base.app.state
     for key, attr in (
