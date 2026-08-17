@@ -108,6 +108,7 @@ def snapshot(base):
         "trades": int(getattr(state, "mainnet_shadow_trades", 0) or 0),
         "wins": int(getattr(state, "mainnet_shadow_wins", 0) or 0),
         "losses": int(getattr(state, "mainnet_shadow_losses", 0) or 0),
+        "breakevens": int(getatttr(state, "mainnet_shadow_breakevens", 0) or 0),
         "position": None,
     }
     if pos is not None and bool(getattr(pos, "active", False)):
@@ -156,6 +157,7 @@ def restore(base):
         ("trades", "mainnet_shadow_trades"),
         ("wins", "mainnet_shadow_wins"),
         ("losses", "mainnet_shadow_losses"),
+        ("breakevens", "mainnet_shadow_breakevens"),
     ):
         if key in raw:
             setattr(state, attr, raw[key])
