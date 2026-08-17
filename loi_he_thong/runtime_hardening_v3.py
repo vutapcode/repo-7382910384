@@ -21,7 +21,7 @@ def _spot_flow(state, now):
     cutoff = float(now) - FLOW_SEC
     for row in list(getattr(state, "flow_1s_buffer", ()) or ()):
         try:
-            if float(row.get("ts", 0.0) or 0.0) >= cutoff:
+            if cutoff <= float(row.get("ts", 0.0) or 0.0) <= float(now):
                 buy += float(row.get("buy", 0.0) or 0.0)
                 sell += float(row.get("sell", 0.0) or 0.0)
         except (AttributeError, TypeError, ValueError):
@@ -135,7 +135,7 @@ def install(wrapper):
     _install_guardian(base)
 
     old_health = wrapper.health.health
-    def health_with_saturation_base_obj, state, now=None):
+    def health_with_saturation(base_obj, state, now=None):
         out = old_health(base_obj, state, now)
         if bool(getattr(state, "futures_flow_ring_saturated", False)):
             out = dict(out)
