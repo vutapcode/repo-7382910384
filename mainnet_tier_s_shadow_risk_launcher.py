@@ -1,4 +1,4 @@
-"""Mainnet shadow wrapper with SL/TP/profit lock + stricter Guardian exit."""
+"""Mainnet shadow wrapper with Tier-S adaptive SL/TP/profit protection."""
 import asyncio
 import logging
 import time
@@ -31,7 +31,6 @@ async def _guardian_loop():
             if pos is None or not bool(getattr(pos, "active", False)):
                 await asyncio.sleep(0.10)
                 continue
-
             now = time.time()
             if not base._spot_fresh(now):
                 s.guardian_s_decision = "HOLD_STALE_SPOT"
@@ -39,22 +38,31 @@ async def _guardian_loop():
                 continue
 
             px = base._latest_futures_price(now)
-            rr = risk.assess(pos, px)
+            guardian = base.guardian_s.update_state(s, pos, now=now)
+
+            rr = risk.assess(pos, px, guardian)
             s.mainnet_shadow_risk = rr
+            s.mainnet_shadow_tier_mode = rr.get("tier_mode")
+            s.mainnet_shadow_tier_supportive = rr.get("supportive_count", 0)
+            s.mainnet_shadow_tier_adverse = rr.get("adverse_count", 0)
+
             if rr.get("decision") == "EXIT":
-                base._close_shadow(pos, {"decision": "EXIT", "reason": rr["reason"], "risk": rr}, now)
+                base._close_shadow(
+                    pos,
+                    {"decision": "EXIT", "reason": rr["reason"], "risk": rr, "guardian": guardian},
+                    now,
+                )
                 await asyncio.sleep(base.GUARD_POLL)
                 continue
 
-            result = base.guardian_s.update_state(s, pos, now=now)
-            if result.get("decision") == "EXIT" and risk.guardian_ok(result):
-                base._close_shadow(pos, result, now)
-            elif result.get("decision") == "EXIT":
+            if guardian.get("decision") == "EXIT" and risk.guardian_ok(guardian):
+                base._close_shadow(pos, guardian, now)
+            elif guardian.get("decision") == "EXIT":
                 s.guardian_s_decision = "WATCH_CAUSAL_GATE"
         except asyncio.CancelledError:
             raise
         except Exception:
-            logging.exception("[MAINNET-SHADOW] protected guardian failure")
+            logging.exception("[MAINNET-SHADOW] Tier-S protected guardian failure")
             await asyncio.sleep(0.25)
         await asyncio.sleep(base.GUARD_POLL)
 
