@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 
 from binance.error import ClientError
 from binance.um_futures import UMFutures
@@ -37,6 +38,10 @@ class BinanceAPI:
                 return self._error_payload(exc)
 
         return await asyncio.to_thread(invoke)
+
+    @staticmethod
+    def _page_error(message):
+        return {"code": "PAGINATION", "message": message}, 599
 
     async def get_balance(self):
         result, status = await self._call(self.client.balance)
@@ -109,19 +114,138 @@ class BinanceAPI:
         params = {"symbol": symbol} if symbol else {}
         return await self._call(self.client.get_orders, **params)
 
-    async def get_all_orders(self, symbol, start_time=None, limit=1000):
-        params = {"symbol": symbol, "limit": int(limit)}
-        if start_time is not None:
-            params["startTime"] = int(start_time)
-        return await self._call(self.client.get_all_orders, **params)
+    async def get_all_orders(
+        self,
+        symbol,
+        start_time=None,
+        limit=1000,
+        end_time=None,
+        max_pages=200,
+    ):
+        """Return the full requested order window without silently truncating at 1000 rows.
 
-    async def get_income_history(self, symbol=None, start_time=None, limit=1000):
-        params = {"limit": int(limit)}
-        if symbol:
-            params["symbol"] = symbol
+        Binance ``allOrders`` has no page number.  The first page is anchored by
+        startTime/endTime; following pages advance by orderId, which is monotonic
+        for a symbol.  A fixed endTime prevents new orders from moving the window
+        while it is being read.  Pagination anomalies fail closed with status 599
+        rather than returning a partial list.
+        """
+        page_size = min(1000, max(1, int(limit)))
+        fixed_end = int(end_time) if end_time is not None else (
+            int(time.time() * 1000) if start_time is not None else None
+        )
+        base = {"symbol": symbol, "limit": page_size}
         if start_time is not None:
-            params["startTime"] = int(start_time)
-        return await self._call(self.client.get_income_history, **params)
+            base["startTime"] = int(start_time)
+        if fixed_end is not None:
+            base["endTime"] = fixed_end
+
+        rows = []
+        seen = set()
+        next_order_id = None
+
+        for _ in range(max(1, int(max_pages))):
+            params = dict(base)
+            if next_order_id is not None:
+                # orderId already anchors us after the first page.  Omitting
+                # startTime avoids connector/API ambiguity when both cursors are
+                # supplied; endTime keeps the daily window frozen.
+                params.pop("startTime", None)
+                params["orderId"] = next_order_id
+
+            batch, status = await self._call(self.client.get_all_orders, **params)
+            if status != 200:
+                return batch, status
+            if not isinstance(batch, list):
+                return self._page_error("allOrders returned a non-list payload")
+
+            max_order_id = None
+            for row in batch:
+                if not isinstance(row, dict):
+                    continue
+                raw_id = row.get("orderId")
+                try:
+                    order_id = int(raw_id)
+                except (TypeError, ValueError):
+                    return self._page_error("allOrders page is missing a numeric orderId")
+                max_order_id = order_id if max_order_id is None else max(max_order_id, order_id)
+                if order_id not in seen:
+                    seen.add(order_id)
+                    rows.append(row)
+
+            if len(batch) < page_size:
+                return rows, 200
+            if max_order_id is None:
+                return self._page_error("allOrders full page has no usable cursor")
+
+            candidate = max_order_id + 1
+            if next_order_id is not None and candidate <= next_order_id:
+                return self._page_error("allOrders cursor did not advance")
+            next_order_id = candidate
+
+        return self._page_error("allOrders exceeded pagination safety limit")
+
+    async def get_income_history(
+        self,
+        symbol=None,
+        start_time=None,
+        limit=1000,
+        end_time=None,
+        max_pages=200,
+    ):
+        """Return the full income window using Binance's explicit ``page`` cursor."""
+        page_size = min(1000, max(1, int(limit)))
+        fixed_end = int(end_time) if end_time is not None else (
+            int(time.time() * 1000) if start_time is not None else None
+        )
+        base = {"limit": page_size}
+        if symbol:
+            base["symbol"] = symbol
+        if start_time is not None:
+            base["startTime"] = int(start_time)
+        if fixed_end is not None:
+            base["endTime"] = fixed_end
+
+        rows = []
+        seen = set()
+
+        for page in range(1, max(1, int(max_pages)) + 1):
+            params = dict(base)
+            params["page"] = page
+            batch, status = await self._call(self.client.get_income_history, **params)
+            if status != 200:
+                return batch, status
+            if not isinstance(batch, list):
+                return self._page_error("income history returned a non-list payload")
+
+            for row in batch:
+                if not isinstance(row, dict):
+                    continue
+                # tranId is Binance's stable identity for income rows.  Fall back
+                # to the immutable accounting tuple for old/test payloads that do
+                # not expose tranId so page overlap cannot double-count PnL.
+                tran_id = row.get("tranId")
+                key = (
+                    ("tranId", str(tran_id))
+                    if tran_id not in (None, "")
+                    else (
+                        "row",
+                        str(row.get("time", "")),
+                        str(row.get("incomeType", "")),
+                        str(row.get("income", "")),
+                        str(row.get("asset", "")),
+                        str(row.get("symbol", "")),
+                        str(row.get("info", "")),
+                    )
+                )
+                if key not in seen:
+                    seen.add(key)
+                    rows.append(row)
+
+            if len(batch) < page_size:
+                return rows, 200
+
+        return self._page_error("income history exceeded pagination safety limit")
 
     async def new_order(self, symbol, side, type, quantity=None, **kwargs):
         params = {"symbol": symbol, "side": side, "type": type}
@@ -151,9 +275,9 @@ class BinanceAPI:
         )
 
     async def get_account_trades(self, symbol, start_time=None):
-        params = {'symbol': symbol, 'limit': 1000}
+        params = {"symbol": symbol, "limit": 1000}
         if start_time is not None:
-            params['startTime'] = int(start_time)
+            params["startTime"] = int(start_time)
         return await self._call(self.client.get_account_trades, **params)
 
     async def new_algo_order(self, **params):
