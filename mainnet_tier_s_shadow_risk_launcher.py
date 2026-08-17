@@ -112,8 +112,10 @@ def _open_shadow(side, result, now):
         runtime_state.save(base)
     return pos
 
-def _account_init():
-    _orig_account_init()
+async def _account_init():
+    # app.main() awaits account init; keep this wrapper async so the base shadow
+    # initializer actually runs before persistence recovery.
+    await _orig_account_init()
     restored = runtime_state.restore(base)
     base.app.state.mainnet_shadow_restore_ok = bool(restored)
 
@@ -149,6 +151,7 @@ base._bias_loop = _bias_loop
 # Force native shadow accounting to the same conservative 18bps round-trip budget,
 # even when launched manually outside systemd (9bps modeled all-in per side).
 base.SHADOW_FEE_BPS_PER_SIDE = max(float(getattr(base, "SHADOW_FEE_BPS_PER_SIDE", 0.0) or 0.0), 9.0)
+risk.FEE_BPS = base.SHADOW_FEE_BPS_PER_SIDE
 runtime_state.install_cost_accounting(base, model_cost_bps=18.0)
 _cost_close = base._close_shadow
 def _close_and_persist(pos, result, now):
