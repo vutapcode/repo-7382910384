@@ -94,6 +94,11 @@ def _tier_s_score(_snapshot, _mode_info, _bias):
     }
 
 
+def _disable_attr(obj, name):
+    if hasattr(obj, name):
+        setattr(obj, name, _idle_task)
+
+
 def _apply_lightweight_testnet_runtime():
     if not bool(getattr(app.api, "testnet", False)):
         raise RuntimeError("TESTNET_TIER_S_RUNTIME_REFUSES_MAINNET")
@@ -103,16 +108,16 @@ def _apply_lightweight_testnet_runtime():
     state.testnet_guardian_only = True
 
     # Heavy/easy-to-manipulate signal sources: physically stop their runtime loops.
-    app.tai_so_lenh.hung_so_lenh_futures = _idle_task
-    app.tai_so_lenh.hung_so_lenh_futures_execution = _idle_task
-    app.vong_lap_so_lenh = _idle_task
-    app.tai_nen_live.hung_nen_live_futures = _idle_task
-    app.vong_lap_nen_live = _idle_task
-    app.vong_lap_nen_m15 = _idle_task
-    app.vong_lap_vi_mo_mapping = _idle_task
-    app.map_gia_tick.vong_lap_radar = _idle_task
-    app.tho_san_trailing.vong_lap_trailing = _idle_task
-    app.bao_ve_khan_cap.vong_lap_bao_ve = _idle_task
+    _disable_attr(app.tai_so_lenh, "hung_so_lenh_futures")
+    _disable_attr(app.tai_so_lenh, "hung_so_lenh_futures_execution")
+    _disable_attr(app, "vong_lap_so_lenh")
+    _disable_attr(app.tai_nen_live, "hung_nen_live_futures")
+    _disable_attr(app, "vong_lap_nen_live")
+    _disable_attr(app, "vong_lap_nen_m15")
+    _disable_attr(app, "vong_lap_vi_mo_mapping")
+    _disable_attr(app.map_gia_tick, "vong_lap_radar")
+    _disable_attr(app.tho_san_trailing, "vong_lap_trailing")
+    _disable_attr(app.bao_ve_khan_cap, "vong_lap_bao_ve")
 
     # Keep Spot aggTrade because Tier-S flow needs it, but remove legacy per-trade work.
     app.footprint.cap_nhat_footprint = lambda *_a, **_k: None
@@ -222,7 +227,7 @@ async def _entry_loop():
                 or not bool(getattr(state, "system_ready", False))
                 or not bool(getattr(state, "trading_enabled", False))
                 or bool(getattr(state, "co_lenh_mo", False))
-                or bool(getattr(state, "execution_in_flight", False))
+                or bool(getattr(state, "execution_in_flight", False)
             ):
                 await asyncio.sleep(ENTRY_POLL_SECONDS)
                 continue
