@@ -61,12 +61,44 @@ def install(base):
     """Replace the Spot/Futures aggTrade collectors used by Mainnet shadow runtime."""
     mod = base.app.tai_dong_tien
 
+    def reset_spot_epoch(state):
+        for name in ("danh_sach_khop_lenh", "flow_1s_buffer", "trade_flow_timeline"):
+            buf = getattr(state, name, None)
+            if buf is not None:
+                try:
+                    buf.clear()
+                except (AttributeError, TypeError):
+                    pass
+        for name in (
+            "current_vol_3s",
+            "current_cvd_buy_3s",
+            "current_cvd_sell_3s",
+            "last_3s_window_ts",
+            "last_trade_event_time_s",
+            "thoi_gian_dong_tien_cuoi",
+        ):
+            setattr(state, name, 0.0)
+        state.spot_flow_epoch = int(getattr(state, "spot_flow_epoch", 0) or 0) + 1
+        state.spot_flow_epoch_started_at = time.time()
+
+    def reset_futures_epoch(state):
+        ring = _ensure_ring(state)
+        ring.clear()
+        state.futures_flow_ring_saturated = False
+        state.futures_flow_ring_coverage_sec = 0.0
+        state.futures_flow_ring_size = 0
+        state.thoi_gian_dong_tien_futures_cuoi = 0.0
+        state.futures_flow_epoch = int(getattr(state, "futures_flow_epoch", 0) or 0) + 1
+        state.futures_flow_epoch_started_at = time.time()
+        return ring
+
     async def spot_local_time(symbol: str, state):
         url = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@aggTrade"
         while True:
             try:
                 async with mod.websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
-                    logging.info("[SPOT FLOW] hardened local-time collector: %s", symbol.upper())
+                    reset_spot_epoch(state)
+                    logging.info("[SPOT FLOW] hardened local-time collector epoch=%s: %s", state.spot_flow_epoch, symbol.upper())
                     async for raw in ws:
                         try:
                             data = mod.orjson.loads(raw)
@@ -97,7 +129,8 @@ def install(base):
         while True:
             try:
                 async with mod.websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
-                    logging.info("[FUTURES FLOW] hardened Mainnet local-time collector: %s", symbol.upper())
+                    reset_futures_epoch(state)
+                    logging.info("[FUTURES FLOW] hardened Mainnet local-time collector epoch=%s: %s", state.futures_flow_epoch, symbol.upper())
                     async for raw in ws:
                         try:
                             data = mod.orjson.loads(raw)
@@ -126,7 +159,7 @@ def install(base):
                 await asyncio.sleep(3)
 
     mod.hung_dong_tien_spot = spot_local_time
-    # Historical alias: this name also pointed at the Spot collector.
+    #+Å Historical alias: this name also pointed at the Spot collector.
     mod.hung_dong_tien_futures = spot_local_time
     mod.hung_dong_tien_futures_real = hardened
     return hardened
