@@ -7,11 +7,24 @@
 
 import asyncio
 import collections
+import importlib.util
 import logging
 import time
+from pathlib import Path
 
 import orjson
 import websockets
+
+
+def _load_entry_shado():
+    path = Path(__file__).resolve().parents[2] / "loi_he_thong" / "entry_council_shadow.py"
+    spec = importlib.util.spec_from_file_location("entry_council_shadow_runtime", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+entry_council_shadow = _load_entry_shadow()
 
 
 COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
@@ -105,6 +118,7 @@ async def hung_coinbase_spot(product_id: str, bo_nho_ram):
                         buf_1m.append(row)
                         buf_5m.append(row)
                         _publish_flow(bo_nho_ram, buf_3s, buf_1m, buf_5m, now_ms)
+                        entry_council_shadow.update_state(bo_nho_ram, now=now_ms / 1000.0)
                     except (KeyError, TypeError, ValueError):
                         continue
 
