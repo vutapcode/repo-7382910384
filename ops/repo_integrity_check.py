@@ -8,7 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEXT_EXTS = {".py", ".service", ".json", ".md", ".txt"}
-SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypi_cache", ".venv", "venv"}
+SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv", "venv"}
+
 
 def iter_files():
     for path in ROOT.rglob("*"):
@@ -18,6 +19,7 @@ def iter_files():
             continue
         if path.suffix.lower() in TEXT_EXTS:
             yield path
+
 
 def main() -> int:
     errors = []
@@ -33,10 +35,10 @@ def main() -> int:
         if b"\x00" in raw:
             errors.append(f"{rel}: NULL_BYTE")
             continue
-        if raw.startswith((bÿþe", b"þÿe")):
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
             errors.append(f"{rel}: UTF16_BOM")
             continue
-        if raw.startswith(bï»¿b"):
+        if raw.startswith(b"\xef\xbb\xbf"):
             errors.append(f"{rel}: UTF8_BOM")
             continue
 
@@ -66,13 +68,17 @@ def main() -> int:
         for item in errors:
             print(f" - {item}", file=sys.stderr)
         print(
-            f"[REPO-INTEGRITY] checked={checked} python={py_checked} json={json_checked} errors={len(errors)}",
+            f"[REPO-INTEGRITY] checked={checked} python={py_checked} "
+            f"json={json_checked} errors={len(errors)}",
             file=sys.stderr,
         )
         return 1
 
-    print(f"[REPO-INTEGRITY] OK checked={checked} python={py_checked} json={json_checked}")
+    print(
+        f"[REPO-INTEGRITY] OK checked={checked} python={py_checked} json={json_checked}"
+    )
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
