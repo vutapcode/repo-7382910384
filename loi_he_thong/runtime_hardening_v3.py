@@ -9,7 +9,7 @@ MIN_IMB = 0.05
 def _imb(buy, sell):
     buy, sell = float(buy or 0.0), float(sell or 0.0)
     total = buy + sell
-    return ((buy - sell) / total if total > 0 else 0.0), total)
+    return ((buy - sell) / total if total > 0 else 0.0), total
 
 
 def _material_floor(state):
@@ -72,7 +72,7 @@ def _install_bias(base):
             "futures": _fut_flow(state, now),
             "coinbase": _coinbase_flow(state, now),
         }.items():
-            if volume >= floor and abs(imbalance) >= MIN_IAB:
+            if volume >= floor and abs(imbalance) >= MIN_IMB:
                 rows.append((name, "LONG" if imbalance > 0 else "SHORT",
                              min(1.0, abs(imbalance) / 0.35), volume, imbalance))
         longs = [r for r in rows if r[1] == "LONG"]
@@ -89,10 +89,10 @@ def _install_bias(base):
                              venues=metrics, material_floor_btc=round(floor, 6))
         strength = sum(r[2] for r in agreed) / len(agreed)
         return bias.vote(agreed[0][1],
-                         0.52 + 0.12 * max(0, len(agreed) - 2) + 0.30 * strength,
+                        0.52 + 0.12 * max(0, len(agreed) - 2) + 0.30 * strength,
                          "MULTI_VENUE_MATERIAL_FLOW",
-                         venues=metrics, strength=round(strength, 6),
-                         material_floor_btc=round(floor, 6), horizon_sec=FLOW_SEC)
+                        venues=metrics, strength=round(strength, 6),
+                        material_floor_btc=round(floor, 6), horizon_sec=FLOW_SEC)
 
     bias.s3 = s3
 
@@ -135,7 +135,7 @@ def install(wrapper):
     _install_guardian(base)
 
     old_health = wrapper.health.health
-    def health_with_saturation(base_obj, state, now=None):
+    def health_with_saturation_base_obj, state, now=None):
         out = old_health(base_obj, state, now)
         if bool(getattr(state, "futures_flow_ring_saturated", False)):
             out = dict(out)
