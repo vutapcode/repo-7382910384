@@ -65,7 +65,7 @@ async def _guardian_loop():
             px = base._latest_futures_price(now)
             guardian = base.guardian_s.update_state(s, pos, now=now)
 
-            rr = risk.assess(pos, px, guardian)
+            rr = risk.assess(pos, px, guardian, market_state=s, now=now)
             s.mainnet_shadow_risk = rr
             s.mainnet_shadow_tier_mode = rr.get("tier_mode")
             s.mainnet_shadow_tier_supportive = rr.get("supportive_count", 0)
