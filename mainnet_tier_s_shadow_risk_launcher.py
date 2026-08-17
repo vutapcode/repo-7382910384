@@ -1,4 +1,4 @@
-"""Mainnet shadow wrapper with Tier-S adaptive SL/TP/profit protection."""
+"""Mainnet shadow wrapper with Tier-S adaptive SL/TP/profit protection and entry edge gating."""
 import asyncio
 import logging
 import time
@@ -9,17 +9,42 @@ risk = base.app.load_module(
     "shadow_risk_guard_runtime",
     base.app.CURRENT_DIR / "loi_he_thong" / "shadow_risk_guard.py",
 )
+edge = base.app.load_module(
+    "entry_edge_tier_runtime",
+    base.app.CURRENT_DIR / "loi_he_thong" / "entry_edge_tier.py",
+)
 
 _orig_open = base._open_shadow
 
+def _entry_quorum_ok(result, state, now):
+    allowed, report = edge.authorize(result, state)
+    state.entry_edge_tier = report
+    state.entry_edge_class = report.get("edge_class")
+    state.entry_edge_cost_ok = report.get("cost_ok")
+    state.entry_edge_updated_at = now
+    if not allowed:
+        return False
+    if report.get("entry_mode") == "FAST":
+        # FAST deliberately permits one strong material flow venue, but never stale/tiny flow.
+        return base._flow_volume_quorum(state, now, required=1)
+    # NORMAL keeps the stricter two-venue material/fresh flow floor.
+    return base._flow_volume_quorum(state, now, required=2)
+
 def _open_shadow(side, result, now):
+    state = base.app.state
+    report = getattr(state, "entry_edge_tier", None) or edge.classify(result, state)
+    result = dict(result)
+    result["edge_tier"] = report
     pos = _orig_open(side, result, now)
     if pos is not None:
         risk.arm(pos, pos.entry_price)
-        base.app.state.mainnet_shadow_risk = risk.snap(pos, pos.entry_price)
+        state.mainnet_shadow_risk = risk.snap(pos, pos.entry_price)
+        state.mainnet_shadow_entry_edge = report
         logging.info(
-            "[MAINNET-SHADOW] RISK armed side=%s entry=%.2f hard_sl=%.2f tp=%.2f",
-            pos.side, pos.entry_price, pos.hard_sl, pos.tp,
+            "[MAINNET-SHADOW] ENTRY edge=%s costx=%.2f fast=%s",
+            report.get("edge_class"),
+            float(report.get("cost_multiple_model") or 0.0),
+            bool(report.get("fast_contract_ok")),
         )
     return pos
 
@@ -66,6 +91,7 @@ async def _guardian_loop():
             await asyncio.sleep(0.25)
         await asyncio.sleep(base.GUARD_POLL)
 
+base._entry_quorum_ok = _entry_quorum_ok
 base._open_shadow = _open_shadow
 base._guardian_loop = _guardian_loop
 
