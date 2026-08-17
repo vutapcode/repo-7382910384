@@ -50,11 +50,24 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         path = ROOT / "loi_he_thong" / "shadow_runtime_state.py"
         text = path.read_text(encoding="utf-8")
         compile(text, str(path), "exec")
-        self.assertIn('"risk_best_r"', text)
-        self.assertIn('"risk_profit_floor_r"', text)
-        self.assertIn('"risk_whale_seen"', text)
-        self.assertIn('"risk_whale_exhaustion_since"', text)
+        self.assertIn('"best_r"', text)
+        self.assertIn('"floor_r"', text)
+        self.assertIn('"whale_seen"', text)
+        self.assertIn('"fee_r"', text)
+        self.assertIn('"whale_exhaustion_since"', text)
+        self.assertIn("SHADOW_RUNTIME_STATE_V2", text)
+        self.assertIn("V1_ALIASES", text)
         self.assertIn("os.replace(tmp, path)", text)
+
+    def test_futures_flow_ring_is_time_bounded_and_saturation_fail_closed(self):
+        path = ROOT / "loi_he_thong" / "futures_flow_hardening.py"
+        text = path.read_text(encoding="utf-8")
+        compile(text, str(path), "exec")
+        self.assertIn("RETENTION_MS = 20_000.0", text)
+        self.assertIn("HARD_MAX = 12_000", text)
+        self.assertIn("futures_flow_ring_saturated", text)
+        self.assertIn("exchange_time_ms", text)
+        self.assertIn("state.system_ready = False", text)
 
     def test_hardened_wrapper_compiles_and_has_one_runtime_contract(self):
         path = ROOT / "mainnet_tier_s_shadow_risk_launcher.py"
@@ -64,6 +77,11 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         self.assertIn("shadow_runtime_state_runtime", text)
         self.assertIn("BIAS_INVALID_OR_EXPIRED", text)
         self.assertIn("base._bias_loop = _bias_loop", text)
+        self.assertIn("async def _account_init()", text)
+        self.assertIn("await _orig_account_init()", text)
+        self.assertIn("risk.FEE_BPS = base.SHADOW_FEE_BPS_PER_SIDE", text)
+        self.assertIn("futures_flow.install(base)", text)
+        self.assertIn("FUTURES_FLOW_RING_SATURATED", text)
         self.assertNotIn("if pos is none", text)
 
     def test_integrity_scanner_uses_ascii_escape_byte_literals(self):
