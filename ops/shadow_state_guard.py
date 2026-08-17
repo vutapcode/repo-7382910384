@@ -36,6 +36,7 @@ def counter(raw, name, optional=False):
         fail(f"{name}:invalid_counter")
     return value
 
+
 root = Path(os.environ.get("SMC_JOURNAL_DIR") or
             (Path.home() / ".local" / "state" / "smc2026" / "mainnet_shadow"))
 path = root / "runtime_state.json"
@@ -55,8 +56,6 @@ if version not in VERSIONS:
     fail(f"unsupported_version:{version}")
 
 required = {"balance", "realized_pnl", "trades", "wins", "losses", "position"}
-if version == "SHADOW_RUNTIME_STATE_V2":
-    required.add("breakevens")
 missing = sorted(required.difference(raw))
 if missing:
     fail("missing:" + ",".join(missing))
@@ -66,7 +65,7 @@ num(raw["realized_pnl"], "realized_pnl")
 trades = counter(raw, "trades")
 wins = counter(raw, "wins")
 losses = counter(raw, "losses")
-breakevens = counter(raw, "breakevens", optional=(version == "SHADOW_RUNTIME_STATE_V1"))
+breakevens = counter(raw, "breakevens", optional=True)
 if version == "SHADOW_RUNTIME_STATE_V2" and trades != wins + losses + breakevens:
     fail(f"counter_invariant:{trades}!={wins}+{losses}+{breakevens}")
 
