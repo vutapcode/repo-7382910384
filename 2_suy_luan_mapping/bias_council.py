@@ -175,7 +175,7 @@ def _s3(state, now):
     cbts = float(getattr(state, "thoi_gian_coinbase_cuoi", 0.0) or 0.0)
     rows = []
     if st > 0.0 and _flow_side(si) != "ABSTAIN":
-        rows.append("spot", _flow_side(si), _clamp(abs(si) / 0.35))
+        rows.append(("spot", _flow_side(si), _clamp(abs(si) / 0.35)))
     if ft > 0.0 and fts > 0.0 and now - fts <= FUT_MAX_AGE and _flow_side(fi) != "ABSTAIN":
         rows.append(("futures", _flow_side(fi), _clamp(abs(fi) / 0.35)))
     if cbts > 0.0 and now - cbts <= CB_MAX_AGE and abs(cb) >= 0.5:
@@ -273,7 +273,7 @@ def evaluate(state, now=None, force_full=False):
 
     au = {"A1_funding_basis": _a1(state, spot, futures),
           "A2_spot_lead": _a2(cur, ref, threshold)}
-    bias, confidence, quorum, reason = _consensus(sv, av)
+    bias, confidence, quorum, reason = _consensus(sv, au)
     return {"version": VERSION, "bias": bias, "confidence": round(confidence, 6),
             "quorum": quorum, "reason": reason, "mode": mode,
             "s_votes": sv, "a_votes": au, "futures_price_source": fut_source, "ts": now}
