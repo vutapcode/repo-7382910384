@@ -140,8 +140,6 @@ def snap(p, px, decision="HOLD", why="PROTECT", sup=0, adv=0):
         "reason": why,
         "price": float(px),
         "hard_sl": p.hard_sl,
-        "fixed_tp": None,
-        "partial_tp": False,
         "profit_floor": p.floor,
         "floor_r": p.floor_r,
         "stage": p.stage,
@@ -150,5 +148,5 @@ def snap(p, px, decision="HOLD", why="PROTECT", sup=0, adv=0):
         "supportive_count": sup,
         "adverse_count": adv,
         "whale_seen": bool(getattr(p, "whale_seen", False)),
-        "whale_exhaustion_since": float(getattr(p, "whale_exhaustion_since ", 0.0) or 0.0),
+        "whale_exhaustion_since": float(getattr(p, "whale_exhaustion_since", 0.0) or 0.0),
     }
