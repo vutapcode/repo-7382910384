@@ -58,8 +58,38 @@ def _trim(state, now_ms):
 
 
 def install(base):
-    """Replace only the public Mainnet Futures aggTrade collector used by shadow runtime."""
+    """Replace the Spot/Futures aggTrade collectors used by Mainnet shadow runtime."""
     mod = base.app.tai_dong_tien
+
+    async def spot_local_time(symbol: str, state):
+        url = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@aggTrade"
+        while True:
+            try:
+                async with mod.websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+                    logging.info("[SPOT FLOW] hardened local-time collector: %s", symbol.upper())
+                    async for raw in ws:
+                        try:
+                            data = mod.orjson.loads(raw)
+                            recv_ms = time.time() * 1000.0
+                            state.danh_sach_khop_lenh.append({
+                                "gia": float(data["p"]),
+                                "khoi_luong": float(data["q"]),
+                                "ban_chu_dong": bool(data["m"]),
+                                "thoi_gian_ms": int(recv_ms),
+                                "exchange_time_ms": int(data.get("E", 0) or 0),
+                                "nguon": "SPOT",
+                            })
+                            state.thoi_gian_dong_tien_cuoi = recv_ms / 1000.0
+                        except (KeyError, TypeError, ValueError):
+                            continue
+            except asyncio.CancelledError:
+                raise
+            except mod.websockets.exceptions.ConnectionClosed as exc:
+                logging.warning("[SPOT FLOW] reconnect: %s", exc)
+                await asyncio.sleep(3)
+            except Exception:
+                logging.exception("[SPOT FLOW] hardened collector failure")
+                await asyncio.sleep(3)
 
     async def hardened(symbol: str, state):
         url = f"wss://fstream.binance.com/ws/{symbol.lower()}@aggTrade"
@@ -95,5 +125,8 @@ def install(base):
                 logging.exception("[FUTURES FLOW] hardened collector failure")
                 await asyncio.sleep(3)
 
+    mod.hung_dong_tien_spot = spot_local_time
+    # Historical alias: this name also pointed at the Spot collector.
+    mod.hung_dong_tien_futures = spot_local_time
     mod.hung_dong_tien_futures_real = hardened
     return hardened
