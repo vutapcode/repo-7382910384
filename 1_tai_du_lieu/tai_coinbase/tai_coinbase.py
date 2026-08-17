@@ -1,9 +1,8 @@
 """
 [AI_CONTEXT]
 - MODULE: 1_tai_du_lieu / tai_coinbase
-- ROLE: WebSocket thu thap Coinbase Spot BTC-USD matches va tinh rolling CVD.
-- I/O: OUT: state.coinbase_cvd_1m, state.coinbase_cvd_5m, state.thoi_gian_coinbase_cuoi
-- TIER: S — nguon flow to chuc.
+- ROLE: Coinbase BTC-USD price + rolling aggressive-flow CVD.
+- BIAS: price is a light always-on S-tier input; matches are flow evidence.
 """
 
 import asyncio
@@ -24,22 +23,36 @@ SUBSCRIBE_MSG = orjson.dumps({
 
 
 def _coinbase_match_delta(data) -> float:
-    """
-    Return signed taker delta for a Coinbase Exchange `match` message.
-
-    Coinbase `side` is the MAKER order side:
-      maker sell => taker buy  => positive delta
-      maker buy  => taker sell => negative delta
-    """
+    """Return signed taker delta. Coinbase `side` is the MAKER order side."""
     size = float(data.get("size", 0.0) or 0.0)
     side = str(data.get("side", "") or "").lower()
     if size <= 0.0 or side not in ("buy", "sell"):
         return 0.0
+    # maker sell => taker buy; maker buy => taker sell
     return size if side == "sell" else -size
 
 
+def _apply_ticker(data, state) -> bool:
+    """Store a tiny Coinbase price oracle; no extra connection is created."""
+    try:
+        price = float(data.get("price", 0.0) or 0.0)
+        bid = float(data.get("best_bid", 0.0) or 0.0)
+        ask = float(data.get("best_ask", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return False
+    if price <= 0.0 and bid > 0.0 and ask > bid:
+        price = (bid + ask) / 2.0
+    if price <= 0.0:
+        return False
+    state.coinbase_price = price
+    state.coinbase_best_bid = bid
+    state.coinbase_best_ask = ask
+    state.thoi_gian_coinbase_ticker_cuoi = time.time()
+    return True
+
+
 async def hung_coinbase_spot(product_id: str, bo_nho_ram):
-    """Hang Coinbase Spot matches va cap nhat rolling CVD 1m/5m."""
+    """One Coinbase socket: lightweight ticker plus rolling CVD 1m/5m."""
     buf_1m = collections.deque()
     buf_5m = collections.deque()
 
@@ -49,12 +62,17 @@ async def hung_coinbase_spot(product_id: str, bo_nho_ram):
                 COINBASE_WS_URL, ping_interval=20, ping_timeout=20
             ) as ws:
                 await ws.send(SUBSCRIBE_MSG)
-                logging.info("[COINBASE] Ket noi Coinbase Spot: %s (TIER S)", product_id)
+                logging.info("[COINBASE] Ket noi Coinbase Spot: %s", product_id)
 
                 async for raw in ws:
                     try:
                         data = orjson.loads(raw)
                         msg_type = data.get("type", "")
+
+                        if msg_type == "ticker":
+                            _apply_ticker(data, bo_nho_ram)
+                            continue
+
                         if msg_type not in ("match", "last_match"):
                             continue
 
