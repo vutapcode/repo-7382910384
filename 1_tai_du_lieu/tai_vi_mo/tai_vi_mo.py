@@ -1,32 +1,19 @@
 """
 [AI_CONTEXT]
 - MODULE: 1_tai_du_lieu / tai_vi_mo
-- ROLE: Poll Binance USD-M Open Interest + Funding, then refresh bias council.
-- LOAD: no extra task/thread; council runs on this existing slow REST cadence.
+- ROLE: Poll Binance USD-M Open Interest + Funding.
+- CONTRACT: DATA-ONLY collector. It must never evaluate or write strategy/bias state.
 """
 
 import asyncio
-import importlib.util
 import logging
 import time
-from pathlib import Path
 
 import aiohttp
 
 
-def _load_bias_council():
-    path = Path(__file__).resolve().parents[2] / "2_suy_luan_mapping" / "bias_council.py"
-    spec = importlib.util.spec_from_file_location("bias_council_runtime", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-bias_council = _load_bias_council()
-
-
 async def tai_du_lieu_vi_mo(symbol: str, bo_nho_ram, chu_ky_giay: int = 5):
-    """Poll OI/funding and update direction-only bias on the same cadence."""
+    """Poll OI/funding on a slow REST cadence and publish only raw macro data."""
     symbol_upper = symbol.upper()
     url_oi = (
         "https://fapi.binance.com/fapi/v1/openInterest"
@@ -55,25 +42,25 @@ async def tai_du_lieu_vi_mo(symbol: str, bo_nho_ram, chu_ky_giay: int = 5):
                 bo_nho_ram.open_interest = oi_now
                 bo_nho_ram.funding_rate = funding_now
                 bo_nho_ram.thoi_gian_vi_mo_cuoi = now
+                bo_nho_ram.vi_mo_last_error = None
+                bo_nho_ram.vi_mo_success_count = int(
+                    getattr(bo_nho_ram, "vi_mo_success_count", 0) or 0
+                ) + 1
 
-                result = bias_council.update_state(bo_nho_ram, now=now)
-                logging.debug(
-                    "[BIAS] %s conf=%.3f quorum=%s mode=%s",
-                    result["bias"],
-                    result["confidence"],
-                    result["quorum"],
-                    result["mode"],
-                )
-
+                # IMPORTANT: no bias_council/update_state call here.
+                # Bias has one canonical writer in the Tier-S runtime.
                 await asyncio.sleep(chu_ky_giay)
 
             except aiohttp.ClientError as exc:
+                bo_nho_ram.vi_mo_last_error = f"{type(exc).__name__}: {exc}"
                 logging.warning(
-                    "[VI MO] Loi mang khi goi REST API: %s. Thu lai sau 5s...", exc
+                    "[VI MO] Loi mang khi goi REST API: %s. Thu lai sau 5s...",
+                    exc,
                 )
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                bo_nho_ram.vi_mo_last_error = f"{type(exc).__name__}: {exc}"
                 logging.error("[VI MO] Loi ngoai le: %s. Thu lai sau 10s...", exc)
                 await asyncio.sleep(10)
