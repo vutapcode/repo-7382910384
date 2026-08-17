@@ -51,8 +51,27 @@ def _apply_ticker(data, state) -> bool:
     return True
 
 
+def _trim(buffer, cutoff_ms):
+    while buffer and buffer[0][0] < cutoff_ms:
+        buffer.popleft()
+
+
+def _publish_flow(state, buf_3s, buf_1m, buf_5m, now_ms):
+    _trim(buf_3s, now_ms - 3_000.0)
+    _trim(buf_1m, now_ms - 60_000.0)
+    _trim(buf_5m, now_ms - 300_000.0)
+
+    state.coinbase_cvd_3s = sum(delta for _, delta in buf_3s)
+    state.coinbase_volume_3s = sum(abs(delta) for _, delta in buf_3s)
+    state.coinbase_flow_3s_ts = now_ms / 1000.0
+    state.coinbase_cvd_1m = sum(delta for _, delta in buf_1m)
+    state.coinbase_cvd_5m = sum(delta for _, delta in buf_5m)
+    state.thoi_gian_coinbase_cuoi = now_ms / 1000.0
+
+
 async def hung_coinbase_spot(product_id: str, bo_nho_ram):
-    """One Coinbase socket: lightweight ticker plus rolling CVD 1m/5m."""
+    """One Coinbase socket: lightweight ticker plus rolling CVD 3s/1m/5m."""
+    buf_3s = collections.deque()
     buf_1m = collections.deque()
     buf_5m = collections.deque()
 
@@ -81,19 +100,11 @@ async def hung_coinbase_spot(product_id: str, bo_nho_ram):
                             continue
 
                         now_ms = time.time() * 1000.0
-                        buf_1m.append((now_ms, delta))
-                        buf_5m.append((now_ms, delta))
-
-                        cutoff_1m = now_ms - 60_000.0
-                        cutoff_5m = now_ms - 300_000.0
-                        while buf_1m and buf_1m[0][0] < cutoff_1m:
-                            buf_1m.popleft()
-                        while buf_5m and buf_5m[0][0] < cutoff_5m:
-                            buf_5m.popleft()
-
-                        bo_nho_ram.coinbase_cvd_1m = sum(d for _, d in buf_1m)
-                        bo_nho_ram.coinbase_cvd_5m = sum(d for _, d in buf_5m)
-                        bo_nho_ram.thoi_gian_coinbase_cuoi = time.time()
+                        row = (now_ms, delta)
+                        buf_3s.append(row)
+                        buf_1m.append(row)
+                        buf_5m.append(row)
+                        _publish_flow(bo_nho_ram, buf_3s, buf_1m, buf_5m, now_ms)
                     except (KeyError, TypeError, ValueError):
                         continue
 
