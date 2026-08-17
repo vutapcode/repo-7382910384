@@ -1,0 +1,143 @@
+import asyncio
+import logging
+import time
+
+ENTRY_FAST_LAG=0.20
+ENTRY_SLOW_LAG=0.45
+GUARD_LAGS={0.25:0.20,1.0:0.40,3.0:0.80,10.0:2.0}
+MACRO_AGE=15.0
+
+def fresh(ts,now,age):
+    try: ts=float(ts or 0)
+    except Exception: return False
+    return ts>0 and 0<=now-ts<=age
+
+def latest_fut_trade(base,now):
+    rows=getattr(base.app.state,"danh_sach_khop_lenh_futures",None) or ()
+    try:
+        r=rows[-1]; ts=float(r.get("thoi_gian_ms",0) or 0)/1000; px=float(r.get("gia",0) or 0)
+    except Exception: return 0.0,0.0
+    return (px,ts) if px>0 and fresh(ts,now,5.0) else (0.0,ts)
+
+def exec_price(base,now=None):
+    now=time.time() if now is None else float(now); s=base.app.state
+    ts=float(getattr(s,"execution_price_time",0) or 0)
+    bid=float(getattr(s,"execution_best_bid",0) or 0); ask=float(getattr(s,"execution_best_ask",0) or 0)
+    if fresh(ts,now,5.0) and bid>0 and ask>bid: return (bid+ask)/2
+    return latest_fut_trade(base,now)[0]
+
+def health(base,state,now=None):
+    now=time.time() if now is None else float(now)
+    _,fts=latest_fut_trade(base,now)
+    bts=float(getattr(state,"execution_price_time",0) or 0)
+    bid=float(getattr(state,"execution_best_bid",0) or 0); ask=float(getattr(state,"execution_best_ask",0) or 0)
+    fp=(fresh(bts,now,5.0) and bid>0 and ask>bid) or fresh(fts,now,5.0)
+    sp=fresh(getattr(state,"thoi_gian_tick_cuoi",0),now,3.0)
+    cp=fresh(getattr(state,"thoi_gian_coinbase_ticker_cuoi",0) or getattr(state,"thoi_gian_coinbase_cuoi",0),now,5.0)
+    sf=fresh(getattr(state,"thoi_gian_dong_tien_cuoi",0),now,5.0)
+    ff=fresh(fts,now,5.0)
+    cf=fresh(getattr(state,"coinbase_flow_3s_ts",0),now,5.0)
+    mf=fresh(getattr(state,"thoi_gian_vi_mo_cuoi",0),now,MACRO_AGE)
+    ready=sp and cp and fp and sf and ff
+    out={"ts":now,"entry_ready":bool(ready),"full_tier_s_ready":bool(ready and mf),
+         "spot_price":sp,"coinbase_price":cp,"futures_price":fp,"spot_flow":sf,
+         "coinbase_flow":cf,"futures_flow":ff,"macro_oi_funding":mf}
+    state.mainnet_shadow_health=out; state.mainnet_shadow_ready=bool(ready)
+    return out
+
+def safe_ref(hist,now,sec,lag):
+    target=float(now)-float(sec); out=None
+    for r in hist:
+        try: ts=float(r.get("ts",0) or 0)
+        except Exception: continue
+        if ts<=target: out=r
+        else: break
+    if out is None: return None
+    ts=float(out.get("ts",0) or 0)
+    return out if 0<=target-ts<=lag else None
+
+def install(base,risk,edge):
+    orig_eval=base.entry_council.evaluate
+    orig_guard=base.guardian_s.update_state
+
+    def entry_ref(hist,now,age):
+        return safe_ref(hist,now,age,ENTRY_FAST_LAG if float(age)<=0.40 else ENTRY_SLOW_LAG)
+    def guard_ref(hist,now,sec):
+        sec=float(sec); k=min(GUARD_LAGS,key=lambda x:abs(x-sec))
+        return safe_ref(hist,now,sec,GUARD_LAGS[k])
+    base.entry_council._ref=entry_ref; base.guardian_s._ref=guard_ref
+
+    def reset_entry(s,reason,now):
+        for n in ("entry_shadow_price_history","entry_causal_flow_history"):
+            h=getattr(s,n,None)
+            if h is not None:
+                try:h.clear()
+                except Exception:setattr(s,n,None)
+        s._entry_causal_context_side="ABSTAIN"; s.entry_causal_reset_reason=reason; s.entry_causal_reset_at=now
+
+    def eval_guard(s,now=None,side=None):
+        now=time.time() if now is None else float(now)
+        if not health(base,s,now)["entry_ready"]:
+            reset_entry(s,"SHADOW_FEED_NOT_READY",now)
+            return {"version":getattr(base.entry_council,"VERSION","ENTRY"),"decision":"WAIT","entry_mode":"NONE",
+                    "phase":"ARMED","confidence":0.0,"reason":"SHADOW_FEED_NOT_READY",
+                    "side":str(side or getattr(s,"bias_state","ABSTAIN")).upper(),"s_votes":{},"ts":now}
+        return orig_eval(s,now=now,side=side)
+    base.entry_council.evaluate=eval_guard
+
+    def guard_macro(s,pos,now):
+        if fresh(getattr(s,"thoi_gian_vi_mo_cuoi",0),now,MACRO_AGE):
+            return orig_guard(s,pos,now=now)
+        h=getattr(s,"guardian_s_oi",None)
+        if h is not None:
+            try:h.clear()
+            except Exception:pass
+        oi=getattr(s,"open_interest",0)
+        try:
+            s.open_interest=0.0; r=orig_guard(s,pos,now=now)
+        finally:s.open_interest=oi
+        v=r.get("votes") or {}
+        v["S3_price_x_oi"]={"status":"NEUTRAL","confidence":0.0,"reason":"STALE_OI","metrics":{}}
+        r["votes"]=v; r["macro_fresh"]=False
+        return r
+
+    def reset_guard(s,pos,reason,now):
+        for n in ("guardian_s_prices","guardian_s_oi"):
+            h=getattr(s,n,None)
+            if h is not None:
+                try:h.clear()
+                except Exception:pass
+        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
+        s.guardian_s_reset_reason=reason; s.guardian_s_reset_at=now
+
+    async def guardian_loop():
+        stale=False
+        while True:
+            try:
+                s=base.app.state; pos=getattr(s,"mainnet_shadow_position",None)
+                if pos is None or not bool(getattr(pos,"active",False)):
+                    stale=False; await asyncio.sleep(.10); continue
+                now=time.time(); px=exec_price(base,now)
+                if px<=0:
+                    s.guardian_s_decision="HOLD_STALE_FUTURES_EXECUTION_PRICE"; await asyncio.sleep(base.GUARD_POLL); continue
+                if not base._spot_fresh(now):
+                    if not stale: reset_guard(s,pos,"SPOT_STALE",now); stale=True
+                    g={"decision":"HOLD","reason":"STALE_SPOT_CAUSAL_GUARDIAN_DISABLED","votes":{},
+                       "supportive_count":0,"adverse_count":0,"ts":now}
+                else:
+                    if stale: reset_guard(s,pos,"SPOT_RECONNECTED",now); stale=False
+                    g=guard_macro(s,pos,now)
+                rr=risk.assess(pos,px,g,market_state=s,now=now)
+                s.mainnet_shadow_risk=rr; s.mainnet_shadow_tier_mode=rr.get("tier_mode")
+                s.mainnet_shadow_tier_supportive=rr.get("supportive_count",0); s.mainnet_shadow_tier_adverse=rr.get("adverse_count",0)
+                if rr.get("decision")=="EXIT":
+                    base._close_shadow(pos,{"decision":"EXIT","reason":rr["reason"],"risk":rr,"guardian":g},now)
+                elif g.get("decision")=="EXIT" and risk.guardian_ok(g): base._close_shadow(pos,g,now)
+                elif g.get("decision")=="EXIT": s.guardian_s_decision="WATCH_CAUSAL_GATE"
+            except asyncio.CancelledError: raise
+            except Exception:
+                logging.exception("[MAINNET-SHADOW] hardened guardian failure"); await asyncio.sleep(.25)
+            await asyncio.sleep(base.GUARD_POLL)
+    base._latest_futures_price=lambda now=None: exec_price(base,now)
+    base._guardian_loop=guardian_loop
+    return lambda: health(base,base.app.state,time.time())
