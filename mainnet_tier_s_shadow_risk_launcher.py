@@ -48,12 +48,27 @@ def _open_shadow(side, result, now):
         )
     return pos
 
+
+async def _bias_loop():
+    """Run the direction-only Bias Council through update_state so hysteresis is live."""
+    while True:
+        try:
+            s = base.app.state
+            result = base.bias_council.update_state(s, now=time.time())
+            s.bias_council = result
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("[MAINNET-SHADOW] causal Tier-S bias loop failure")
+            await asyncio.sleep(0.50)
+        await asyncio.sleep(base.BIAS_SCOUT)
+
 async def _guardian_loop():
     while True:
         try:
             s = base.app.state
             pos = getattr(s, "mainnet_shadow_position", None)
-            if pos is None or not bool(getattr(pos, "active", False)):
+            if pos is None or not bool(getattr(pos, "active", False):
                 await asyncio.sleep(0.10)
                 continue
             now = time.time()
@@ -92,6 +107,7 @@ async def _guardian_loop():
         await asyncio.sleep(base.GUARD_POLL)
 
 base._entry_quorum_ok = _entry_quorum_ok
+base._bias_loop = _bias_loop
 base._open_shadow = _open_shadow
 base._guardian_loop = _guardian_loop
 
