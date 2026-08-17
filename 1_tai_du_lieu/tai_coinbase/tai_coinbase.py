@@ -2,9 +2,8 @@
 [AI_CONTEXT]
 - MODULE: 1_tai_du_lieu / tai_coinbase
 - ROLE: Coinbase BTC-USD price + rolling aggressive-flow CVD.
-- CONTRACT: DATA-ONLY collector. It must never evaluate entry/bias strategy state.
+- CONTRACT: DATA-ONLY collector. Never evaluate entry/bias strategy state.
 """
-
 import asyncio
 import collections
 import logging
@@ -20,15 +19,13 @@ SUBSCRIBE_MSG = orjson.dumps({
     "channels": ["matches", "ticker"],
 })
 
-
 def _coinbase_match_delta(data) -> float:
-    """Return signed taker delta. Coinbase `side` is the MAKER order side."""
+    """Signed taker delta. Coinbase `side` is the MAKER order side."""
     size = float(data.get("size", 0.0) or 0.0)
     side = str(data.get("side", "") or "").lower()
     if size <= 0.0 or side not in ("buy", "sell"):
         return 0.0
     return size if side == "sell" else -size
-
 
 def _apply_ticker(data, state) -> bool:
     try:
@@ -47,30 +44,46 @@ def _apply_ticker(data, state) -> bool:
     state.thoi_gian_coinbase_ticker_cuoi = time.time()
     return True
 
+class RollingFlow:
+    """O(1) rolling signed CVD + absolute volume for one time window."""
+    __slots__ = ("window_ms", "rows", "signed", "volume")
+    def __init__(self, window_ms):
+        self.window_ms = float(window_ms)
+        self.rows = collections.deque()
+        self.signed = 0.0
+        self.volume = 0.0
+    def push(self, ts_ms, delta):
+        d = float(delta)
+        self.rows.append((float(ts_ms), d))
+        self.signed += d
+        self.volume += abs(d)
+        self.trim(ts_ms)
+    def trim(self, now_ms):
+        cutoff = float(now_ms) - self.window_ms
+        rows = self.rows
+        while rows and rows[0][0] < cutoff:
+            _, d = rows.popleft()
+            self.signed -= d
+            self.volume -= abs(d)
+        if abs(self.signed) < 1e-12:
+            self.signed = 0.0
+        if self.volume < 1e-12:
+            self.volume = 0.0
 
-def _trim(buffer, cutoff_ms):
-    while buffer and buffer[0][0] < cutoff_ms:
-        buffer.popleft()
-
-
-def _publish_flow(state, buf_3s, buf_1m, buf_5m, now_ms):
-    _trim(buf_3s, now_ms - 3_000.0)
-    _trim(buf_1m, now_ms - 60_000.0)
-    _trim(buf_5m, now_ms - 300_000.0)
-
-    state.coinbase_cvd_3s = sum(delta for _, delta in buf_3s)
-    state.coinbase_volume_3s = sum(abs(delta) for _, delta in buf_3s)
+def _publish_flow(state, f3, f1m, f5m, now_ms):
+    f3.trim(now_ms); f1m.trim(now_ms); f5m.trim(now_ms)
+    state.coinbase_cvd_3s = f3.signed
+    state.coinbase_volume_3s = f3.volume
     state.coinbase_flow_3s_ts = now_ms / 1000.0
-    state.coinbase_cvd_1m = sum(delta for _, delta in buf_1m)
-    state.coinbase_cvd_5m = sum(delta for _, delta in buf_5m)
+    state.coinbase_cvd_1m = f1m.signed
+    state.coinbase_cvd_5m = f5m.signed
     state.thoi_gian_coinbase_cuoi = now_ms / 1000.0
-
 
 async def hung_coinbase_spot(product_id: str, bo_nho_ram):
     """One Coinbase socket: ticker + rolling CVD 3s/1m/5m, data only."""
-    buf_3s = collections.deque()
-    buf_1m = collections.deque()
-    buf_5m = collections.deque()
+    f3 = RollingFlow(3_000.0)
+    f1m = RollingFlow(60_000.0)
+    f5m = RollingFlow(300_000.0)
 
     while True:
         try:
@@ -88,26 +101,19 @@ async def hung_coinbase_spot(product_id: str, bo_nho_ram):
                         if msg_type == "ticker":
                             _apply_ticker(data, bo_nho_ram)
                             continue
-
                         if msg_type not in ("match", "last_match"):
                             continue
 
                         delta = _coinbase_match_delta(data)
                         if delta == 0.0:
                             continue
-
                         now_ms = time.time() * 1000.0
-                        row = (now_ms, delta)
-                        buf_3s.append(row)
-                        buf_1m.append(row)
-                        buf_5m.append(row)
-                        _publish_flow(bo_nho_ram, buf_3s, buf_1m, buf_5m, now_ms)
-
-                        # IMPORTANT: strategy evaluation is owned by the canonical
-                        # Tier-S entry loop. The collector only publishes data.
+                        f3.push(now_ms, delta)
+                        f1m.push(now_ms, delta)
+                        f5m.push(now_ms, delta)
+                        _publish_flow(bo_nho_ram, f3, f1m, f5m, now_ms)
                     except (KeyError, TypeError, ValueError):
                         continue
-
         except asyncio.CancelledError:
             raise
         except websockets.exceptions.ConnectionClosed as exc:
