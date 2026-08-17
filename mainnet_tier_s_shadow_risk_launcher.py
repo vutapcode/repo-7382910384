@@ -21,6 +21,7 @@ runtime_state = base.app.load_module(
     "shadow_runtime_state_runtime",
     base.app.CURRENT_DIR / "loi_he_thong" / "shadow_runtime_state.py",
 )
+
 futures_flow = base.app.load_module(
     "futures_flow_hardening_runtime",
     base.app.CURRENT_DIR / "loi_he_thong" / "futures_flow_hardening.py",
@@ -130,7 +131,7 @@ async def _account_init():
         hard_sl = float(getattr(pos, "hard_sl", 0.0) or 0.0)
         core_ready = entry > 0.0 and r_value > 0.0 and hard_sl > 0.0 and hasattr(pos, "best")
         if not core_ready:
-            # V1 snapshots used wrong risk-field names. Re-arm from entry instead of
+            # V1 snapshots used wrong risk-field names. Re-arm from entry rather than
             # pretending the ratchet survived; mark the recovery degraded for audit.
             risk.arm(pos, entry)
             state.mainnet_shadow_recovery_degraded = True
@@ -202,6 +203,24 @@ _health_probe = health.install(base, risk, edge)
 _health_eval = base.entry_council.evaluate
 def _entry_eval(state, now=None, side=None):
     now = time.time() if now is None else float(now)
+    if bool(getattr(state, "futures_flow_ring_saturated", False)):
+        previous = str(getattr(state, "_entry_causal_context_side", "ABSTAIN") or "ABSTAIN").upper()
+        if previous in ("LONG", "SHORT"):
+            _reset_entry_context(state, "ABSTAIN", "FUTURES_FLOW_RING_SATURATED", now)
+        state.mainnet_shadow_ready = False
+        state.system_ready = False
+        state.last_readiness_reason = "SHADOW_FEED_DEGRADED:futures_flow_ring_saturated"
+        return {
+            "version": getattr(base.entry_council, "VERSION", "ENTRY"),
+            "decision": "WAIT",
+            "entry_mode": "NONE",
+            "phase": "ARMED",
+            "confidence": 0.0,
+            "reason": "FUTURES_FLOW_RING_SATURATED",
+            "side": str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper(),
+            "s_votes": {},
+            "ts": now,
+        }
     current = str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
     conf = float(getattr(state, "bias_confidence", 0.0) or 0.0)
     bias_ts = float(getattr(state, "bias_updated_at", 0.0) or 0.0)
