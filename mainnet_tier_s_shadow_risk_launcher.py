@@ -21,6 +21,10 @@ runtime_state = base.app.load_module(
     "shadow_runtime_state_runtime",
     base.app.CURRENT_DIR / "loi_he_thong" / "shadow_runtime_state.py",
 )
+futures_flow = base.app.load_module(
+    "futures_flow_hardening_runtime",
+    base.app.CURRENT_DIR / "loi_he_thong" / "futures_flow_hardening.py",
+)
 
 _orig_open = base._open_shadow
 _orig_account_init = base._shadow_account_init
@@ -117,7 +121,34 @@ async def _account_init():
     # initializer actually runs before persistence recovery.
     await _orig_account_init()
     restored = runtime_state.restore(base)
-    base.app.state.mainnet_shadow_restore_ok = bool(restored)
+    state = base.app.state
+    state.mainnet_shadow_restore_ok = bool(restored)
+    pos = getattr(state, "mainnet_shadow_position", None)
+    if restored and pos is not None and bool(getattr(pos, "active", False)):
+        entry = float(getattr(pos, "entry_price", 0.0) or 0.0)
+        r_value = float(getattr(pos, "r", 0.0) or 0.0)
+        hard_sl = float(getattr(pos, "hard_sl", 0.0) or 0.0)
+        core_ready = entry > 0.0 and r_value > 0.0 and hard_sl > 0.0 and hasattr(pos, "best")
+        if not core_ready:
+            # V1 snapshots used wrong risk-field names. Re-arm from entry instead of
+            # pretending the ratchet survived; mark the recovery degraded for audit.
+            risk.arm(pos, entry)
+            state.mainnet_shadow_recovery_degraded = True
+            state.mainnet_shadow_recovery_reason = "RISK_STATE_INCOMPLETE_REARMED"
+        else:
+            required_fee_r = (entry * 2.0 * float(risk.FEE_BPS) / 10000.0) / r_value
+            pos.fee_r = max(float(getattr(pos, "fee_r", 0.0) or 0.0), required_fee_r)
+            if not hasattr(pos, "stage"):
+                pos.stage = "INITIAL"
+            if not hasattr(pos, "tier_mode"):
+                pos.tier_mode = "PROTECT"
+            if not hasattr(pos, "whale_seen"):
+                pos.whale_seen = False
+            if not hasattr(pos, "risk_px_samples"):
+                pos.risk_px_samples = []
+            if not hasattr(pos, "exhaustion_meta"):
+                pos.exhaustion_meta = {}
+        runtime_state.save(base)
 
 def _assess_and_persist(pos, px, guardian, market_state=None, now=None):
     global _last_persist
@@ -160,6 +191,9 @@ def _close_and_persist(pos, result, now):
     return out
 base._close_shadow = _close_and_persist
 
+# Install local-time / time-bounded Futures flow before app.main() creates collectors.
+futures_flow.install(base)
+
 # Reconnect-safe Entry refs, shadow readiness, macro-fresh Guardian, and
 # risk-first Guardian loop (hard SL/profit floor survive stale Spot).
 _health_probe = health.install(base, risk, edge)
@@ -185,5 +219,5 @@ def _entry_eval(state, now=None, side=None):
 
 base.entry_council.evaluate = _entry_eval
 
-if __name_ == "__main__":
+if __name__ == "__main__":
     base.main()
