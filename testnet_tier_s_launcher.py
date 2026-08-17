@@ -62,8 +62,9 @@ def _flow_volume_quorum(state, now):
     floor=max(0.02,min(0.10,0.02*float(getattr(state,"vol_pct90",0.0) or 0.0)))
     vols=[]
     # Spot 3s rolling/tumbling accumulator
+    spot_ts=float(getattr(state,"thoi_gian_dong_tien_cuoi",0.0) or 0.0)
     spot=float(getattr(state,"current_cvd_buy_3s",0.0) or 0.0)+float(getattr(state,"current_cvd_sell_3s",0.0) or 0.0)
-    if spot>=floor: vols.append(("spot",spot))
+    if spot_ts>0 and now-spot_ts<=5.0 and spot>=floor: vols.append(("spot",spot))
     # Coinbase true 3s window
     cb_ts=float(getattr(state,"coinbase_flow_3s_ts",0.0) or 0.0)
     cb=float(getattr(state,"coinbase_volume_3s",0.0) or 0.0)
@@ -151,6 +152,9 @@ def _apply_runtime():
     old=getattr(s,"bias_price_history",None)
     if old is None or getattr(old,"maxlen",0) is None or int(old.maxlen or 0)<128:
         s.bias_price_history=deque(list(old or ()),maxlen=256)
+    fut_ring=getattr(s,"danh_sach_khop_lenh_futures",None)
+    if fut_ring is None or getattr(fut_ring,"maxlen",0) is None or int(fut_ring.maxlen or 0)<5000:
+        s.danh_sach_khop_lenh_futures=deque(list(fut_ring or ()),maxlen=5000)
 
     logging.info("[TIER-S] runtime V2 active: legacy authority off; Spot depth/M1 retained only for readiness/ATR")
 
