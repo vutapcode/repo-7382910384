@@ -123,6 +123,15 @@ async def _account_init():
     await _orig_account_init()
     restored = runtime_state.restore(base)
     state = base.app.state
+    for name, default in (
+        ("mainnet_shadow_realized_pnl", 0.0),
+        ("mainnet_shadow_trades", 0),
+        ("mainnet_shadow_wins", 0),
+        ("mainnet_shadow_losses", 0),
+        ("mainnet_shadow_breakevens", 0),
+    ):
+        if not hasattr(state, name):
+            setattr(state, name, default)
     state.mainnet_shadow_restore_ok = bool(restored)
     pos = getattr(state, "mainnet_shadow_position", None)
     if restored and pos is not None and bool(getattr(pos, "active", False)):
@@ -187,15 +196,44 @@ risk.FEE_BPS = base.SHADOW_FEE_BPS_PER_SIDE
 runtime_state.install_cost_accounting(base, model_cost_bps=18.0)
 _cost_close = base._close_shadow
 def _close_and_persist(pos, result, now):
+    state = base.app.state
+    was_active = bool(getattr(pos, "active", False))
+    before = float(getattr(state, "mainnet_shadow_balance_usdt", 0.0) or 0.0)
     out = _cost_close(pos, result, now)
+    closed = was_active and not bool(getattr(pos, "active", False))
+    if closed:
+        after = float(getattr(state, "mainnet_shadow_balance_usdt", before) or before)
+        net = after - before
+        state.mainnet_shadow_realized_pnl = float(
+            getattr(state, "mainnet_shadow_realized_pnl", 0.0) or 0.0
+        ) + net
+        state.mainnet_shadow_trades = int(getattr(state, "mainnet_shadow_trades", 0) or 0) + 1
+        if net > 1e-12:
+            state.mainnet_shadow_wins = int(getattr(state, "mainnet_shadow_wins", 0) or 0) + 1
+        elif net < -1e-12:
+            state.mainnet_shadow_losses = int(getattr(state, "mainnet_shadow_losses", 0) or 0) + 1
+        else:
+            state.mainnet_shadow_breakevens = int(
+                getattr(state, "mainnet_shadow_breakevens", 0) or 0
+            ) + 1
+        state.mainnet_shadow_last_net_pnl = net
+        state.mainnet_shadow_last_closed_at = float(now)
     runtime_state.save(base)
     return out
 base._close_shadow = _close_and_persist
 
-# Install local-time / time-bounded Futures flow before app.main() creates collectors.
+# If the data orchestrator ever returns normally, do not leave the infinite shadow
+# loops alive with permanently stale feeds. Let the top-level gather fail so systemd restarts.
+_orig_app_main = base.app.main
+async def _app_main_failfast(*args, **kwargs):
+    await _orig_app_main(*args, **kwargs)
+    raise RuntimeError("SHADOW_DATA_ORCHESTRATOR_EXITED_UNEXPECTEDLY")
+base.app.main = _app_main_failfast
+
+# Install local-time / time-bounded Spot/Futures flow before app.main() creates collectors.
 futures_flow.install(base)
 
-# Reconnect-safe Entry refs, shadow readiness, macro-fresh Guardian, and
+# Reconnect-safe Entry refs, shadow0readiness, macro-fresh Guardian, and
 # risk-first Guardian loop (hard SL/profit floor survive stale Spot).
 _health_probe = health.install(base, risk, edge)
 
