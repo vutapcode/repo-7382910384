@@ -15,6 +15,18 @@ edge = base.app.load_module(
 )
 
 _orig_open = base._open_shadow
+_orig_latest_futures_price = base._latest_futures_price
+
+def _shadow_exec_price(now=None):
+    """Prefer fresh Mainnet Futures BBO; fall back to public Futures trade, then Spot."""
+    now = time.time() if now is None else float(now)
+    state = base.app.state
+    ts = float(getattr(state, "execution_price_time", 0.0) or 0.0)
+    bid = float(getattr(state, "execution_best_bid", 0.0) or 0.0)
+    ask = float(getattr(state, "execution_best_ask", 0.0) or 0.0)
+    if ts > 0.0 and 0.0 <= now - ts <= 5.0 and bid > 0.0 and ask > bid:
+        return (bid + ask) / 2.0
+    return _orig_latest_futures_price(now)
 
 _orig_entry_evaluate = base.entry_council.evaluate
 
@@ -65,6 +77,51 @@ def _entry_evaluate_context_guard(state, now=None, side=None):
 
     return _orig_entry_evaluate(state, now=now, side=side)
 
+def _flow_volume_quorum_required(state, now, required=2):
+    """Same material-flow floor as base, with an explicit FAST/NORMAL venue count."""
+    required = max(1, int(required))
+    floor = max(
+        0.02,
+        min(0.10, 0.02 * float(getattr(state, "vol_pct90", 0.0) or 0.0)),
+    )
+    venues = {}
+
+    spot_ts = float(getattr(state, "thoi_gian_dong_tien_cuoi", 0.0) or 0.0)
+    spot_vol = (
+        float(getattr(state, "current_cvd_buy_3s", 0.0) or 0.0)
+        + float(getattr(state, "current_cvd_sell_3s", 0.0) or 0.0)
+    )
+    if spot_ts > 0.0 and 0.0 <= now - spot_ts <= 5.0 and spot_vol >= floor:
+        venues["spot"] = spot_vol
+
+    cb_ts = float(getattr(state, "coinbase_flow_3s_ts", 0.0) or 0.0)
+    cb_vol = float(getattr(state, "coinbase_volume_3s", 0.0) or 0.0)
+    if cb_ts > 0.0 and 0.0 <= now - cb_ts <= 5.0 and cb_vol >= floor:
+        venues["coinbase"] = cb_vol
+
+    cutoff = (now - 3.0) * 1000.0
+    fut_vol = 0.0
+    newest = 0.0
+    for row in list(getattr(state, "danh_sach_khop_lenh_futures", ()) or ()):
+        try:
+            ts_ms = float(row.get("thoi_gian_ms", 0.0) or 0.0)
+            if ts_ms < cutoff:
+                continue
+            fut_vol += float(row.get("khoi_luong", 0.0) or 0.0)
+            newest = max(newest, ts_ms / 1000.0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+    if newest > 0.0 and 0.0 <= now - newest <= 5.0 and fut_vol >= floor:
+        venues["futures"] = fut_vol
+
+    state.entry_tier_s_volume_quality = {
+        "floor_btc": floor,
+        "venues": venues,
+        "required": required,
+    }
+    return len(venues) >= required
+
+
 def _entry_quorum_ok(result, state, now):
     allowed, report = edge.authorize(result, state)
     state.entry_edge_tier = report
@@ -75,11 +132,11 @@ def _entry_quorum_ok(result, state, now):
         return False
     if report.get("entry_mode") == "FAST":
         # FAST deliberately permits one strong material flow venue, but never stale/tiny flow.
-        return base._flow_volume_quorum(state, now, required=1)
+        return _flow_volume_quorum_required(state, now, required=1)
     # NORMAL keeps the stricter two-venue material/fresh flow floor.
-    return base._flow_volume_quorum(state, now, required=2)
+    return _flow_volume_quorum_required(state, now, required=2)
 
-def _open_shadow(side, result, now):
+def _open_shadow(side, result,now):
     state = base.app.state
     report = getattr(state, "entry_edge_tier", None) or edge.classify(result, state)
     result = dict(result)
@@ -155,6 +212,7 @@ async def _guardian_loop():
             await asyncio.sleep(0.25)
         await asyncio.sleep(base.GUARD_POLL)
 
+base._latest_futures_price = _shadow_exec_price
 base.entry_council.evaluate = _entry_evaluate_context_guard
 base._entry_quorum_ok = _entry_quorum_ok
 base._bias_loop = _bias_loop
