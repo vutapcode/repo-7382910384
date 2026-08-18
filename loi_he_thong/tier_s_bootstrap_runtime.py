@@ -34,7 +34,7 @@ requested_execution = os.getenv("SMC_ENABLE_TRADING", "false").lower() in ("1", 
 state.execution_allowed = bool(requested_execution and mainnet_safety.mainnet_armed())
 state.code_version = code_version(CURRENT_DIR)
 state.strategy_config_version = strategy_config_version()
-state.strategy_profile = strategy_profile.current_profile()
+state.strategy_profile =strategy_profile.current_profile()
 state.execution_venue = "BINANCE_FUTURES_MAINNET"
 
 api = m.binance_api.BinanceAPI(
@@ -64,7 +64,7 @@ def _write_bot_heartbeat(payload):
         prefix="bot_runtime_", suffix=".tmp", dir=BOT_HEARTBEAT_PATH.parent
     )
     try:
-        with os..fdopen(descriptor, "w", encoding="utf-8") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"), default=str)
             handle.flush()
             os.fsync(handle.fileno())
