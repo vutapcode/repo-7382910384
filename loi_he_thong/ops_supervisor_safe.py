@@ -87,14 +87,6 @@ def _restart_stalled_bot_safe(pid):
 ops._restart_stalled_bot = _restart_stalled_bot_safe
 
 
-def main():
-    ops.main()
-
-
-if __name__ == "__main__":
-    main()
-
-
 def _run_forever_action_aware():
     last_bot_restart_mono = 0.0
     while True:
@@ -131,3 +123,11 @@ def _run_forever_action_aware():
 
 
 ops.run_forever = _run_forever_action_aware
+
+
+def main():
+    ops.main()
+
+
+if __name__ == "__main__":
+    main()
