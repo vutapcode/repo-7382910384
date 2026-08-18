@@ -1,4 +1,4 @@
-"""Async adapter cho Binance USD-M Futures REST/Algo API."""
+"""Async Binance USD-M Futures MAINNET REST/Algo adapter."""
 
 import asyncio
 import logging
@@ -9,11 +9,10 @@ from binance.um_futures import UMFutures
 
 
 class BinanceAPI:
-    def __init__(self, api_key, secret_key, testnet=True):
-        self.testnet = testnet
-        self.base_url = (
-            "https://testnet.binancefuture.com" if testnet else "https://fapi.binance.com"
-        )
+    BASE_URL = "https://fapi.binance.com"
+
+    def __init__(self, api_key, secret_key):
+        self.base_url = self.BASE_URL
         self.client = UMFutures(
             key=api_key,
             secret=secret_key,
@@ -24,10 +23,7 @@ class BinanceAPI:
     @staticmethod
     def _error_payload(exc):
         if isinstance(exc, ClientError):
-            return {
-                "code": exc.error_code,
-                "message": exc.error_message,
-            }, exc.status_code
+            return {"code": exc.error_code, "message": exc.error_message}, exc.status_code
         return {"code": "NETWORK", "message": str(exc)}, 599
 
     async def _call(self, func, *args, **kwargs):
@@ -36,7 +32,6 @@ class BinanceAPI:
                 return func(*args, **kwargs), 200
             except Exception as exc:
                 return self._error_payload(exc)
-
         return await asyncio.to_thread(invoke)
 
     @staticmethod
@@ -46,14 +41,10 @@ class BinanceAPI:
     async def get_balance(self):
         result, status = await self._call(self.client.balance)
         if status != 200:
-            logging.error("❌ [API] Không lấy được balance: %s", result)
+            logging.error("[API] balance failed: %s", result)
             return 0.0
         for item in result:
             if item.get("asset") == "USDT":
-                # Entry is single-position and requires no position/order in
-                # flight, so wallet balance is the frozen equity allocation
-                # base. availableBalance is margin capacity, not position
-                # notional, and must never be multiplied by leverage here.
                 return float(item.get("balance", item.get("availableBalance", 0.0)))
         return 0.0
 
@@ -115,21 +106,8 @@ class BinanceAPI:
         return await self._call(self.client.get_orders, **params)
 
     async def get_all_orders(
-        self,
-        symbol,
-        start_time=None,
-        limit=1000,
-        end_time=None,
-        max_pages=200,
+        self, symbol, start_time=None, limit=1000, end_time=None, max_pages=200
     ):
-        """Return the full requested order window without silently truncating at 1000 rows.
-
-        Binance ``allOrders`` has no page number.  The first page is anchored by
-        startTime/endTime; following pages advance by orderId, which is monotonic
-        for a symbol.  A fixed endTime prevents new orders from moving the window
-        while it is being read.  Pagination anomalies fail closed with status 599
-        rather than returning a partial list.
-        """
         page_size = min(1000, max(1, int(limit)))
         fixed_end = int(end_time) if end_time is not None else (
             int(time.time() * 1000) if start_time is not None else None
@@ -140,16 +118,10 @@ class BinanceAPI:
         if fixed_end is not None:
             base["endTime"] = fixed_end
 
-        rows = []
-        seen = set()
-        next_order_id = None
-
+        rows, seen, next_order_id = [], set(), None
         for _ in range(max(1, int(max_pages))):
             params = dict(base)
             if next_order_id is not None:
-                # orderId already anchors us after the first page.  Omitting
-                # startTime avoids connector/API ambiguity when both cursors are
-                # supplied; endTime keeps the daily window frozen.
                 params.pop("startTime", None)
                 params["orderId"] = next_order_id
 
@@ -177,7 +149,6 @@ class BinanceAPI:
                 return rows, 200
             if max_order_id is None:
                 return self._page_error("allOrders full page has no usable cursor")
-
             candidate = max_order_id + 1
             if next_order_id is not None and candidate <= next_order_id:
                 return self._page_error("allOrders cursor did not advance")
@@ -186,14 +157,8 @@ class BinanceAPI:
         return self._page_error("allOrders exceeded pagination safety limit")
 
     async def get_income_history(
-        self,
-        symbol=None,
-        start_time=None,
-        limit=1000,
-        end_time=None,
-        max_pages=200,
+        self, symbol=None, start_time=None, limit=1000, end_time=None, max_pages=200
     ):
-        """Return the full income window using Binance's explicit ``page`` cursor."""
         page_size = min(1000, max(1, int(limit)))
         fixed_end = int(end_time) if end_time is not None else (
             int(time.time() * 1000) if start_time is not None else None
@@ -206,9 +171,7 @@ class BinanceAPI:
         if fixed_end is not None:
             base["endTime"] = fixed_end
 
-        rows = []
-        seen = set()
-
+        rows, seen = [], set()
         for page in range(1, max(1, int(max_pages)) + 1):
             params = dict(base)
             params["page"] = page
@@ -221,9 +184,6 @@ class BinanceAPI:
             for row in batch:
                 if not isinstance(row, dict):
                     continue
-                # tranId is Binance's stable identity for income rows.  Fall back
-                # to the immutable accounting tuple for old/test payloads that do
-                # not expose tranId so page overlap cannot double-count PnL.
                 tran_id = row.get("tranId")
                 key = (
                     ("tranId", str(tran_id))
@@ -254,13 +214,6 @@ class BinanceAPI:
         params.update(kwargs)
         return await self._call(self.client.new_order, **params)
 
-    async def new_order_test(self, symbol, side, type, quantity=None, **kwargs):
-        params = {"symbol": symbol, "side": side, "type": type}
-        if quantity is not None:
-            params["quantity"] = quantity
-        params.update(kwargs)
-        return await self._call(self.client.new_order_test, **params)
-
     async def cancel_all_open_orders(self, symbol):
         return await self._call(self.client.cancel_open_orders, symbol=symbol)
 
@@ -283,7 +236,10 @@ class BinanceAPI:
     async def new_algo_order(self, **params):
         payload = {"algoType": "CONDITIONAL", **params}
         return await self._call(
-            self.client.sign_request, "POST", "/fapi/v1/algoOrder", payload
+            self.client.sign_request,
+            "POST",
+            "/fapi/v1/algoOrder",
+            payload,
         )
 
     async def query_algo_order(self, algo_id):
