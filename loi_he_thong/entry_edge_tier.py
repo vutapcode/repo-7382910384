@@ -1,7 +1,7 @@
 """Tier-S entry edge classifier. RAM-only causal quality gate."""
 from loi_he_thong import entry_microstructure as micro
 
-VERSION = "ENTRY_EDGE_TIER_S_V4_BOOK"
+VERSION = "ENTRY_EDGE_TIER_S_V5_LEAN"
 FEE_ROUNDTRIP_BPS = 10.0
 SLIPPAGE_BUFFER_BPS = 4.0
 SAFETY_BUFFER_BPS = 4.0
@@ -68,7 +68,6 @@ def classify(result, state):
     strong_opp = len(fm.get("strong_opponents") or ())
     impact = micro.price_impact(result)
     basis = micro.spot_perp_basis(result)
-    book = micro.book_resiliency(state, result)
 
     cross = _bias_aligned(state, "S1_cross_price", side)
     price_x_oi = _bias_aligned(state, "S2_price_x_oi", side)
@@ -82,12 +81,6 @@ def classify(result, state):
     elif price_x_oi and (normal_ok or fast_ok):
         edge_class = "HIGH_EDGE"
     else:
-        edge_class = "NORMAL_EDGE"
-
-    # Book is spoofable: adverse refill may reduce confidence, never veto by itself.
-    if book["adverse_refill"] and edge_class == "RUNNER_EDGE":
-        edge_class = "HIGH_EDGE"
-    elif book["adverse_refill"] and edge_class == "HIGH_EDGE":
         edge_class = "NORMAL_EDGE"
 
     expected_bps = EDGE_BPS[edge_class]
@@ -114,7 +107,6 @@ def classify(result, state):
         "multi_flow_aligned": multi_flow,
         "price_impact": impact,
         "spot_perp_basis": basis,
-        "book_resiliency": book,
         "policy": "OI_UPGRADES_EXPECTANCY_NEVER_TIMING_VETO",
     }
 
