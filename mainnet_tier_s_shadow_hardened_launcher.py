@@ -21,5 +21,11 @@ hardening = runtime.base.app.load_module(
 )
 hardening.install(runtime)
 
+persistence_guard = runtime.base.app.load_module(
+    "persistence_decision_guard_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "persistence_decision_guard.py",
+)
+persistence_guard.install(runtime)
+
 if __name__ == "__main__":
     runtime.base.main()
