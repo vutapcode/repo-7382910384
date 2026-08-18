@@ -51,5 +51,11 @@ persistence_heartbeat = runtime.base.app.load_module(
 )
 persistence_heartbeat.install(runtime)
 
+supervisor_guard = runtime.base.app.load_module(
+    "supervisor_return_guard_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "supervisor_return_guard.py",
+)
+supervisor_guard.install(runtime.base.app)
+
 if __name__ == "__main__":
     runtime.base.main()
