@@ -27,5 +27,11 @@ persistence_guard = runtime.base.app.load_module(
 )
 persistence_guard.install(runtime)
 
+close_guard = runtime.base.app.load_module(
+    "close_durability_guard_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "close_durability_guard.py",
+)
+close_guard.install(runtime)
+
 if __name__ == "__main__":
     runtime.base.main()
