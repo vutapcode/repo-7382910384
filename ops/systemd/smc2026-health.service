@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/home/ubuntu/SMC2026
-ExecStart=/usr/bin/python3 -m loi_he_thong.ops_supervisor_safe
+ExecStart=/usr/bin/python3 -m loi_he_thong.ops_supervisor_monotonic
 Restart=always
 RestartSec=3s
 Environment=PYTHONUNBUFFERED=1
