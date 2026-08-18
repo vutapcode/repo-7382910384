@@ -60,4 +60,5 @@ class RuntimeLock:
 
 
 def acquire_runtime_lock(name, runtime_dir=None):
-    return RuntimeLock(name, runtime_dir=runtime_dir).acquire()
+    canonical = "bot" if str(name) in {"bot", "bot_mainnet_shadow"} else str(name)
+    return RuntimeLock(canonical, runtime_dir=runtime_dir).acquire()
