@@ -1,8 +1,9 @@
 """Lean production task plan for Mainnet Tier-S shadow."""
-import asyncio import logging
+import asyncio
+import logging
 from loi_he_thong import tier_s_atr_only
 
-VERSION = "TIER_S_RUNTIME_PRUNE_V2"
+VERSION = "TIER_S_RUNTIME_PRUNE_V3_MAINNET_ONLY"
 
 
 async def _spot_flow_loop(app):
@@ -32,9 +33,7 @@ async def _lean_main(app):
         ("aggTrade_spot", lambda: app.tai_dong_tien.hung_dong_tien_spot("btcusdt", state)),
         ("coinbase_spot", lambda: app.tai_coinbase.hung_coinbase_spot("BTC-USD", state)),
         ("aggTrade_futures", lambda: app.tai_dong_tien.hung_dong_tien_futures_real("btcusdt", state)),
-        ("executionBookTicker", lambda: app.tai_gia_tick.hung_gia_tick_execution(
-            "btcusdt", state, testnet=app.api.testnet
-        ))
+        ("executionBookTicker", lambda: app.tai_gia_tick.hung_gia_tick_execution("btcusdt", state)),
         ("spot_cvd", lambda: _spot_flow_loop(app)),
         ("vi_mo_input", lambda: app.tai_vi_mo.tai_du_lieu_vi_mo("BTCUSDT", state)),
         ("M1_atr", lambda: tier_s_atr_only.run(app)),
@@ -46,7 +45,7 @@ async def _lean_main(app):
         for name, factory in task_specs
     ]
     state.tier_s_active_tasks = tuple(name for name, _ in task_specs)
-    logging.info("[TIER-S] lean runtime active: %s", ", ".join(state.tier_s_active_tasks))
+    logging.info("[TIER-S] lean mainnet runtime active: %s", ", ".join(state.tier_s_active_tasks))
     await asyncio.gather(*tasks)
     raise RuntimeError("TIER_S_LEAN_DATA_ORCHESTRATOR_EXITED_UNEXPECTEDLY")
 
