@@ -22,6 +22,8 @@ RESTART_COOLDOWN_SECONDS = float(os.getenv('SMC_OPS_RESTART_COOLDOWN_SECONDS', '
 CRITICAL_LOOP_GRACE_SECONDS = float(os.getenv('SMC_OPS_CRITICAL_LOOP_GRACE_SECONDS', '10'))
 BIAS_ENTRY_STALE_SECONDS = float(os.getenv('SMC_OPS_BIAS_ENTRY_STALE_SECONDS', '5'))
 GUARDIAN_STALE_SECONDS = float(os.getenv('SMC_OPS_GUARDIAN_STALE_SECONDS', '2'))
+BOT_STARTUP_GRACE_SECONDS = float(os.getenv('SMC_OPS_BOT_STARTUP_GRACE_SECONDS', '20'))
+_BOT_PID_FIRST_SEEN = {}
 
 SERVICES = {
     'bot': 'smc2026-bot.service',
@@ -125,6 +127,22 @@ def _restart_stalled_bot(pid):
             pass
 
 
+def _bot_in_startup_grace(service_state, bot_payload, now):
+    pid = int(service_state.get('pid', 0) or 0)
+    if pid <= 0:
+        return False
+    heartbeat_pid = int(bot_payload.get('pid', 0) or 0)
+    if heartbeat_pid == pid:
+        _BOT_PID_FIRST_SEEN.pop(pid, None)
+        return False
+    first_seen = _BOT_PID_FIRST_SEEN.get(pid)
+    if first_seen is None:
+        _BOT_PID_FIRST_SEEN.clear()
+        _BOT_PID_FIRST_SEEN[pid] = float(now)
+        first_seen = float(now)
+    return float(now) - float(first_seen) < BOT_STARTUP_GRACE_SECONDS
+
+
 def _critical_loop_classification(bot_payload, now):
     installed_at = float(bot_payload.get('critical_liveness_installed_at', 0.0) or 0.0)
     if installed_at <= 0.0 or now - installed_at < CRITICAL_LOOP_GRACE_SECONDS:
@@ -161,7 +179,14 @@ def build_snapshot(now=None):
 
     bot_active = services['bot']['active_state'] == 'active'
     recorder_active = services['recorder']['active_state'] == 'active'
-    bot_stalled = bool(bot_active and (bot_age is None or bot_age > STALE_SECONDS))
+    bot_starting = bool(
+        bot_active and _bot_in_startup_grace(services['bot'], bot_payload, now)
+    )
+    bot_stalled = bool(
+        bot_active
+        and not bot_starting
+        and (bot_age is None or bot_age > STALE_SECONDS)
+    )
     critical_stall = _critical_loop_classification(bot_payload, now) if bot_active else None
     recorder_stale = bool(
         not RECORDER_DISABLED
@@ -237,7 +262,6 @@ def main():
         level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s'
     )
     run_forever()
-
 
 if __name__ == '__main__':
     main()
