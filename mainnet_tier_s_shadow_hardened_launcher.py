@@ -63,6 +63,12 @@ futures_clock_guard = runtime.base.app.load_module(
 )
 futures_clock_guard.install(runtime)
 
+spot_clock_guard = runtime.base.app.load_module(
+    "spot_clock_guard_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "spot_clock_guard.py",
+)
+spot_clock_guard.install(runtime, hardening)
+
 data_gap_guard = runtime.base.app.load_module(
     "data_gap_taint_guard_runtime",
     runtime.base.app.CURRENT_DIR / "loi_he_thong" / "data_gap_taint_guard.py",
