@@ -13,7 +13,7 @@ WorkingDirectory=/home/ubuntu/SMC2026
 ExecStartPre=+/usr/bin/install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.local/state/smc2026 /home/ubuntu/.local/state/smc2026/runtime /home/ubuntu/.local/state/smc2026/mainnet_shadow /home/ubuntu/smc2026_data/health
 ExecStartPre=/usr/bin/python3 /home/ubuntu/SMC2026/ops/repo_integrity_check.py
 ExecStartPre=/usr/bin/python3 /home/ubuntu/SMC2026/ops/shadow_state_guard.py
-ExecStart=/usr/bin/python3 /home/ubuntu/SMC2026/mainnet_tier_s_shadow_hardened_launcher.py
+ExecStart=/usr/bin/python3 /home/ubuntu/SMC2026/mainnet_tier_s_lean_launcher.py
 Restart=always
 RestartSec=15s
 Environment=PYTHONUNBUFFERED=1
