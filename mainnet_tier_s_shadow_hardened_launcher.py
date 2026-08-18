@@ -35,6 +35,12 @@ persistence_guard = runtime.base.app.load_module(
 )
 persistence_guard.install(runtime)
 
+flat_persistence_gate = runtime.base.app.load_module(
+    "flat_persistence_gate_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "flat_persistence_gate.py",
+)
+flat_persistence_gate.install(runtime)
+
 open_guard = runtime.base.app.load_module(
     "open_durability_guard_runtime",
     runtime.base.app.CURRENT_DIR / "loi_he_thong" / "open_durability_guard.py",
