@@ -3,7 +3,7 @@ from collections import deque
 import time
 from loi_he_thong import flow_lead_engine
 
-VERSION = "MICRO_REGIME_V3_OI_SIGNATURE"
+VERSION = "MICRO_REGIME_V4_GENTLE_EXPANSION"
 
 def _f(x):
     try:
@@ -89,7 +89,7 @@ def classify(state, side=None):
 
         if regime not in {"LIQUIDATION", "CHOP"} and lead_name == "CASH_LED" and persistence >= 0.58 and oppose <= 0.20:
             regime = "EXPANSION" if regime == "NORMAL" else regime
-            pf = min(pf, 0.88)
+            pf = min(pf, 0.85)
             cf = min(cf, 0.96)
             ef = max(ef, 1.06)
 
