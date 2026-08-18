@@ -4,6 +4,24 @@ import time
 from loi_he_thong import ops_supervisor as ops
 
 _orig_build_snapshot = ops.build_snapshot
+_PID_FIRST_SEEN_MONO = {}
+
+
+def _pid_startup_grace(pid, heartbeat_pid):
+    pid = int(pid or 0)
+    heartbeat_pid = int(heartbeat_pid or 0)
+
+    for old_pid in tuple(_PID_FIRST_SEEN_MONO):
+        if old_pid != pid:
+            _PID_FIRST_SEEN_MONO.pop(old_pid, None)
+
+    if pid <= 0 or heartbeat_pid == pid:
+        _PID_FIRST_SEEN_MONO.pop(pid, None)
+        return False
+
+    mono = time.monotonic()
+    first_seen = _PID_FIRST_SEEN_MONO.setdefault(pid, mono)
+    return mono - first_seen < ops.BOT_STARTUP_GRACE_SECONDS
 
 
 def build_snapshot(now=None):
@@ -13,14 +31,9 @@ def build_snapshot(now=None):
     try:
         service = snapshot["services"]["bot"]
         heartbeat = snapshot["bot"]["heartbeat"]
-        pid = int(service.get("pid", 0) or 0)
-        heartbeat_pid = int(heartbeat.get("pid", 0) or 0)
-        first_seen = ops._BOT_PID_FIRST_SEEN.get(pid)
-        in_grace = bool(
-            pid > 0
-            and heartbeat_pid != pid
-            and first_seen is not None
-            and now - float(first_seen) < ops.BOT_STARTUP_GRACE_SECONDS
+        in_grace = _pid_startup_grace(
+            service.get("pid", 0),
+            heartbeat.get("pid", 0),
         )
     except (KeyError, TypeError, ValueError):
         in_grace = False
