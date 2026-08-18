@@ -28,6 +28,14 @@ def build_snapshot(now=None):
     if in_grace:
         snapshot["bot"]["classification"] = "STARTING"
         snapshot["bot"]["restart_requested"] = False
+    else:
+        persistence = heartbeat.get("persistence") or {}
+        if (
+            bool(persistence.get("dirty", False))
+            and snapshot["bot"].get("classification") in {"IDLE_MARKET", "SAFETY_BLOCK"}
+        ):
+            snapshot["bot"]["classification"] = "PERSISTENCE_DEGRADED"
+            snapshot["status"] = "ERROR"
 
     return snapshot
 
