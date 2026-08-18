@@ -2,7 +2,7 @@
 from loi_he_thong import ops_supervisor as ops
 from pathlib import Path
 
-from loi_he_thonc import ops_supervisor_safe as safe
+from loi_he_thong import ops_supervisor_safe as safe
 
 _BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 
