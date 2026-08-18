@@ -39,6 +39,12 @@ close_guard = runtime.base.app.load_module(
 )
 close_guard.install(runtime)
 
+journal_health_guard = runtime.base.app.load_module(
+    "journal_rollback_health_guard_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "journal_rollback_health_guard.py",
+)
+journal_health_guard.install(runtime, open_guard, close_guard)
+
 close_telemetry_guard = runtime.base.app.load_module(
     "close_telemetry_guard_runtime",
     runtime.base.app.CURRENT_DIR / "loi_he_thong" / "close_telemetry_guard.py",
