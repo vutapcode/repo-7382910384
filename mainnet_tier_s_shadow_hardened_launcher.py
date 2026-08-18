@@ -47,6 +47,12 @@ close_guard = runtime.base.app.load_module(
 )
 close_guard.install(runtime)
 
+event_sequence_guard = runtime.base.app.load_module(
+    "event_sequence_guard_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "event_sequence_guard.py",
+)
+event_sequence_guard.install(runtime)
+
 journal_health_guard = runtime.base.app.load_module(
     "journal_rollback_health_guard_runtime",
     runtime.base.app.CURRENT_DIR / "loi_he_thong" / "journal_rollback_health_guard.py",
