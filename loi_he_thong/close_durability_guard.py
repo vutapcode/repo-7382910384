@@ -14,6 +14,7 @@ _STATE_FIELDS = (
     "mainnet_shadow_last_closed_at",
     "mainnet_shadow_last_extra_cost",
     "mainnet_shadow_last_model_cost_bps",
+    "mainnet_shadow_event_seq",
 )
 _MISSING = object()
 
