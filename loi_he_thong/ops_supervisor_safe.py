@@ -83,9 +83,10 @@ if __name__ == "__main__":
 
 
 def _run_forever_action_aware():
-    last_bot_restart = 0.0
+    last_bot_restart_mono = 0.0
     while True:
         started = ops.time.time()
+        started_mono = ops.time.monotonic()
         try:
             snapshot = ops.build_snapshot(started)
             bot = snapshot["bot"]
@@ -96,7 +97,7 @@ def _run_forever_action_aware():
                     "ENTRY_LOOP_STALLED",
                     "GUARDIAN_LOOP_STALLED",
                 }
-                and started - last_bot_restart >= ops.RESTART_COOLDOWN_SECONDS
+                and started_mono - last_bot_restart_mono >= ops.RESTART_COOLDOWN_SECONDS
             ):
                 pid = int(snapshot["services"]["bot"].get("pid", 0) or 0)
                 ops.logging.critical(
@@ -106,7 +107,7 @@ def _run_forever_action_aware():
                 acted = bool(ops._restart_stalled_bot(pid))
                 snapshot["bot"]["restart_requested"] = acted
                 if acted:
-                    last_bot_restart = started
+                    last_bot_restart_mono = started_mono
                 else:
                     snapshot["bot"]["restart_skip_reason"] = "PID_CHANGED_OR_UNAVAILABLE"
             ops._atomic_json(ops.OUTPUT, snapshot)
