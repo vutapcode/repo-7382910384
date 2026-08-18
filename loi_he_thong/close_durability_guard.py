@@ -1,5 +1,6 @@
 """Rollback in-memory CLOSE mutations if the durable checkpoint fails."""
 import logging
+import os
 import time
 
 _STATE_FIELDS = (
@@ -17,6 +18,30 @@ _STATE_FIELDS = (
 _MISSING = object()
 
 
+def _journal_size(base):
+    path = getattr(base, "EVENTS_PATH", None)
+    if path is None:
+        return None, None
+    try:
+        return path, path.stat().st_size if path.exists() else 0
+    except OSError:
+        return path, None
+
+
+def _rollback_journal(state, path, size):
+    if path is None or size is None:
+        return
+    try:
+        with open(path, "r+b") as handle:
+            handle.truncate(size)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as exc:
+        state.shadow_journal_rollback_failed = True
+        state.shadow_journal_rollback_last_error = f"{type(exc).__name__}:{exc}"[:300]
+        logging.exception("[MAINNET-SHADOW] failed to roll back CLOSE journal")
+
+
 def install(wrapper):
     original = wrapper.base._close_shadow
 
@@ -28,6 +53,7 @@ def install(wrapper):
             name: getattr(state, name, _MISSING)
             for name in _STATE_FIELDS
         }
+        journal_path, journal_size = _journal_size(wrapper.base)
 
         try:
             return original(pos, result, now)
@@ -47,6 +73,8 @@ def install(wrapper):
                 else:
                     setattr(state, name, value)
 
+            _rollback_journal(state, journal_path, journal_size)
+
             t = float(now) if now is not None else time.time()
             state.shadow_persistence_dirty = True
             state.shadow_close_persistence_failed = True
@@ -56,7 +84,7 @@ def install(wrapper):
                 getattr(state, "shadow_close_persistence_error_count", 0) or 0
             ) + 1
             logging.exception(
-                "[MAINNET-SHADOW] CLOSE checkpoint failed; in-memory position rolled back active"
+                "[MAINNET-SHADOW] CLOSE checkpoint failed; position/account/journal rolled back"
             )
             return None
 
