@@ -1,0 +1,71 @@
+"""Gate new shadow entries when the journal filesystem is under disk pressure."""
+import os
+import time
+from pathlib import Path
+
+_CHECK_INTERVAL_SEC = 30.0
+_MIN_FREE_BYTES = int(os.environ.get("SMC_MIN_FREE_DISK_BYTES", str(256 * 1024 * 1024)))
+_MIN_FREE_RATIO = float(os.environ.get("SMC_MIN_FREE_DISK_RATIO", "0.02"))
+
+
+def _journal_root():
+    return Path(
+        os.environ.get("SMC_JOURNAL_DIR")
+        or (Path.home() / ".local" / "state" / "smc2026" / "mainnet_shadow")
+    )
+
+
+def _measure(path):
+    stats = os.statvfs(str(path))
+    block = int(stats.f_frsize or stats.f_bsize or 1)
+    free_bytes = int(stats.f_bavail) * block
+    total_bytes = int(stats.f_blocks) * block
+    free_ratio = 0.0 if total_bytes <= 0 else free_bytes / total_bytes
+    return free_bytes, free_ratio
+
+
+def _wait_result(base, state, now, side, reason):
+    current = str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
+    return {
+        "version": getattr(base.entry_council, "VERSION", "ENTRY"),
+        "decision": "WAIT",
+        "entry_mode": "NONE",
+        "phase": "ARMED",
+        "confidence": 0.0,
+        "reason": reason,
+        "side": current,
+        "s_votes": {},
+        "ts": float(time.time() if now is None else now),
+    }
+
+
+def install(wrapper):
+    base = wrapper.base
+    state = base.app.state
+    original = base.entry_council.evaluate
+
+    state.shadow_disk_check_after_mono = 0.0
+    state.shadow_disk_pressure = False
+
+    def evaluate_with_disk_gate(state_obj, now=None, side=None):
+        mono = time.monotonic()
+        check_after = float(getattr(state_obj, "shadow_disk_check_after_mono", 0.0) or 0.0)
+        if mono >= check_after:
+            state_obj.shadow_disk_check_after_mono = mono + _CHECK_INTERVAL_SEC
+            try:
+                free_bytes, free_ratio = _measure(_journal_root())
+                pressure = free_bytes < _MIN_FREE_BYTES or free_ratio < _MIN_FREE_RATIO
+                state_obj.shadow_disk_free_bytes = free_bytes
+                state_obj.shadow_disk_free_ratio = free_ratio
+                state_obj.shadow_disk_pressure = pressure
+                state_obj.shadow_disk_check_error = None
+            except OSError as exc:
+                state_obj.shadow_disk_pressure = True
+                state_obj.shadow_disk_check_error = f"{type(exc).__name__}:{exc}"[:300]
+
+        if bool(getattr(state_obj, "shadow_disk_pressure", False)):
+            return _wait_result(base, state_obj, now, side, "DISK_PRESSURE")
+        return original(state_obj, now=now, side=side)
+
+    base.entry_council.evaluate = evaluate_with_disk_gate
+    return evaluate_with_disk_gate
