@@ -66,6 +66,7 @@ trades = counter(raw, "trades")
 wins = counter(raw, "wins")
 losses = counter(raw, "losses")
 breakevens = counter(raw, "breakevens", optional=True)
+event_seq = counter(raw, "event_seq", optional=True)
 if version == "SHADOW_RUNTIME_STATE_V2" and trades != wins + losses + breakevens:
     fail(f"counter_invariant:{trades}!={wins}+{losses}+{breakevens}")
 
