@@ -11,14 +11,14 @@ class DuplicateInstanceError(RuntimeError):
 
 class RuntimeLock:
     def __init__(self, name, runtime_dir=None):
-        # Use a stable per-user state path by default. /tmp is unsafe with
-        # systemd PrivateTmp because a manually started process may see a
-        # different namespace and acquire a second "singleton" lock.
-        default_dir = Path.home() / ".local" / "state" / "smc2026" / "runtime"
+        # Production on the canonical ubuntu host must use one cross-user lock path.
+        # Explicit runtime_dir / SMC_RUNTIME_DIR still wins for tests and nonstandard deploys.
+        home_default = Path.home() / ".local" / "state" / "smc2026" / "runtime"
+        server_default = Path("/home/ubuntu/.local/state/smc2026/runtime")
+        default_dir = server_default if Path("/home/ubuntu").exists() else home_default
         base = Path(
             runtime_dir
             or os.getenv("SMC_RUNTIME_DIR")
-            or os.getenv("XDG_RUNTIME_DIR")
             or default_dir
         )
         base.mkdir(mode=0o700, parents=True, exist_ok=True)
