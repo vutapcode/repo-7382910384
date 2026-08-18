@@ -46,19 +46,25 @@ def _apply_ticker(data, state) -> bool:
 
 class RollingFlow:
     """O(1) rolling signed CVD + absolute volume for one time window."""
-    __slots__ = ("window_ms", "rows", "signed", "volume")
+    __slots__ = ("window_ms", "rows", "signed", "volume", "last_ts_ms")
     def __init__(self, window_ms):
         self.window_ms = float(window_ms)
         self.rows = collections.deque()
         self.signed = 0.0
         self.volume = 0.0
+        self.last_ts_ms = 0.0
     def clear(self):
         self.rows.clear()
         self.signed = 0.0
         self.volume = 0.0
+        self.last_ts_ms = 0.0
     def push(self, ts_ms, delta):
+        ts = float(ts_ms)
+        if self.last_ts_ms > 0.0 and ts < self.last_ts_ms:
+            self.clear()
+        self.last_ts_ms = ts
         d = float(delta)
-        self.rows.append((float(ts_ms), d))
+        self.rows.append((ts, d))
         self.signed += d
         self.volume += abs(d)
         self.trim(ts_ms)
@@ -92,7 +98,7 @@ async def hung_coinbase_spot(product_id: str, bo_nho_ram):
     while True:
         try:
             async with websockets.connect(
-                COINBASE_WS_URL, ping_interval=20, ping_timeout=20
+                COINBASEE_WS_URL, ping_interval=20, ping_timeout=20
             ) as ws:
                 await ws.send(SUBSCRIBE_MSG)
                 # A reconnect starts a new causal-flow epoch. Never bridge pre-outage
