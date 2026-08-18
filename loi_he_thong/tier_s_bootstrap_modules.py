@@ -40,7 +40,7 @@ bao_ve_khan_cap = load_module("bao_ve_khan_cap", CURRENT_DIR/"3_thuc_thi"/"ve_si
 dong_bo_trang_thai = load_module("dong_bo_trang_thai", CURRENT_DIR/"3_thuc_thi"/"quan_ly_vi_the"/"dong_bo_trang_thai.py")
 nhat_ky_giao_dich = load_module("nhat_ky_giao_dich", CURRENT_DIR/"3_thuc_thi"/"quan_ly_vi_the"/"nhat_ky_giao_dich.py")
 giam_sat_he_thong = load_module("giam_sat_he_thong", CURRENT_DIR/"3_thuc_thi"/"giam_sat_he_thong.py")
-chi_huy_truong = load_module("chi_huy_truong", CURRENT_DIR/"2_suy_luan_mapping"/"tong_ket_chi_huy"/"chi_huy_truong.py")
+chi_huy_truong = LegacyInert()
 
 tai_so_lenh = LegacyInert()
 tai_nen_live = LegacyInert()
