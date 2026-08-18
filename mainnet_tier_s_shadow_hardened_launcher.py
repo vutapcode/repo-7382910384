@@ -13,6 +13,10 @@ subprocess.run(
     check=True,
 )
 subprocess.run(
+    [sys.executable, str(ROOT / "ops" / "shadow_journal_consistency_guard.py")],
+    check=True,
+)
+subprocess.run(
     [sys.executable, str(ROOT / "ops" / "shadow_state_guard.py")],
     check=True,
 )
