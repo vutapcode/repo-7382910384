@@ -45,6 +45,12 @@ journal_health_guard = runtime.base.app.load_module(
 )
 journal_health_guard.install(runtime, open_guard, close_guard)
 
+integrity_readiness_guard = runtime.base.app.load_module(
+    "integrity_readiness_guard_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "integrity_readiness_guard.py",
+)
+integrity_readiness_guard.install(runtime)
+
 close_telemetry_guard = runtime.base.app.load_module(
     "close_telemetry_guard_runtime",
     runtime.base.app.CURRENT_DIR / "loi_he_thong" / "close_telemetry_guard.py",
