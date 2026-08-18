@@ -1,0 +1,89 @@
+"""RAM-only flow persistence and Spot/Perp lead analysis for Tier-S entry."""
+VERSION = "FLOW_LEAD_ENGINE_V1"
+
+def _f(x):
+    try:
+        return float(x or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+def _flow_mean(row):
+    vals = [
+        _f(v.get("signed_imbalance"))
+        for v in (row.get("venues") or {}).values()
+        if isinstance(v, dict)
+    ]
+    return sum(vals) / len(vals) if vals else 0.0
+
+def _ref(rows, now, age):
+    target = now - age
+    out = None
+    for row in rows:
+        if _f(row.get("ts")) <= target:
+            out = row
+        else:
+            break
+    return out
+
+def _signed_bps(cur, ref, side):
+    cur, ref = _f(cur), _f(ref)
+    if cur <= 0.0 or ref <= 0.0:
+        return None
+    direction = 1.0 if str(side).upper() == "LONG" else -1.0
+    return (cur - ref) / ref * 10000.0 * direction
+
+def analyze(state, side):
+    """Return cheap causal context only; never creates a trade signal."""
+    flow_rows = list(getattr(state, "entry_causal_flow_history", ()) or ())[-24:]
+    price_rows = list(getattr(state, "entry_shadow_price_history", ()) or ())[-32:]
+    if not flow_rows or not price_rows:
+        return {
+            "version": VERSION, "status": "WARMUP", "persistence": 0.0,
+            "oppose_ratio": 0.0, "lead": "UNKNOWN", "lead_gap_bps": 0.0,
+            "lead_accel_bps": 0.0,
+        }
+
+    recent = flow_rows[-12:]
+    means = [_flow_mean(r) for r in recent]
+    persistence = sum(v >= 0.08 for v in means) / len(means) if means else 0.0
+    oppose_ratio = sum(v <= -0.08 for v in means) / len(means) if means else 0.0
+
+    now_row = price_rows[-1]
+    now = _f(now_row.get("ts"))
+    fast_ref = _ref(price_rows, now, 0.35)
+    slow_ref = _ref(price_rows, now, 0.80)
+
+    def gap(ref):
+        if not ref:
+            return 0.0
+        spot = _signed_bps(now_row.get("spot"), ref.get("spot"), side)
+        cb = _signed_bps(now_row.get("coinbase"), ref.get("coinbase"), side)
+        fut = _signed_bps(now_row.get("futures"), ref.get("futures"), side)
+        cash_vals = [x for x in (spot, cb) if x is not None]
+        if fut is None or not cash_vals:
+            return 0.0
+        cash = sum(cash_vals) / len(cash_vals)
+        return fut - cash
+
+    fast_gap = gap(fast_ref)
+    slow_gap = gap(slow_ref)
+    accel = fast_gap - slow_gap
+
+    if fast_gap >= 1.25:
+        lead = "PERP_LED"
+    elif fast_gap <= -0.75:
+        lead = "CASH_LED"
+    else:
+        lead = "BALANCED"
+
+    return {
+        "version": VERSION,
+        "status": "OK",
+        "persistence": round(persistence, 4),
+        "oppose_ratio": round(oppose_ratio, 4),
+        "flow_mean": round(sum(means) / len(means), 4) if means else 0.0,
+        "lead": lead,
+        "lead_gap_bps": round(fast_gap, 4),
+        "lead_accel_bps": round(accel, 4),
+        "policy": "CONTEXT_ONLY_NO_SIGNAL_AUTHORITY",
+    }
