@@ -24,6 +24,20 @@ def _pid_startup_grace(pid, heartbeat_pid):
     return mono - first_seen < ops.BOT_STARTUP_GRACE_SECONDS
 
 
+def _heartbeat_monotonic_age(heartbeat):
+    try:
+        stamp = int(heartbeat.get("watchdog_monotonic_ns", 0) or 0)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if stamp <= 0:
+        return None
+
+    delta_ns = int(time.monotonic_ns()) - stamp
+    if delta_ns < 0:
+        return float("inf")
+    return delta_ns / 1_000_000_000.0
+
+
 def build_snapshot(now=None):
     now = time.time() if now is None else float(now)
     snapshot = _orig_build_snapshot(now)
@@ -31,17 +45,37 @@ def build_snapshot(now=None):
     try:
         service = snapshot["services"]["bot"]
         heartbeat = snapshot["bot"]["heartbeat"]
-        in_grace = _pid_startup_grace(
-            service.get("pid", 0),
-            heartbeat.get("pid", 0),
-        )
+        service_pid = int(service.get("pid", 0) or 0)
+        heartbeat_pid = int(heartbeat.get("pid", 0) or 0)
+        in_grace = _pid_startup_grace(service_pid, heartbeat_pid)
     except (KeyError, TypeError, ValueError):
         in_grace = False
+        service = {}
+        heartbeat = {}
+        service_pid = 0
+        heartbeat_pid = 0
 
     if in_grace:
         snapshot["bot"]["classification"] = "STARTING"
         snapshot["bot"]["restart_requested"] = False
     else:
+        mono_age = _heartbeat_monotonic_age(heartbeat)
+        same_process = bool(
+            service_pid > 0
+            and heartbeat_pid == service_pid
+            and service.get("active_state") == "active"
+        )
+        if same_process and mono_age is not None:
+            snapshot["bot"]["heartbeat_age_monotonic_seconds"] = mono_age
+            if mono_age > ops.STALE_SECONDS:
+                snapshot["bot"]["classification"] = "EVENT_LOOP_STALLED"
+                snapshot["status"] = "ERROR"
+            elif snapshot["bot"].get("classification") == "EVENT_LOOP_STALLED":
+                snapshot["bot"]["classification"] = (
+                    "IDLE_MARKET" if bool(heartbeat.get("system_ready", False)) else "SAFETY_BLOCK"
+                )
+                snapshot["status"] = "RUNNING"
+
         persistence = heartbeat.get("persistence") or {}
         if (
             bool(persistence.get("dirty", False))
