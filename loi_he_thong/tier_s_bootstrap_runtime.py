@@ -1,5 +1,6 @@
-"""Runtime core for the lean Tier-S bootstrap."""
-import asyncio import faulthandler
+"""Runtime core for the lean Binance Futures MAINNET Tier-S bootstrap."""
+import asyncio
+import faulthandler
 import json
 import logging
 import os
@@ -30,32 +31,16 @@ state = m.bo_nho_ram.state
 load_module = m.load_module
 
 requested_execution = os.getenv("SMC_ENABLE_TRADING", "false").lower() in ("1", "true", "yes", "on")
-state.execution_allowed = bool(
-    requested_execution
-    and (
-        mainnet_safety.execution_venue() != "MAINNET"
-        or mainnet_safety.mainnet_armed()
-    )
-)
+state.execution_allowed = bool(requested_execution and mainnet_safety.mainnet_armed())
 state.code_version = code_version(CURRENT_DIR)
 state.strategy_config_version = strategy_config_version()
 state.strategy_profile = strategy_profile.current_profile()
+state.execution_venue = "BINANCE_FUTURES_MAINNET"
 
-api = m.binance_api.BinanceAPI+
+api = m.binance_api.BinanceAPI(
     api_key=mainnet_safety.credential("binance_api_key", "BINANCE_API_KEY"),
     secret_key=mainnet_safety.credential("binance_api_secret", "BINANCE_API_SECRET"),
-    testnet=mainnet_safety.execution_venue() != "MAINNET",
 )
-state.execution_venue = (
-    "BINANCE_FUTURES_TESTNET" if api.testnet else "BINANCE_FUTURES_MAINNET"
-)
-state._api_is_testnet = api.testnet
-
-if api.testnet:
-    journal_dir = CURRENT_DIR / "3_thuc_thi" / "quan_ly_vi_the" / "nhat_ky_testnet"
-    m.nhat_ky_giao_dich.JOURNAL_DIR = journal_dir
-    m.nhat_ky_giao_dich.SNAPSHOT_PATH = journal_dir / "cycles.json"
-    m.nhat_ky_giao_dich.EVENT_PATH = journal_dir / "events.jsonl"
 
 
 async def supervise(name, factory):
@@ -100,7 +85,7 @@ async def vong_lap_runtime_heartbeat():
             "strategy_profile": getattr(state, "strategy_profile", None),
             "scorer_version": os.getenv("SMC_SCORER_VERSION", "TIER_S_CAUSAL"),
             "entry_lifecycle": os.getenv("SMC_ENTRY_LIFECYCLE", "TIER_S_COUNCIL"),
-            "execution_venue": getattr(state, "execution_venue", None),
+            "execution_venue": "BINANCE_FUTURES_MAINNET",
             "system_ready": bool(getattr(state, "system_ready", False)),
             "trading_enabled": bool(getattr(state, "trading_enabled", False)),
             "readiness_reason": getattr(state, "last_readiness_reason", None),
@@ -142,12 +127,10 @@ async def khoi_tao_tai_khoan():
         state.exchange_filters = parse_btc_filters(info)
 
     config_ready, config_reason = mainnet_safety.validate_static_config(state.exchange_filters)
-    mainnet_ready, mainnet_reason = True, "TESTNET"
-    if not api.testnet:
-        mainnet_ready, mainnet_reason = await mainnet_safety.prepare_mainnet_account(api, state)
-        hedge_mode = await api.get_position_mode()
-        if hedge_mode is not None:
-            state.account_hedge_mode = hedge_mode
+    mainnet_ready, mainnet_reason = await mainnet_safety.prepare_mainnet_account(api, state)
+    hedge_mode = await api.get_position_mode()
+    if hedge_mode is not None:
+        state.account_hedge_mode = hedge_mode
 
     required = ("step_size", "min_qty", "tick_size", "min_notional")
     filters_ready = all(
@@ -160,12 +143,12 @@ async def khoi_tao_tai_khoan():
         and filters_ready
         and config_ready
         and mainnet_ready
-        and (api.testnet or hedge_mode is True)
+        and hedge_mode is True
     )
     if not state.account_ready:
         state.last_readiness_reason = config_reason if not config_ready else mainnet_reason
         logging.critical(
-            "[ACCOUNT] startup not ready (%s); entry fail-closed",
+            "[ACCOUNT] MAINNET startup not ready (%s); entry fail-closed",
             state.last_readiness_reason,
         )
 
