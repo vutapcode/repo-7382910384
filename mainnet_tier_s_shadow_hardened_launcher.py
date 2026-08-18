@@ -1,9 +1,13 @@
 """Canonical hardened Mainnet Tier-S shadow launcher."""
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+os.environ.setdefault("SMC_RUNTIME_DIR", "/home/ubuntu/.local/state/smc2026/runtime")
+os.environ.setdefault("SMC_JOURNAL_DIR", "/home/ubuntu/.local/state/smc2026/mainnet_shadow")
+
 subprocess.run(
     [sys.executable, str(ROOT / "ops" / "shadow_state_guard.py")],
     check=True,
