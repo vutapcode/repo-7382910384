@@ -3,7 +3,7 @@ from collections import deque
 import time
 from loi_he_thong import flow_lead_engine
 
-VERSION = "MICRO_REGIME_V2_FLOW_LEAD"
+VERSION = "MICRO_REGIME_V3_OI_SIGNATURE"
 
 def _f(x):
     try:
@@ -14,6 +14,16 @@ def _f(x):
 def _mid(s):
     b, a = _f(getattr(s, "best_bid", 0)), _f(getattr(s, "best_ask", 0))
     return (b + a) / 2.0 if b > 0 and a > b else max(b, a)
+
+def _pick_ref(hist, now, age):
+    target = now - age
+    out = hist[0] if hist else None
+    for row in hist:
+        if row[0] <= target:
+            out = row
+        else:
+            break
+    return out
 
 def classify(state, side=None):
     now, px = time.time(), _mid(state)
@@ -28,14 +38,15 @@ def classify(state, side=None):
     )
     if not hist or now - hist[-1][0] >= 0.25:
         hist.append((now, px, oi, vol))
-    ref = hist[0] if hist else (now, px, oi, vol)
-    for row in hist:
-        if row[0] <= now - 8.0:
-            ref = row
-        else:
-            break
+
+    ref = _pick_ref(hist, now, 8.0) or (now, px, oi, vol)
+    fast_ref = _pick_ref(hist, now, 2.0) or ref
+
     move_bps = ((px - ref[1]) / ref[1] * 10000.0) if px > 0 and ref[1] > 0 else 0.0
     oi_pct = ((oi - ref[2]) / ref[2] * 100.0) if oi > 0 and ref[2] > 0 else 0.0
+    oi_fast_pct = ((oi - fast_ref[2]) / fast_ref[2] * 100.0) if oi > 0 and fast_ref[2] > 0 else 0.0
+    oi_accel = oi_fast_pct - (oi_pct * 0.25)
+
     p90 = _f(getattr(state, "vol_pct90", 0))
     vr = vol / p90 if p90 > 0 else 1.0
     atr = _f(getattr(state, "atr_1m", 0))
@@ -59,6 +70,15 @@ def classify(state, side=None):
         if flips >= 3 and abs(move_bps) <= max(1.5, atr_bps * 0.05):
             regime, pf, cf, ef = "CHOP", 1.18, 1.10, 0.90
 
+    if oi_pct <= -0.20 and oi_accel < -0.03:
+        oi_signature = "LIQUIDATION_ACCEL"
+    elif oi_pct <= -0.08:
+        oi_signature = "POSITION_UNWIND" 
+    elif oi_pct >= 0.12 and oi_accel > 0.02:
+        oi_signature = "NEW_POSITION_BUILD" 
+    else:
+        oi_signature = "NEUTRAL"
+
     direction = str(side or getattr(state, "bias_state", "") or "").upper()
     lead = flow_lead_engine.analyze(state, direction)
     if lead.get("status") == "OK":
@@ -66,19 +86,31 @@ def classify(state, side=None):
         oppose = _f(lead.get("oppose_ratio"))
         lead_name = lead.get("lead")
         accel = _f(lead.get("lead_accel_bps"))
+
         if regime not in {"LIQUIDATION", "CHOP"} and lead_name == "CASH_LED" and persistence >= 0.58 and oppose <= 0.20:
             regime = "EXPANSION" if regime == "NORMAL" else regime
             pf = min(pf, 0.88)
             cf = min(cf, 0.96)
             ef = max(ef, 1.06)
+
         if lead_name == "PERP_LED" and (_f(lead.get("lead_gap_bps")) >= 1.25 or accel >= 0.45):
             pf = max(pf, 1.12)
             cf = max(cf, 1.08)
             ef = min(ef, 0.94)
+
         if oppose >= 0.34:
             pf = max(pf, 1.15)
             cf = max(cf, 1.08)
             ef = min(ef, 0.92)
+
+        if oi_signature == "NEW_POSITION_BUILD" and lead_name == "CASH_LED" and persistence >= 0.58:
+            pf = min(pf, 0.90)
+            ef = max(ef, 1.08)
+
+        if oi_signature in {"LIQUIDATION_ACCEL", "POSITION_UNWIND"} and lead_name == "PERP_LED":
+            pf = max(pf, 1.15)
+            cf = max(cf, 1.10)
+            ef = min(ef, 0.90)
 
     out = {
         "version": VERSION,
@@ -88,6 +120,9 @@ def classify(state, side=None):
         "expectancy_factor": round(ef, 4),
         "move_bps": round(move_bps, 4),
         "oi_pct": round(oi_pct, 5),
+        "oi_fast_pct": round(oi_fast_pct, 5),
+        "oi_accel_pct": round(oi_accel, 5),
+        "oi_signature": oi_signature,
         "vol_ratio": round(vr, 4),
         "flow_lead": lead,
         "policy": "ADAPT_THRESHOLDS_ONLY_NO_SIGNAL_AUTHORITY",
