@@ -73,10 +73,16 @@ def validate(state_path=STATE_PATH, events_path=EVENTS_PATH):
         return True
 
     event_type = str(event.get("event", "")).upper()
-    state_ts = float(state.get("ts", 0.0) or 0.0)
-    event_ts = float(event.get("ts", 0.0) or 0.0)
-    if state_ts <= 0.0 or event_ts <= 0.0 or state_ts + 1e-6 < event_ts:
-        _fail(f"snapshot_behind_journal:state_ts={state_ts}:event_ts={event_ts}")
+    try:
+        state_seq = int(state.get("event_seq", 0) or 0)
+        event_seq = int(event.get("event_seq", 0) or 0)
+    except (TypeError, ValueError):
+        _fail("invalid_event_sequence")
+    if state_seq < 0 or event_seq < 0:
+        _fail("negative_event_sequence")
+    if state_seq > 0 and event_seq > 0 and state_seq != event_seq:
+        relation = "journal_ahead" if event_seq > state_seq else "snapshot_ahead"
+        _fail(f"{relation}:state_seq={state_seq}:event_seq={event_seq}")
 
     if event_type == "EXIT":
         if active:
