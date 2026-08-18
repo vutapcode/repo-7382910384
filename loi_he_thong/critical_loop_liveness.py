@@ -95,6 +95,12 @@ def install(wrapper):
         enriched["critical_liveness_installed_at"] = float(
             getattr(state, "critical_liveness_installed_at", 0.0) or 0.0
         )
+        installed_mono = float(
+            getattr(state, "critical_liveness_installed_mono", 0.0) or 0.0
+        )
+        enriched["critical_liveness_installed_age_sec"] = (
+            None if installed_mono <= 0.0 else max(0.0, mono - installed_mono)
+        )
         enriched["critical_loops"] = loops
         enriched["shadow_position_active"] = bool(
             pos is not None and getattr(pos, "active", False)
