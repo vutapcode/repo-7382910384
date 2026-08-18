@@ -1,4 +1,4 @@
-"""Expose liveness of the canonical Bias, Entry, and active-position Risk loops."""
+"""Expose liveness of the canonical Bias, Entry, and Guardian loops."""
 import time
 
 
@@ -39,7 +39,31 @@ def install(wrapper):
 
     _wrap(state, base.bias_council, "update_state", "bias")
     _wrap(state, base.entry_council, "evaluate", "entry")
-    _wrap(state, wrapper.risk, "assess", "guardian")
+
+    # Guardian loop liveness must describe loop progress, not whether risk.assess()
+    # happened. A stale Futures execution feed intentionally bypasses risk.assess()
+    # while the Guardian loop remains healthy and polling.
+    original_exec_price = wrapper.health.exec_price
+
+    def exec_price_with_liveness(*args, **kwargs):
+        try:
+            out = original_exec_price(*args, **kwargs)
+        except Exception as exc:
+            now = time.time()
+            state.guardian_loop_last_error_at = now
+            state.guardian_loop_last_error = f"{type(exc).__name__}:{exc}"[:300]
+            state.guardian_loop_error_count = int(
+                getattr(state, "guardian_loop_error_count", 0) or 0
+            ) + 1
+            state.guardian_loop_consecutive_errors = int(
+                getattr(state, "guardian_loop_consecutive_errors", 0) or 0
+            ) + 1
+            raise
+        state.guardian_loop_last_ok = time.time()
+        state.guardian_loop_consecutive_errors = 0
+        return out
+
+    wrapper.health.exec_price = exec_price_with_liveness
 
     original_write = base.app._write_bot_heartbeat
 
