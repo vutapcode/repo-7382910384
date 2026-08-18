@@ -15,8 +15,7 @@ ExecStartPre=/usr/bin/python3 /home/ubuntu/SMC2026/ops/repo_integrity_check.py
 ExecStartPre=/usr/bin/python3 /home/ubuntu/SMC2026/ops/shadow_state_guard.py
 ExecStart=/usr/bin/python3 /home/ubuntu/SMC2026/mainnet_tier_s_shadow_hardened_launcher.py
 Restart=always
-RestartSec=5s
-RestartPreventExitStatus=73
+RestartSec=15s
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=SMC_RUNTIME_DIR=/home/ubuntu/.local/state/smc2026/runtime
