@@ -36,7 +36,6 @@ V1_ALIASES = {
     "risk_r": "r",
     "risk_hard_sl": "hard_sl",
     "risk_best_r": "best_r",
-    "risk_best_price": "best",
     "risk_profit_floor_r": "floor_r",
     "risk_profit_floor_price": "floor",
     "risk_whale_seen": "whale_seen",
@@ -103,6 +102,7 @@ def snapshot(base):
     data = {
         "version": VERSION,
         "ts": time.time(),
+        "event_seq": int(getattr(state, "mainnet_shadow_event_seq", 0) or 0),
         "balance": float(getattr(state, "mainnet_shadow_balance_usdt", 0.0) or 0.0),
         "realized_pnl": float(getattr(state, "mainnet_shadow_realized_pnl", 0.0) or 0.0),
         "trades": int(getattr(state, "mainnet_shadow_trades", 0) or 0),
@@ -160,6 +160,7 @@ def restore(base):
         ("wins", "mainnet_shadow_wins"),
         ("losses", "mainnet_shadow_losses"),
         ("breakevens", "mainnet_shadow_breakevens"),
+        ("event_seq", "mainnet_shadow_event_seq"),
     ):
         if key in raw:
             setattr(state, attr, raw[key])
