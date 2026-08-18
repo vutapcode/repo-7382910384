@@ -36,6 +36,7 @@ V1_ALIASES = {
     "risk_r": "r",
     "risk_hard_sl": "hard_sl",
     "risk_best_r": "best_r",
+    "risk_best_price": "best",
     "risk_profit_floor_r": "floor_r",
     "risk_profit_floor_price": "floor",
     "risk_whale_seen": "whale_seen",
