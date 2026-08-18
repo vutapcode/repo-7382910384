@@ -80,3 +80,40 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def _run_forever_action_aware():
+    last_bot_restart = 0.0
+    while True:
+        started = ops.time.time()
+        try:
+            snapshot = ops.build_snapshot(started)
+            bot = snapshot["bot"]
+            if (
+                bot["classification"] in {
+                    "EVENT_LOOP_STALLED",
+                    "BIAS_LOOP_STALLED",
+                    "ENTRY_LOOP_STALLED",
+                    "GUARDIAN_LOOP_STALLED",
+                }
+                and started - last_bot_restart >= ops.RESTART_COOLDOWN_SECONDS
+            ):
+                pid = int(snapshot["services"]["bot"].get("pid", 0) or 0)
+                ops.logging.critical(
+                    "[OPS] Bot critical loop stalled (%s); dump stack then restart pid=%s",
+                    bot["classification"], pid,
+                )
+                acted = bool(ops._restart_stalled_bot(pid))
+                snapshot["bot"]["restart_requested"] = acted
+                if acted:
+                    last_bot_restart = started
+                else:
+                    snapshot["bot"]["restart_skip_reason"] = "PID_CHANGED_OR_UNAVAILABLE"
+            ops._atomic_json(ops.OUTPUT, snapshot)
+        except Exception:
+            ops.logging.exception("[OPS] Health supervisor iteration failed")
+        elapsed = ops.time.time() - started
+        ops.time.sleep(max(0.2, ops.INTERVAL_SECONDS - elapsed))
+
+
+ops.run_forever = _run_forever_action_aware
