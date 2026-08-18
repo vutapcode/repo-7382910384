@@ -11,6 +11,7 @@ _STATE_FIELDS = (
     "mainnet_shadow_last_skip",
     "mainnet_shadow_risk",
     "mainnet_shadow_entry_edge",
+    "mainnet_shadow_event_seq",
 )
 _MISSING = object()
 
