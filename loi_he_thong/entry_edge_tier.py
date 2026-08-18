@@ -1,9 +1,9 @@
 """Tier-S entry edge classifier. RAM-only causal quality gate."""
-from loi_he_thong. import entry_microstructure as micro
+from loi_he_thong import entry_microstructure as micro
 
 VERSION = "ENTRY_EDGE_TIER_S_V4_BOOK"
 FEE_ROUNDTRIP_BPS = 10.0
-SLIPPAGE_BUFFFER_BPS = 4.0
+SLIPPAGE_BUFFER_BPS = 4.0
 SAFETY_BUFFER_BPS = 4.0
 TOTAL_COST_BPS = FEE_ROUNDTRIP_BPS + SLIPPAGE_BUFFER_BPS + SAFETY_BUFFER_BPS
 NORMAL_MIN_COST_MULTIPLE = 1.35
@@ -84,6 +84,7 @@ def classify(result, state):
     else:
         edge_class = "NORMAL_EDGE"
 
+    # Book is spoofable: adverse refill may reduce confidence, never veto by itself.
     if book["adverse_refill"] and edge_class == "RUNNER_EDGE":
         edge_class = "HIGH_EDGE"
     elif book["adverse_refill"] and edge_class == "HIGH_EDGE":
@@ -94,21 +95,30 @@ def classify(result, state):
     minimum = FAST_MIN_COST_MULTIPLE if mode == "FAST" else NORMAL_MIN_COST_MULTIPLE
     cost_ok = edge_class != "LOW_EDGE" and multiple >= minimum
     return {
-        "version": VERSION, "edge_class": edge_class,
+        "version": VERSION,
+        "edge_class": edge_class,
         "expected_excursion_bps_model": expected_bps,
         "cost_budget_bps_model": TOTAL_COST_BPS,
-        "cost_multiple_model": round(multiple, 4), "min_cost_multiple": minimum,
-        "cost_ok": cost_ok, "entry_mode": mode,
-        "normal_contract_ok": normal_ok, "fast_contract_ok": fast_ok,
-        "price_3venue_strong": price3, "strong_flow_venues": strong_flow,
-        "strong_opposing_flow_venues": strong_opp, "bias_s_support": bias_support,
-        "price_x_oi_aligned": price_x_oi, "cross_price_aligned": cross,
-        "multi_flow_aligned": multi_flow, "price_impact": impact,
-        "spot_perp_basis": basis, "book_resiliency": book,
+        "cost_multiple_model": round(multiple, 4),
+        "min_cost_multiple": minimum,
+        "cost_ok": cost_ok,
+        "entry_mode": mode,
+        "normal_contract_ok": normal_ok,
+        "fast_contract_ok": fast_ok,
+        "price_3venue_strong": price3,
+        "strong_flow_venues": strong_flow,
+        "strong_opposing_flow_venues": strong_opp,
+        "bias_s_support": bias_support,
+        "price_x_oi_aligned": price_x_oi,
+        "cross_price_aligned": cross,
+        "multi_flow_aligned": multi_flow,
+        "price_impact": impact,
+        "spot_perp_basis": basis,
+        "book_resiliency": book,
         "policy": "OI_UPGRADES_EXPECTANCY_NEVER_TIMING_VETO",
     }
 
 
 def authorize(result, state):
     edge = classify(result, state)
-    return bool(((result or {}).get("decision") == "GO" and edge["cost_ok"]), edge
+    return bool((result or {}).get("decision") == "GO" and edge["cost_ok"]), edge
