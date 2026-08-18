@@ -53,7 +53,7 @@ def _read_json(path):
 
 def _service_state(unit):
     command = [
-        'systemctl', '--user', 'show', unit,
+        'systemctl', 'show', unit,
         '--property=ActiveState,SubState,MainPID,NRestarts',
     ]
     completed = subprocess.run(
@@ -116,8 +116,7 @@ def _restart_stalled_bot(pid):
             os.kill(pid, signal.SIGUSR1)
             time.sleep(0.5)
             # A blocked/stopped process may never honor systemd's graceful
-            # SIGTERM.  Restart=always is the owner of recovery after this
-            # bounded diagnostic dump.
+            # SIGTERM.  Restart=always is the owner of recovery after this bounded diagnostic dump.
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
