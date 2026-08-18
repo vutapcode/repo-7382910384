@@ -45,5 +45,11 @@ liveness = runtime.base.app.load_module(
 )
 liveness.install(runtime)
 
+persistence_heartbeat = runtime.base.app.load_module(
+    "persistence_heartbeat_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "persistence_heartbeat.py",
+)
+persistence_heartbeat.install(runtime)
+
 if __name__ == "__main__":
     runtime.base.main()
