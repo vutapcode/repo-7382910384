@@ -6,8 +6,8 @@ _MIN_RETRY_SEC = 1.0
 _MAX_RETRY_SEC = 5.0
 
 
-def _retry_delay(error_count):
-    exponent = max(0, min(3, int(error_count) - 1))
+def _retry_delay(consecutive_errors):
+    exponent = max(0, min(3, int(consecutive_errors) - 1))
     return min(_MAX_RETRY_SEC, _MIN_RETRY_SEC * (2 ** exponent))
 
 
@@ -36,7 +36,10 @@ def install(wrapper):
             state.shadow_persistence_error_count = int(
                 getattr(state, "shadow_persistence_error_count", 0) or 0
             ) + 1
-            delay = _retry_delay(state.shadow_persistence_error_count)
+            state.shadow_persistence_consecutive_errors = int(
+                getattr(state, "shadow_persistence_consecutive_errors", 0) or 0
+            ) + 1
+            delay = _retry_delay(state.shadow_persistence_consecutive_errors)
             wrapper._persist_retry_after_mono = mono + delay
             state.shadow_persistence_retry_after_sec = delay
             logging.exception("[MAINNET-SHADOW] risk checkpoint failed; decision preserved")
@@ -44,6 +47,7 @@ def install(wrapper):
             wrapper._last_persist_mono = mono
             wrapper._persist_retry_after_mono = 0.0
             state.shadow_persistence_dirty = False
+            state.shadow_persistence_consecutive_errors = 0
             state.shadow_persistence_last_ok_at = wall
             state.shadow_persistence_retry_after_sec = 0.0
         return out
