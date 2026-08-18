@@ -68,10 +68,16 @@ liveness = runtime.base.app.load_module(
 liveness.install(runtime)
 
 persistence_heartbeat = runtime.base.app.load_module(
-    "persistence_heartbeat.runtime",
+    "persistence_heartbeat_runtime",
     runtime.base.app.CURRENT_DIR / "loi_he_thong" / "persistence_heartbeat.py",
 )
 persistence_heartbeat.install(runtime)
+
+monotonic_heartbeat = runtime.base.app.load_module(
+    "monotonic_heartbeat_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "monotonic_heartbeat.py",
+)
+monotonic_heartbeat.install(runtime)
 
 futures_clock_guard = runtime.base.app.load_module(
     "futures_clock_guard_runtime",
