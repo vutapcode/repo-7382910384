@@ -1,6 +1,38 @@
 """Monotonic scheduler for the hardened ops supervisor."""
 from loi_he_thong import ops_supervisor as ops
-from loi_he_thong import ops_supervisor_safe as safe
+from pathlib import Path
+
+from loi_he_thonc import ops_supervisor_safe as safe
+
+_BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
+
+
+def _read_boot_id():
+    try:
+        return _BOOT_ID_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+_BOOT_ID = _read_boot_id()
+_orig_build_snapshot = ops.build_snapshot
+
+
+def build_snapshot(now=None):
+    snapshot = _orig_build_snapshot(now)
+    bot = snapshot.get("bot") or {}
+    if bot.get("classification") == "STARTING":
+        return snapshot
+    heartbeat = bot.get("heartbeat") or {}
+    heartbeat_boot_id = str(heartbeat.get("watchdog_boot_id") or "")
+    if _BOOT_ID and heartbeat_boot_id and heartbeat_boot_id != _BOOT_ID:
+        bot["classification"] = "EVENT_LOOP_STALLED"
+        bot["heartbeat_boot_mismatch"] = True
+        snapshot["status"] = "ERROR"
+    return snapshot
+
+
+ops.build_snapshot = build_snapshot
 
 
 def _remaining_sleep(start_mono, now_mono, interval):
