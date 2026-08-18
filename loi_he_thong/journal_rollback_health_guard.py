@@ -8,6 +8,8 @@ def install(wrapper, open_guard, close_guard):
         def guarded(state_obj, path, size):
             out = original(state_obj, path, size)
             if bool(getattr(state_obj, flag_name, False)):
+                state_obj.shadow_integrity_fault = True
+                state_obj.shadow_integrity_fault_reason = reason
                 state_obj.system_ready = False
                 state_obj.trading_enabled = False
                 state_obj.mainnet_shadow_ready = False
