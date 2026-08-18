@@ -9,4 +9,4 @@ import mainnet_tier_s_shadow_hardened_launcher as hardened
 
 
 if __name__ == "__main__":
-    hardened.main()
+    hardened.runtime.base.main()
