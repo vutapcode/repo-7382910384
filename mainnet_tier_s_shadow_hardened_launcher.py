@@ -9,6 +9,10 @@ os.environ.setdefault("SMC_RUNTIME_DIR", "/home/ubuntu/.local/state/smc2026/runt
 os.environ.setdefault("SMC_JOURNAL_DIR", "/home/ubuntu/.local/state/smc2026/mainnet_shadow")
 
 subprocess.run(
+    [sys.executable, str(ROOT / "ops" / "shadow_journal_recovery_guard.py")],
+    check=True,
+)
+subprocess.run(
     [sys.executable, str(ROOT / "ops" / "shadow_state_guard.py")],
     check=True,
 )
@@ -64,7 +68,7 @@ liveness = runtime.base.app.load_module(
 liveness.install(runtime)
 
 persistence_heartbeat = runtime.base.app.load_module(
-    "persistence_heartbeat_runtime",
+    "persistence_heartbeat.runtime",
     runtime.base.app.CURRENT_DIR / "loi_he_thong" / "persistence_heartbeat.py",
 )
 persistence_heartbeat.install(runtime)
