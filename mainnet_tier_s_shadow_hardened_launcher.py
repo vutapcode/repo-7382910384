@@ -39,6 +39,12 @@ close_guard = runtime.base.app.load_module(
 )
 close_guard.install(runtime)
 
+close_telemetry_guard = runtime.base.app.load_module(
+    "close_telemetry_guard_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "close_telemetry_guard.py",
+)
+close_telemetry_guard.install(runtime)
+
 liveness = runtime.base.app.load_module(
     "critical_loop_liveness_runtime",
     runtime.base.app.CURRENT_DIR / "loi_he_thong" / "critical_loop_liveness.py",
