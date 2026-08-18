@@ -51,6 +51,12 @@ persistence_heartbeat = runtime.base.app.load_module(
 )
 persistence_heartbeat.install(runtime)
 
+futures_clock_guard = runtime.base.app.load_module(
+    "futures_clock_guard_runtime",
+    runtime.base.app.CURRENT_DIR / "loi_he_thong" / "futures_clock_guard.py",
+)
+futures_clock_guard.install(runtime)
+
 supervisor_guard = runtime.base.app.load_module(
     "supervisor_return_guard_runtime",
     runtime.base.app.CURRENT_DIR / "loi_he_thong" / "supervisor_return_guard.py",
