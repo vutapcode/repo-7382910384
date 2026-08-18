@@ -19,6 +19,9 @@ OUTPUT = HEALTH_ROOT / 'system_status.json'
 INTERVAL_SECONDS = float(os.getenv('SMC_OPS_HEALTH_SECONDS', '5'))
 STALE_SECONDS = float(os.getenv('SMC_OPS_STALE_SECONDS', '15'))
 RESTART_COOLDOWN_SECONDS = float(os.getenv('SMC_OPS_RESTART_COOLDOWN_SECONDS', '60'))
+CRITICAL_LOOP_GRACE_SECONDS = float(os.getenv('SMC_OPS_CRITICAL_LOOP_GRACE_SECONDS', '10'))
+BIAS_ENTRY_STALE_SECONDS = float(os.getenv('SMC_OPS_BIAS_ENTRY_STALE_SECONDS', '5'))
+GUARDIAN_STALE_SECONDS = float(os.getenv('SMC_OPS_GUARDIAN_STALE_SECONDS', '2'))
 
 SERVICES = {
     'bot': 'smc2026-bot.service',
@@ -122,6 +125,28 @@ def _restart_stalled_bot(pid):
             pass
 
 
+def _critical_loop_classification(bot_payload, now):
+    installed_at = float(bot_payload.get('critical_liveness_installed_at', 0.0) or 0.0)
+    if installed_at <= 0.0 or now - installed_at < CRITICAL_LOOP_GRACE_SECONDS:
+        return None
+
+    loops = bot_payload.get('critical_loops') or {}
+    limits = {
+        'bias': BIAS_ENTRY_STALE_SECONDS,
+        'entry': BIAS_ENTRY_STALE_SECONDS,
+    }
+    if bool(bot_payload.get('shadow_position_active', False)):
+        limits['guardian'] = GUARDIAN_STALE_SECONDS
+
+    for name, limit in limits.items():
+        item = loops.get(name) or {}
+        age = item.get('age_sec')
+        consecutive = int(item.get('consecutive_errors', 0) or 0)
+        if age is None or float(age) > limit or consecutive >= 3:
+            return f"{name.upper()}_LOOP_STALLED"
+    return None
+
+
 def build_snapshot(now=None):
     now = time.time() if now is None else float(now)
     now_ms = int(now * 1000)
@@ -137,6 +162,7 @@ def build_snapshot(now=None):
     bot_active = services['bot']['active_state'] == 'active'
     recorder_active = services['recorder']['active_state'] == 'active'
     bot_stalled = bool(bot_active and (bot_age is None or bot_age > STALE_SECONDS))
+    critical_stall = _critical_loop_classification(bot_payload, now) if bot_active else None
     recorder_stale = bool(
         not RECORDER_DISABLED
         and (not recorder_active or recorder_age is None or recorder_age > STALE_SECONDS)
@@ -146,6 +172,8 @@ def build_snapshot(now=None):
         bot_classification = 'PROCESS_DOWN'
     elif bot_stalled:
         bot_classification = 'EVENT_LOOP_STALLED'
+    elif critical_stall:
+        bot_classification = critical_stall
     elif not bot_payload.get('system_ready', False):
         bot_classification = 'SAFETY_BLOCK'
     else:
@@ -154,7 +182,7 @@ def build_snapshot(now=None):
     return {
         'schema_version': 1,
         'updated_at_ms': now_ms,
-        'status': 'ERROR' if (not bot_active or bot_stalled or recorder_stale) else 'RUNNING',
+        'status': 'ERROR' if (not bot_active or bot_stalled or critical_stall or recorder_stale) else 'RUNNING',
         'services': services,
         'bot': {
             'classification': bot_classification,
@@ -181,12 +209,18 @@ def run_forever():
             snapshot = build_snapshot(started)
             bot = snapshot['bot']
             if (
-                bot['classification'] == 'EVENT_LOOP_STALLED'
+                bot['classification'] in {
+                    'EVENT_LOOP_STALLED',
+                    'BIAS_LOOP_STALLED',
+                    'ENTRY_LOOP_STALLED',
+                    'GUARDIAN_LOOP_STALLED',
+                }
                 and started - last_bot_restart >= RESTART_COOLDOWN_SECONDS
             ):
                 pid = int(snapshot['services']['bot'].get('pid', 0) or 0)
                 logging.critical(
-                    '[OPS] Bot event loop stalled; dump stack then restart pid=%s', pid
+                    '[OPS] Bot critical loop stalled (%s); dump stack then restart pid=%s',
+                    bot['classification'], pid
                 )
                 _restart_stalled_bot(pid)
                 last_bot_restart = started
