@@ -5,7 +5,7 @@ Purpose:
 - raise post-cost expectancy by classifying GO setups as NORMAL/HIGH/RUNNER;
 - allow strict GO_FAST only when its own causal contract is satisfied.
 """
-VERSION = "ENTRY_EDGE_TIER_S_V1"
+VERSION = "ENTRY_EDGE_TIER_S_V2_IMPACT"
 
 FEE_ROUNDTRIP_BPS = 10.0
 SLIPPAGE_BUFFER_BPS = 4.0
@@ -37,6 +37,49 @@ def _entry_flow_metrics(result):
     votes = _entry_votes(result)
     seat = votes.get("S2_multi_venue_executed_flow") or {}
     return seat.get("metrics") or {}
+
+
+def _price_impact_quality(result):
+    """Executed-flow -> cash-price conversion. Advisory unless evidence is extreme."""
+    pm = _entry_price_metrics(result)
+    fm = _entry_flow_metrics(result)
+    moves = pm.get("moves") or {}
+    venues = fm.get("venues") or {}
+    threshold = float((result or {}).get("price_threshold_bps") or 0.0)
+
+    cash_moves = [
+        max(0.0, float(moves.get(v) or 0.0))
+        for v in ("spot", "coinbase")
+        if v in moves
+    ]
+    flow_vals = [
+        max(0.0, float((row or {}).get("signed_imbalance") or 0.0))
+        for row in venues.values()
+    ]
+    supporters = len(fm.get("supporters") or ())
+    cash_impact = max(cash_moves) if cash_moves else 0.0
+    flow_strength = (sum(flow_vals) / len(flow_vals)) if flow_vals else 0.0
+
+    absorbed = bool(
+        supporters >= 2
+        and flow_strength >= 0.18
+        and threshold > 0.0
+        and cash_impact < threshold * 0.70
+    )
+    efficient = bool(
+        supporters >= 2
+        and threshold > 0.0
+        and cash_impact >= threshold
+        and flow_strength >= 0.10
+    )
+    return {
+        "status": "ABSORBED" if absorbed else ("PASS" if efficient else "NEUTRAL"),
+        "cash_impact_bps": round(cash_impact, 4),
+        "flow_strength": round(flow_strength, 4),
+        "flow_supporters": supporters,
+        "absorbed": absorbed,
+        "efficient": efficient,
+    }
 
 
 def _bias_votes(state):
@@ -84,13 +127,14 @@ def classify(result, state):
     price3 = len(pm.get("strong_supporters") or ()) == 3
     strong_flow = len(fm.get("strong_supporters") or ())
     strong_opp = len(fm.get("strong_opponents") or ())
+    impact = _price_impact_quality(result)
 
     cross = _bias_aligned(state, "S1_cross_price", side)
     price_x_oi = _bias_aligned(state, "S2_price_x_oi", side)
     multi_flow = _bias_aligned(state, "S3_multi_flow", side)
     bias_s_support = int(cross) + int(price_x_oi) + int(multi_flow)
 
-    if not (normal_ok or fast_ok):
+    if not (normal_ok or fast_ok) or impact["absorbed"]:
         edge_class = "LOW_EDGE"
     elif price3 and strong_flow >= 1 and price_x_oi and bias_s_support >= 2:
         edge_class = "RUNNER_EDGE"
@@ -121,8 +165,9 @@ def classify(result, state):
         "bias_s_support": bias_s_support,
         "price_x_oi_aligned": price_x_oi,
         "cross_price_aligned": cross,
-        "multi_flow_aligned": multi_flow,
-        "policy": "OI_UPGRADES_EXPECTANCY_NEVER_TIMING_VETO",
+       "multi_flow_aligned": multi_flow,
+        "price_impact": impact,
+        "policy": "OI_UPGRADES_EXPECTANCY_NEV_TIMING_VETO",
     }
 
 
