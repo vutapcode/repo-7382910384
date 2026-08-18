@@ -38,9 +38,11 @@ state.strategy_profile = strategy_profile.current_profile()
 state.execution_venue = "BINANCE_FUTURES_MAINNET"
 
 api = m.binance_api.BinanceAPI(
-    api_key=mainnet_safety.credential("binance_api_key", "BINANCE_API_KEY"),
-    secret_key=mainnet_safety.credential("binance_api_secret", "BINANCE_API_SECRET"),
+    api_key=os.getenv("BINANCE_API_KEY", "").strip(),
+    secret_key=os.getenv("BINANCE_API_SECRET", "").strip(),
 )
+# Compatibility marker for legacy safety helpers; BinanceAPI itself is mainnet-only.
+api.testnet = False
 
 
 async def supervise(name, factory):
@@ -62,7 +64,7 @@ def _write_bot_heartbeat(payload):
         prefix="bot_runtime_", suffix=".tmp", dir=BOT_HEARTBEAT_PATH.parent
     )
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        with os..fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"), default=str)
             handle.flush()
             os.fsync(handle.fileno())
