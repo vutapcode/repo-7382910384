@@ -54,20 +54,21 @@ def _bot_pid_still_current(pid):
 def _restart_stalled_bot_safe(pid):
     pid = int(pid or 0)
     if pid <= 0 or not _bot_pid_still_current(pid):
-        return
+        return False
     try:
         ops.os.kill(pid, ops.signal.SIGUSR1)
     except ProcessLookupError:
-        return
+        return False
 
     ops.time.sleep(0.5)
     if not _bot_pid_still_current(pid):
-        return
+        return False
 
     try:
         ops.os.kill(pid, ops.signal.SIGKILL)
     except ProcessLookupError:
-        pass
+        return False
+    return True
 
 
 ops._restart_stalled_bot = _restart_stalled_bot_safe
