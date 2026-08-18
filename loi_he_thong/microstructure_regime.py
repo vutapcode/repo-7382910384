@@ -1,8 +1,9 @@
 """Causal RAM-only regime adapter for Tier-S entry."""
 from collections import deque
 import time
+from loi_he_thong import flow_lead_engine
 
-VERSION = "MICRO_REGIME_V1"
+VERSION = "MICRO_REGIME_V2_FLOW_LEAD"
 
 def _f(x):
     try:
@@ -14,7 +15,7 @@ def _mid(s):
     b, a = _f(getattr(s, "best_bid", 0)), _f(getattr(s, "best_ask", 0))
     return (b + a) / 2.0 if b > 0 and a > b else max(b, a)
 
-def classify(state):
+def classify(state, side=None):
     now, px = time.time(), _mid(state)
     hist = getattr(state, "_micro_regime_hist", None)
     if hist is None:
@@ -50,19 +51,45 @@ def classify(state):
     elif len(hist) >= 8:
         signs = []
         rows = list(hist)[-10:]
-        for l, r in zip(rows, rows[1:]):
-            d = r[1] - l[1]
+        for left, right in zip(rows, rows[1:]):
+            d = right[1] - left[1]
             if abs(d) > max(px * 0.000015, 1e-9):
                 signs.append(1 if d > 0 else -1)
         flips = sum(a != b for a, b in zip(signs, signs[1:]))
         if flips >= 3 and abs(move_bps) <= max(1.5, atr_bps * 0.05):
             regime, pf, cf, ef = "CHOP", 1.18, 1.10, 0.90
 
+    direction = str(side or getattr(state, "bias_state", "") or "").upper()
+    lead = flow_lead_engine.analyze(state, direction)
+    if lead.get("status") == "OK":
+        persistence = _f(lead.get("persistence"))
+        oppose = _f(lead.get("oppose_ratio"))
+        lead_name = lead.get("lead")
+        accel = _f(lead.get("lead_accel_bps"))
+        if regime not in {"LIQUIDATION", "CHOP"} and lead_name == "CASH_LED" and persistence >= 0.58 and oppose <= 0.20:
+            regime = "EXPANSION" if regime == "NORMAL" else regime
+            pf = min(pf, 0.88)
+            cf = min(cf, 0.96)
+            ef = max(ef, 1.06)
+        if lead_name == "PERP_LED" and (_f(lead.get("lead_gap_bps")) >= 1.25 or accel >= 0.45):
+            pf = max(pf, 1.12)
+            cf = max(cf, 1.08)
+            ef = min(ef, 0.94)
+        if oppose >= 0.34:
+            pf = max(pf, 1.15)
+            cf = max(cf, 1.08)
+            ef = min(ef, 0.92)
+
     out = {
-        "version": VERSION, "regime": regime,
-        "price_factor": pf, "cost_factor": cf, "expectancy_factor": ef,
-        "move_bps": round(move_bps, 4), "oi_pct": round(oi_pct, 5),
+        "version": VERSION,
+        "regime": regime,
+        "price_factor": round(pf, 4),
+        "cost_factor": round(cf, 4),
+        "expectancy_factor": round(ef, 4),
+        "move_bps": round(move_bps, 4),
+        "oi_pct": round(oi_pct, 5),
         "vol_ratio": round(vr, 4),
+        "flow_lead": lead,
         "policy": "ADAPT_THRESHOLDS_ONLY_NO_SIGNAL_AUTHORITY",
     }
     state.tier_s_micro_regime = out
