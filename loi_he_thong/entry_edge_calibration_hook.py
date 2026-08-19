@@ -1,7 +1,7 @@
 """Apply bucketed empirical calibration to Tier-S entry edge without touching causal vetoes."""
 from loi_he_thong import edge_calibration_v2
 
-VERSION="ENTRY_EDGE_CAL_HOOK_V2"
+VERSION="ENTRY_EDGE_CAL_HOOK_V3_PRESERVE_ORIGINAL_VETO"
 
 def install(edge_module):
     if getattr(edge_module,"_edge_cal_v2_hooked",False):
@@ -11,6 +11,14 @@ def install(edge_module):
     def authorize(result,state):
         allowed,report=original(result,state)
         report=dict(report or {})
+
+        # Causal/hard veto authority is immutable. Calibration may only refine
+        # an entry that the original edge already authorized.
+        if not allowed:
+            report["calibration_skipped"]="ORIGINAL_EDGE_VETO"
+            report["policy"]="ORIGINAL_EDGE_VETO_PRESERVED"
+            return False,report
+
         edge_class=str(report.get("edge_class") or "UNKNOWN").upper()
         mode=str(report.get("entry_mode") or "NORMAL").upper()
         regime=((report.get("micro_regime") or {}).get("regime") or "NORMAL")
@@ -30,7 +38,7 @@ def install(edge_module):
         report["expected_excursion_bps_model"]=round(expected,4)
         report["cost_multiple_model"]=round(multiple,4)
         report["cost_ok"]=cost_ok
-        report["policy"]="CAUSAL_VETO_FIRST_BUCKETED_EMPIRICAL_EXPECTANCY_ONLY"
+        report["policy"]="ORIGINAL_EDGE_VETO_PRESERVED_BUCKETED_EMPIRICAL_EXPECTANCY_ONLY"
         return bool((result or {}).get("decision")=="GO" and cost_ok),report
 
     edge_module.authorize=authorize
