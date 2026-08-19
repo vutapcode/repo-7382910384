@@ -29,4 +29,8 @@ _module_surface = getattr(_runtime, "m", None)
 if _module_surface is not None:
     _export_surface(_module_surface, overwrite=False)
 
-KERNEL_VERSION = "TIER_S_RUNTIME_KERNEL_V2_MODULE_SURFACE"
+# Canonical kernel is fail-closed before any launcher-specific runtime policy runs.
+if hasattr(state, "execution_allowed"):
+    state.execution_allowed = False
+
+KERNEL_VERSION = "TIER_S_RUNTIME_KERNEL_V3_FAIL_CLOSED"
