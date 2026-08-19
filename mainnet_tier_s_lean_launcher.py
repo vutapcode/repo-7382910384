@@ -4,12 +4,15 @@ from loi_he_thong import tier_s_runtime_prune as prune
 from loi_he_thong import shadow_calibration_hook_v2
 from loi_he_thong import entry_regime_threshold_hook
 from loi_he_thong import entry_edge_calibration_hook
+from loi_he_thong import regime_oi_freshness_hook
 
 # Install early so risk/hardening wrappers capture the lean orchestrator.
 prune.install_app(shadow.app)
 
 import mainnet_tier_s_shadow_hardened_launcher as hardened
 
+# Neutralize stale OI before any regime-dependent threshold/edge adaptation.
+regime_oi_freshness_hook.install(hardened.runtime.edge.regime_engine)
 # Threshold adaptation is bounded and never overrides causal quorum/veto logic.
 entry_regime_threshold_hook.install(hardened.runtime.base.entry_council)
 # Bucketed empirical calibration only adjusts expectancy after the original causal edge report exists.
