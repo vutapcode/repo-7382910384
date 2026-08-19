@@ -1,4 +1,4 @@
-"""Expose liveness of the canonical Bias, Entry, and Guardian loops."""
+"""Expose scheduler-level liveness for the canonical Bias, Entry, and Guardian loops."""
 import time
 
 
@@ -38,12 +38,17 @@ def install(wrapper):
     state.critical_liveness_installed_at = time.time()
     state.critical_liveness_installed_mono = time.monotonic()
 
+    # Bias update_state is called once per Bias scheduler cycle.
     _wrap(state, base.bias_council, "update_state", "bias")
-    _wrap(state, base.entry_council, "evaluate", "entry")
 
-    # Guardian liveness describes loop progress, not whether risk.assess() happened.
-    # A stale Futures execution feed intentionally bypasses risk.assess() while
-    # Guardian remains alive and polling execution price.
+    # Entry scheduler pulse: _spot_fresh() is called on every flat Entry cycle,
+    # including deliberate WAIT_STALE_SPOT cycles. This measures scheduler progress
+    # instead of whether Entry Council happened to be eligible for evaluation.
+    _wrap(state, base, "_spot_fresh", "entry")
+
+    # Guardian scheduler pulse: exec_price() is called every active-position cycle,
+    # including stale-Spot HOLD cycles. It therefore measures loop progress rather
+    # than whether causal Guardian/risk evaluation happened.
     original_exec_price = wrapper.health.exec_price
 
     def exec_price_with_liveness(*args, **kwargs):
@@ -70,7 +75,6 @@ def install(wrapper):
     original_write = base.app._write_bot_heartbeat
 
     def write_with_liveness(payload):
-        now = time.time()
         mono = time.monotonic()
         enriched = dict(payload)
         loops = {}
