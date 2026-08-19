@@ -1,7 +1,7 @@
 """Volume- and reliability-weighted flow mean for Tier-S persistence analysis."""
 import math
 
-VERSION = "FLOW_WEIGHTING_HOOK_V1"
+VERSION = "FLOW_WEIGHTING_HOOK_V2_VOLUME_BTC"
 RELIABILITY = {
     "spot": 1.00,
     "futures": 1.00,
@@ -27,7 +27,7 @@ def install(flow_lead_module):
             if not isinstance(data, dict):
                 continue
             imbalance = _f(data.get("signed_imbalance"))
-            volume = max(0.0, _f(data.get("total_volume")))
+            volume = max(0.0, _f(data.get("volume_btc")))
             reliability = RELIABILITY.get(str(name).lower(), 0.90)
             raw_weight = reliability * math.sqrt(max(volume, 1e-9))
             items.append((imbalance, raw_weight))
