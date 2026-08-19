@@ -1,7 +1,7 @@
 [Unit]
 Description=SMC2026 out-of-process operational health supervisor
-After=network-online.target
-Wants=network-online.target
+After=network-online.target smc2026-bot.service
+Wants=network-online.target smc2026-bot.service
 
 [Service]
 Type=simple
