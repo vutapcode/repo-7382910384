@@ -1,4 +1,4 @@
-"""Fail-closed VPS preflight for Binance Futures MAINNET shadow runtime."""
+"""Fail-closed VPS preflight for the canonical Binance Futures MAINNET shadow runtime."""
 from pathlib import Path
 import os
 import sys
@@ -10,29 +10,22 @@ ENV_PATH = ROOT / ".env"
 API_PATH = ROOT / "3_thuc_thi" / "binance_api.py"
 LAUNCHER_PATH = ROOT / "mainnet_tier_s_lean_launcher.py"
 
+
 def fail(message):
     print(f"[PREFLIGHT] FAIL: {message}", file=sys.stderr)
     raise SystemExit(2)
 
-if not ENV_PATH.is_file():
-    fail("missing .env; copy .env.example to .env and fill Binance API credentials")
 
-load_dotenv(ENV_PATH, override=False)
-
-api_key = os.getenv("BINANCE_API_KEY", "").strip()
-api_secret = os.getenv("BINANCE_API_SECRET", "").strip()
-if not api_key or not api_secret:
-    fail("BINANCE_API_KEY/BINANCE_API_SECRET is empty in .env")
-if api_key.lower() in {"changeme", "your_key", "your_api_key"}:
-    fail("BINANCE_API_KEY still contains a placeholder")
-if api_secret.lower() in {"changeme", "your_secret", "your_api_secret"}:
-    fail("BINANCE_API_SECRET still contains a placeholder")
+# .env is optional for pure shadow. systemd supplies the canonical fail-closed flags,
+# and all active market-data feeds are public. Load local overrides only when present.
+if ENV_PATH.is_file():
+    load_dotenv(ENV_PATH, override=False)
 
 if not API_PATH.is_file() or not LAUNCHER_PATH.is_file():
     fail("required mainnet runtime files are missing")
 
 api_source = API_PATH.read_text(encoding="utf-8")
-if 'https://fapi.binance.com' not in api_source:
+if "https://fapi.binance.com" not in api_source:
     fail("Binance Futures MAINNET endpoint is not configured")
 
 unsafe_flags = (
@@ -41,10 +34,21 @@ unsafe_flags = (
     "SMC_MAINNET_EXCLUSIVE_ACCOUNT",
 )
 enabled = [
-    name for name in unsafe_flags
+    name
+    for name in unsafe_flags
     if os.getenv(name, "false").strip().lower() in {"1", "true", "yes", "on"}
 ]
 if enabled:
     fail("shadow package must stay fail-closed; enabled flags: " + ",".join(enabled))
 
-print("[PREFLIGHT] OK: Binance Futures MAINNET credentials present; SHADOW fail-closed")
+# Credentials are not a startup dependency in canonical shadow mode. The Binance REST
+# adapter may be constructed with empty credentials, while all mutation methods are
+# blocked by the shadow launcher and the systemd flags above remain false.
+api_key = os.getenv("BINANCE_API_KEY", "").strip()
+api_secret = os.getenv("BINANCE_API_SECRET", "").strip()
+credential_state = "present" if api_key and api_secret else "not-required"
+
+print(
+    "[PREFLIGHT] OK: Binance Futures MAINNET public-data SHADOW; "
+    f"credentials={credential_state}; fail-closed flags verified"
+)
