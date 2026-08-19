@@ -8,6 +8,7 @@ from loi_he_thong import regime_oi_freshness_hook
 from loi_he_thong import flow_weighting_hook
 from loi_he_thong import regime_snapshot_hook
 from loi_he_thong import flow_alignment_hook
+from loi_he_thong import shadow_entry_metadata_persistence_hook
 
 # Install early so risk/hardening wrappers capture the lean orchestrator.
 prune.install_app(shadow.app)
@@ -25,6 +26,8 @@ regime_snapshot_hook.install(hardened.runtime.edge.regime_engine)
 entry_regime_threshold_hook.install(hardened.runtime.base.entry_council)
 # Bucketed empirical calibration only adjusts expectancy after the original causal edge report exists.
 entry_edge_calibration_hook.install(hardened.runtime.edge)
+# Persist active trade entry-edge metadata before account-state restore runs.
+shadow_entry_metadata_persistence_hook.install(hardened.runtime.runtime_state)
 # Learn only from completed shadow outcomes, using side/mode/regime/edge-class buckets.
 shadow_calibration_hook_v2.install(hardened)
 
