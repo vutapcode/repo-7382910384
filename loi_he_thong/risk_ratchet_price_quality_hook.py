@@ -1,7 +1,7 @@
 """Protect profit ratchet from isolated Futures wicks without weakening hard-stop execution."""
 from __future__ import annotations
 
-VERSION = "RISK_RATCHET_PRICE_QUALITY_V1"
+VERSION = "RISK_RATCHET_PRICE_QUALITY_V2_SPOT_FALLBACK"
 
 _SPOT_MAX_AGE_SEC = 3.0
 _COINBASE_MAX_AGE_SEC = 5.0
@@ -13,22 +13,45 @@ def _mid(bid, ask):
     return (bid + ask) / 2.0 if bid > 0.0 and ask > bid else 0.0
 
 
+def _fresh(ts, now, max_age):
+    ts = float(ts or 0.0)
+    return ts > 0.0 and now >= ts and now - ts <= max_age
+
+
 def _fair_price(state, now):
     if state is None:
-        return None, None
-    spot_ts = float(getattr(state, "thoi_gian_tick_cuoi", 0.0) or 0.0)
-    cb_ts = float(getattr(state, "thoi_gian_coinbase_ticker_cuoi", 0.0) or 0.0)
+        return None, None, None
+
     spot = _mid(getattr(state, "best_bid", 0.0), getattr(state, "best_ask", 0.0))
     cb = float(getattr(state, "coinbase_price", 0.0) or 0.0)
-    spot_fresh = spot > 0.0 and spot_ts > 0.0 and now >= spot_ts and now - spot_ts <= _SPOT_MAX_AGE_SEC
-    cb_fresh = cb > 0.0 and cb_ts > 0.0 and now >= cb_ts and now - cb_ts <= _COINBASE_MAX_AGE_SEC
-    if not (spot_fresh and cb_fresh):
-        return None, None
-    fair = (spot + cb) / 2.0
+    spot_fresh = spot > 0.0 and _fresh(getattr(state, "thoi_gian_tick_cuoi", 0.0), now, _SPOT_MAX_AGE_SEC)
+    cb_fresh = cb > 0.0 and _fresh(
+        getattr(state, "thoi_gian_coinbase_ticker_cuoi", 0.0),
+        now,
+        _COINBASE_MAX_AGE_SEC,
+    )
+
+    if not spot_fresh and not cb_fresh:
+        return None, None, None
+
+    if spot_fresh and cb_fresh:
+        fair = (spot + cb) / 2.0
+        source = "SPOT_COINBASE"
+        fallback_multiplier = 1.0
+    elif spot_fresh:
+        fair = spot
+        source = "SPOT_FALLBACK"
+        fallback_multiplier = 1.75
+    else:
+        fair = cb
+        source = "COINBASE_FALLBACK"
+        fallback_multiplier = 1.50
+
     atr = float(getattr(state, "atr_1m", 0.0) or 0.0)
     atr_bps = atr / fair * 10000.0 if atr > 0.0 and fair > 0.0 else 0.0
-    tolerance_bps = max(4.0, min(15.0, atr_bps * 0.15 if atr_bps > 0.0 else 6.0))
-    return fair, tolerance_bps
+    base = max(4.0, min(15.0, atr_bps * 0.15 if atr_bps > 0.0 else 6.0))
+    tolerance_bps = min(25.0, base * fallback_multiplier)
+    return fair, tolerance_bps, source
 
 
 def _is_favorable_outlier(p, px, fair, tolerance_bps):
@@ -76,7 +99,7 @@ def install(risk):
         result = original(p, px, guardian=guardian, market_state=market_state, now=now)
 
         # Hard stop and any already-authorized exit remain untouched.
-        if not isinstance(result, dict) or result.get("decision") != "HOLD"
+        if not isinstance(result, dict) or result.get("decision") != "HOLD":
             return result
 
         _, _, _, states = risk.tier_mode(guardian)
@@ -84,7 +107,7 @@ def install(risk):
             return result
 
         ts = float(result.get("ts", 0.0) or (now if now is not None else 0.0))
-        fair, tolerance_bps = _fair_price(market_state, ts)
+        fair, tolerance_bps, source = _fair_price(market_state, ts)
         if fair is None or not _is_favorable_outlier(p, px, fair, tolerance_bps):
             return result
 
@@ -105,6 +128,7 @@ def install(risk):
             "cross_venue_fair": float(fair),
             "tolerance_bps": float(tolerance_bps),
             "mode": "CROSS_VENUE_CAPPED",
+            "source": source,
         }
         return out
 
