@@ -47,6 +47,9 @@ class TierSKernelContractTests(unittest.TestCase):
             self.assertTrue(hasattr(khoi_dong, name), name)
             self.assertIs(getattr(khoi_dong, name), getattr(khoi_dong.m, name))
 
+    def test_kernel_is_fail_closed_by_default(self):
+        self.assertFalse(bool(khoi_dong.state.execution_allowed))
+
     def test_strategy_profile_is_current_tier_s_causal_metadata(self):
         profile = strategy_profile.current_profile()
         self.assertEqual(profile["name"], "TIER_S_CAUSAL")
