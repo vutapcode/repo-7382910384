@@ -4,7 +4,7 @@ import contextlib
 import logging
 import time
 
-VERSION = "WS_IDLE_RECOVERY_V1"
+VERSION = "WS_IDLE_RECOVERY_V2_CAUSAL_EPOCH"
 FLOW_IDLE_SECONDS = 10.0
 CHECK_SECONDS = 1.0
 
@@ -15,9 +15,21 @@ def _clear_queue(state, name):
         value.clear()
 
 
-def _reset_spot(state):
+def _reset_spot_causal_epoch(state):
+    """Drop only short-lived Spot evidence that must not bridge a feed gap."""
     _clear_queue(state, "danh_sach_khop_lenh")
+    _clear_queue(state, "flow_1s_buffer")
+    _clear_queue(state, "trade_flow_timeline")
     state.thoi_gian_dong_tien_cuoi = 0.0
+    state.last_trade_event_time_s = 0.0
+    state.last_3s_window_ts = 0.0
+    state.current_vol_3s = 0.0
+    state.current_cvd_sell_3s = 0.0
+    state.current_cvd_buy_3s = 0.0
+
+
+def _reset_spot(state):
+    _reset_spot_causal_epoch(state)
 
 
 def _reset_futures(state):
