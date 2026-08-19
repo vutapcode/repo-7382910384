@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed repository source + canonical import integrity check for VPS startup."""
+"""Fail-closed repository + canonical runtime integrity check."""
 from __future__ import annotations
 
 import json
@@ -9,25 +9,15 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TEXT_EXTS = {".py", ".service", ".json", ".md", ".txt"}
-SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv", "venv"}
-CANONICAL_SMOKE_TIMEOUT_SECONDS = 15.0
+SKIP = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv", "venv"}
+TEXT_EXTS = {".py", ".json", ".service", ".md", ".txt"}
 
-
-def iter_files():
-    for path in ROOT.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in SKIP_DIRS for part in path.parts):
-            continue
-        if path.suffix.lower() in TEXT_EXTS:
-            yield path
-
-
-def canonical_import_smoke():
-    script = r"""
+SMOKE = r"""
 import khoi_dong
 import mainnet_tier_s_lean_launcher as lean
+
+risk = lean.hardened.runtime
+shadow = risk.base
 
 required_kernel = (
     "state", "api", "main", "tai_gia_tick", "tai_dong_tien",
@@ -37,56 +27,70 @@ missing = [name for name in required_kernel if not hasattr(khoi_dong, name)]
 if missing:
     raise RuntimeError("kernel missing: " + ",".join(missing))
 
-risk = lean.hardened.runtime
-shadow = risk.base
 if shadow.app is not khoi_dong:
     raise RuntimeError("shadow kernel identity mismatch")
-
 for name in ("bias_council", "entry_council", "guardian_s"):
     if not hasattr(shadow, name):
         raise RuntimeError("shadow strategy missing: " + name)
 
-for name in ("edge", "guardian", "runtime_state"):
+if risk.base is not shadow:
+    raise RuntimeError("risk launcher base identity mismatch")
+for name in ("edge", "risk", "runtime_state"):
     if not hasattr(risk, name):
         raise RuntimeError("risk wiring missing: " + name)
 
 if bool(getattr(khoi_dong.state, "execution_allowed", True)):
     raise RuntimeError("canonical state is not fail-closed")
 """
+
+
+def files():
+    for path in ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in SKIP for part in path.parts):
+            continue
+        if path.suffix.lower() in TEXT_EXTS:
+            yield path
+
+
+def smoke_error():
     env = os.environ.copy()
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["SMC_ENABLE_TRADING"] = "false"
-    env["SMC_MAINNET_TRADING_ENABLED"] = "false"
-    env["SMC_MAINNET_ARMED"] = "false"
-    env["SMC_MAINNET_EXCLUSIVE_ACCOUNT"] = "false"
-    completed = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=CANONICAL_SMOKE_TIMEOUT_SECONDS,
-        check=False,
-    )
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "unknown import failure").strip()
-        return f"CANONICAL_IMPORT:{detail[-1200:]}"
+    env.update({
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "SMC_ENABLE_TRADING": "false",
+        "SMC_MAINNET_TRADING_ENABLED": "false",
+        "SMC_MAINNET_ARMED": "false",
+        "SMC_MAINNET_EXCLUSIVE_ACCOUNT": "false",
+    })
+    try:
+        done = subprocess.run(
+            [sys.executable, "-c", SMOKE],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "CANONICAL_IMPORT:timeout>15s"
+    if done.returncode:
+        detail = (done.stderr or done.stdout or "unknown import failure").strip()
+        return "CANONICAL_IMPORT:" + detail[-1200:]
     return None
 
 
-def main() -> int:
+def main():
     errors = []
-    checked = 0
-    py_checked = 0
-    json_checked = 0
+    checked = py_checked = json_checked = 0
 
-    for path in sorted(iter_files()):
+    for path in sorted(files()):
         checked += 1
         rel = path.relative_to(ROOT)
         raw = path.read_bytes()
-
         if b"\x00" in raw:
-            errors.append(f"{rel}: NULL_BYTE")
+            errors.append(f"{rel}: NUL_BYTE")
             continue
         if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
             errors.append(f"{rel}: UTF16_BOM")
@@ -94,22 +98,21 @@ def main() -> int:
         if raw.startswith(b"\xef\xbb\xbf"):
             errors.append(f"{rel}: UTF8_BOM")
             continue
-
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             errors.append(f"{rel}: INVALID_UTF8:{exc.start}")
             continue
 
-        if path.suffix.lower() == ".py":
+        suffix = path.suffix.lower()
+        if suffix == ".py":
             py_checked += 1
             try:
                 compile(text, str(rel), "exec", dont_inherit=True)
             except (SyntaxError, ValueError, TypeError) as exc:
                 line = getattr(exc, "lineno", None)
-                where = f":{line}" if line else ""
-                errors.append(f"{rel}{where}: PY_COMPILE:{exc}")
-        elif path.suffix.lower() == ".json":
+                errors.append(f"{rel}:{line or ''}: PY_COMPILE:{exc}")
+        elif suffix == ".json":
             json_checked += 1
             try:
                 json.loads(text)
@@ -117,19 +120,14 @@ def main() -> int:
                 errors.append(f"{rel}:{exc.lineno}: JSON_PARSE:{exc.msg}")
 
     if not errors:
-        try:
-            smoke_error = canonical_import_smoke()
-        except subprocess.TimeoutExpired:
-            smoke_error = f"CANONICAL_IMPORT:timeout>{CANONICAL_SMOKE_TIMEOUT_SECONDS:.0f}s"
-        except Exception as exc:
-            smoke_error = f"CANONICAL_IMPORT:{type(exc).__name__}:{exc}"
-        if smoke_error:
-            errors.append(smoke_error)
+        error = smoke_error()
+        if error:
+            errors.append(error)
 
     if errors:
         print("[REPO-INTEGRITY] FAIL", file=sys.stderr)
-        for item in errors:
-            print(f" - {item}", file=sys.stderr)
+        for error in errors:
+            print(" - " + error, file=sys.stderr)
         print(
             f"[REPO-INTEGRITY] checked={checked} python={py_checked} "
             f"json={json_checked} errors={len(errors)}",
