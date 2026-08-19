@@ -7,13 +7,15 @@ from loi_he_thong import entry_edge_calibration_hook
 from loi_he_thong import regime_oi_freshness_hook
 from loi_he_thong import flow_weighting_hook
 from loi_he_thong import regime_snapshot_hook
+from loi_he_thong import flow_alignment_hook
 
 # Install early so risk/hardening wrappers capture the lean orchestrator.
 prune.install_app(shadow.app)
 
 import mainnet_tier_s_shadow_hardened_launcher as hardened
 
-# Weight persistence by normalized venue volume before regime consumes flow context.
+# Use two-tier arrival alignment, then weight persistence by normalized venue volume.
+flow_alignment_hook.install(hardened.runtime.edge.regime_engine.flow_lead_engine)
 flow_weighting_hook.install(hardened.runtime.edge.regime_engine.flow_lead_engine)
 # Neutralize stale OI before any regime-dependent threshold/edge adaptation.
 regime_oi_freshness_hook.install(hardened.runtime.edge.regime_engine)
