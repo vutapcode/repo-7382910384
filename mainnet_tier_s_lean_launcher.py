@@ -13,11 +13,15 @@ from loi_he_thong import bias_oi_freshness_hook
 from loi_he_thong import entry_futures_flow_scan_hook
 from loi_he_thong import entry_s2_snapshot_quorum_hook
 from loi_he_thong import disk_pressure_gate
+from loi_he_thong import durable_shadow_journal
 
 # Install early so risk/hardening wrappers capture the lean orchestrator.
 prune.install_app(shadow.app)
 
 import mainnet_tier_s_shadow_hardened_launcher as hardened
+
+# Make critical ENTRY/EXIT journal transitions durable before live decisions begin.
+durable_shadow_journal.install(shadow)
 
 # Keep Bias OI freshness aligned with the 1s collector; stale OI abstains instead of voting.
 bias_oi_freshness_hook.install(shadow.bias_council)
