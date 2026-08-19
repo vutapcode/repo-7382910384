@@ -17,6 +17,7 @@ from loi_he_thong import durable_shadow_journal
 from loi_he_thong import ws_idle_recovery_hook
 from loi_he_thong import shadow_dynamic_sizing_hook
 from loi_he_thong import entry_exchange_independence_hook
+from loi_he_thong import risk_ratchet_price_quality_hook
 
 # Recover public feed half-open stalls before the lean task plan starts.
 ws_idle_recovery_hook.install(shadow.app)
@@ -29,6 +30,7 @@ import mainnet_tier_s_shadow_hardened_launcher as hardened
 # Make critical ENTRY/EXIT journal transitions durable before live decisions begin.
 durable_shadow_journal.install(shadow)
 shadow_dynamic_sizing_hook.install(shadow)
+risk_ratchet_price_quality_hook.install(hardened.runtime.risk)
 
 # Keep Bias OI freshness aligned with the 1s collector; stale OI abstains instead of voting.
 bias_oi_freshness_hook.install(shadow.bias_council)
