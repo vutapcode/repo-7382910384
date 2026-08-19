@@ -48,5 +48,13 @@ class WsIdleRecoveryHookTest(unittest.TestCase):
         self.assertEqual(state.cvd_current, 55.0)
 
 
+    def test_progress_marker_tracks_changes_not_wall_clock_age(self):
+        state = SimpleNamespace(a=100.0, b=200.0)
+        first = hook._progress_marker(state, ("a", "b"))
+        state.a = 50.0
+        second = hook._progress_marker(state, ("a", "b"))
+        self.assertNotEqual(first, second)
+        self.assertEqual(second, (50.0, 200.0))
+
 if __name__ == "__main__":
     unittest.main()
