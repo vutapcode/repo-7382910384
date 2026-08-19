@@ -14,6 +14,10 @@ from loi_he_thong import entry_futures_flow_scan_hook
 from loi_he_thong import entry_s2_snapshot_quorum_hook
 from loi_he_thong import disk_pressure_gate
 from loi_he_thong import durable_shadow_journal
+from loi_he_thong import ws_idle_recovery_hook
+
+# Recover public feed half-open stalls before the lean task plan starts.
+ws_idle_recovery_hook.install(shadow.app)
 
 # Install early so risk/hardening wrappers capture the lean orchestrator.
 prune.install_app(shadow.app)
