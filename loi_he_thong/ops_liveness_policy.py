@@ -1,6 +1,6 @@
 """Canonical position-aware critical-loop liveness policy for Tier-S health supervision."""
 
-VERSION = "OPS_LIVENESS_POLICY_V2_SCHEDULER_AWARE"
+VERSION = "OPS_LIVENESS_POLICY_V3_FLAT_TRANSITION_GRACE"
 
 
 def install(safe_module):
@@ -8,8 +8,11 @@ def install(safe_module):
         return VERSION
 
     ops = safe_module.ops
+    previous_position_active = None
 
     def classify(heartbeat):
+        nonlocal previous_position_active
+
         try:
             installed_age = heartbeat.get("critical_liveness_installed_age_sec")
             if installed_age is None:
@@ -25,17 +28,15 @@ def install(safe_module):
 
         loops = heartbeat.get("critical_loops") or {}
         position_active = bool(heartbeat.get("shadow_position_active", False))
+        flat_transition_grace = previous_position_active is True and not position_active
+        previous_position_active = position_active
 
-        # Bias is the directional control scheduler in every state.
+        # Bias is always live. Entry owns flat-state scheduling; Guardian owns open positions.
         limits = {"bias": ops.BIAS_ENTRY_STALE_SECONDS}
-
         if position_active:
-            # Entry is intentionally dormant while Guardian owns an open position.
             limits["guardian"] = ops.GUARDIAN_STALE_SECONDS
-        else:
-            # Entry liveness now measures its scheduler pulse (_spot_fresh), not whether
-            # the Council was eligible to evaluate. Feed-stale WAIT cycles therefore remain
-            # healthy while a genuinely stuck Entry scheduler is detectable.
+        elif not flat_transition_grace:
+            # Entry heartbeat is the scheduler pulse (_spot_fresh), so safety waits remain healthy.
             limits["entry"] = ops.BIAS_ENTRY_STALE_SECONDS
 
         for name, limit in limits.items():
