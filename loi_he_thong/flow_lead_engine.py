@@ -1,5 +1,6 @@
-"""RAM-only flow persistence and Spot/Perp lead analysis for Tier-S entry."""
-VERSION = "FLOW_LEAD_ENGINE_V1"
+"""RAM-only flow persistence and freshness-aligned Spot/Perp lead analysis for Tier-S."""
+VERSION = "FLOW_LEAD_ENGINE_V2_ALIGNED"
+MAX_SKEW_S = 0.30
 
 def _f(x):
     try:
@@ -32,21 +33,44 @@ def _signed_bps(cur, ref, side):
     direction = 1.0 if str(side).upper() == "LONG" else -1.0
     return (cur - ref) / ref * 10000.0 * direction
 
+def _freshness(state):
+    spot = _f(getattr(state, "thoi_gian_tick_cuoi", 0.0))
+    coinbase = _f(getattr(state, "thoi_gian_coinbase_ticker_cuoi", 0.0))
+    futures = _f(getattr(state, "execution_price_time", 0.0))
+    values = [v for v in (spot, coinbase, futures) if v > 0.0]
+    if len(values) < 3:
+        return {"aligned": False, "skew_s": None}
+    skew = max(values) - min(values)
+    return {"aligned": skew <= MAX_SKEW_S, "skew_s": round(skew, 4)}
+
 def analyze(state, side):
-    """Return cheap causal context only; never creates a trade signal."""
+    """Return context only; never creates a trade signal."""
     flow_rows = list(getattr(state, "entry_causal_flow_history", ()) or ())[-24:]
     price_rows = list(getattr(state, "entry_shadow_price_history", ()) or ())[-32:]
+    fresh = _freshness(state)
+
     if not flow_rows or not price_rows:
         return {
             "version": VERSION, "status": "WARMUP", "persistence": 0.0,
             "oppose_ratio": 0.0, "lead": "UNKNOWN", "lead_gap_bps": 0.0,
-            "lead_accel_bps": 0.0,
+            "lead_accel_bps": 0.0, "freshness": fresh,
         }
 
     recent = flow_rows[-12:]
     means = [_flow_mean(r) for r in recent]
     persistence = sum(v >= 0.08 for v in means) / len(means) if means else 0.0
     oppose_ratio = sum(v <= -0.08 for v in means) / len(means) if means else 0.0
+
+    if not fresh["aligned"]:
+        return {
+            "version": VERSION, "status": "UNALIGNED",
+            "persistence": round(persistence, 4),
+            "oppose_ratio": round(oppose_ratio, 4),
+            "flow_mean": round(sum(means) / len(means), 4) if means else 0.0,
+            "lead": "UNKNOWN", "lead_gap_bps": 0.0, "lead_accel_bps": 0.0,
+            "freshness": fresh,
+            "policy": "NO_LEAD_INFERENCE_WHEN_FEEDS_ARE_TIME_SKEWED",
+        }
 
     now_row = price_rows[-1]
     now = _f(now_row.get("ts"))
@@ -85,5 +109,6 @@ def analyze(state, side):
         "lead": lead,
         "lead_gap_bps": round(fast_gap, 4),
         "lead_accel_bps": round(accel, 4),
-        "policy": "CONTEXT_ONLY_NO_SIGNAL_AUTHORITY",
+        "freshness": fresh,
+        "policy": "CONTEXT_ONLY_TIME_ALIGNED_NO_SIGNAL_AUTHORITY",
     }
