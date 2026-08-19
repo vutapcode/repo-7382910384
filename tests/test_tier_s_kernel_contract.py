@@ -2,6 +2,7 @@ import unittest
 
 import khoi_dong
 from loi_he_thong import strategy_profile
+from loi_he_thong import tier_s_bootstrap_modules as bootstrap_modules
 
 
 class TierSKernelContractTests(unittest.TestCase):
@@ -49,6 +50,9 @@ class TierSKernelContractTests(unittest.TestCase):
 
     def test_kernel_is_fail_closed_by_default(self):
         self.assertFalse(bool(khoi_dong.state.execution_allowed))
+
+    def test_module_registry_is_fail_closed_before_launcher_policy(self):
+        self.assertFalse(bool(bootstrap_modules.bo_nho_ram.state.execution_allowed))
 
     def test_strategy_profile_is_current_tier_s_causal_metadata(self):
         profile = strategy_profile.current_profile()
