@@ -4,7 +4,7 @@ import contextlib
 import logging
 import time
 
-VERSION = "WS_IDLE_RECOVERY_V2_CAUSAL_EPOCH"
+VERSION = "WS_IDLE_RECOVERY_V3_REGIME_EPOCH"
 FLOW_IDLE_SECONDS = 10.0
 CHECK_SECONDS = 1.0
 
@@ -20,6 +20,7 @@ def _reset_spot_causal_epoch(state):
     _clear_queue(state, "danh_sach_khop_lenh")
     _clear_queue(state, "flow_1s_buffer")
     _clear_queue(state, "trade_flow_timeline")
+    _clear_queue(state, "_micro_regime_hist")
     state.thoi_gian_dong_tien_cuoi = 0.0
     state.last_trade_event_time_s = 0.0
     state.last_3s_window_ts = 0.0
@@ -60,7 +61,7 @@ def _latest_timestamp(state, names):
 def _wrap(module, name, label, timestamp_names, reset):
     original = getattr(module, name)
     marker = f"_tier_s_idle_wrapped_{name}"
-    if getattr(module, marker, False):
+    if getatr(module, marker, False):
         return
 
     async def guarded(*args, **kwargs):
