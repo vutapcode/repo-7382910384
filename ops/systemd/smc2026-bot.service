@@ -40,6 +40,9 @@ Environment=SMC_SHADOW_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/mainnet_sha
 UMask=0077
 CPUAccounting=true
 MemoryAccounting=true
+CPUQuota=200%
+MemoryHigh=768M
+MemoryMax=1G
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
