@@ -3,7 +3,8 @@ import os
 import time
 from pathlib import Path
 
-_CHECK_INTERVAL_SEC = 30.0
+_HEALTHY_CHECK_INTERVAL_SEC = 30.0
+_PRESSURE_RECHECK_INTERVAL_SEC = 5.0
 _MIN_FREE_BYTES = int(os.environ.get("SMC_MIN_FREE_DISK_BYTES", str(256 * 1024 * 1024)))
 _MIN_FREE_RATIO = float(os.environ.get("SMC_MIN_FREE_DISK_RATIO", "0.02"))
 
@@ -51,7 +52,6 @@ def install(wrapper):
         mono = time.monotonic()
         check_after = float(getattr(state_obj, "shadow_disk_check_after_mono", 0.0) or 0.0)
         if mono >= check_after:
-            state_obj.shadow_disk_check_after_mono = mono + _CHECK_INTERVAL_SEC
             try:
                 free_bytes, free_ratio = _measure(_journal_root())
                 pressure = free_bytes < _MIN_FREE_BYTES or free_ratio < _MIN_FREE_RATIO
@@ -60,8 +60,15 @@ def install(wrapper):
                 state_obj.shadow_disk_pressure = pressure
                 state_obj.shadow_disk_check_error = None
             except OSError as exc:
+                pressure = True
                 state_obj.shadow_disk_pressure = True
                 state_obj.shadow_disk_check_error = f"{type(exc).__name__}:{exc}"[:300]
+
+            # Healthy filesystems are cheap to sample infrequently. Once pressure is
+            # detected, re-check quickly so a cleanup/recovery can resume valid
+            # entries without waiting a full healthy interval.
+            interval = _PRESSURE_RECHECK_INTERVAL_SEC if pressure else _HEALTHY_CHECK_INTERVAL_SEC
+            state_obj.shadow_disk_check_after_mono = mono + interval
 
         if bool(getattr(state_obj, "shadow_disk_pressure", False)):
             return _wait_result(base, state_obj, now, side, "DISK_PRESSURE")
