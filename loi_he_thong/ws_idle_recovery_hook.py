@@ -4,7 +4,7 @@ import contextlib
 import logging
 import time
 
-VERSION = "WS_IDLE_RECOVERY_V3_REGIME_EPOCH"
+VERSION = "WS_IDLE_RECOVERY_V4_MONOTONIC_PROGRESS"
 FLOW_IDLE_SECONDS = 10.0
 CHECK_SECONDS = 1.0
 
@@ -48,37 +48,41 @@ def _reset_coinbase(state):
     state.coinbase_cvd_5m = 0.0
 
 
-def _latest_timestamp(state, names):
-    latest = 0.0
+def _progress_marker(state, names):
+    marker = []
     for name in names:
         try:
-            latest = max(latest, float(getattr(state, name, 0.0) or 0.0))
+            marker.append(float(getattr(state, name, 0.0) or 0.0))
         except (TypeError, ValueError):
-            continue
-    return latest
+            marker.append(0.0)
+    return tuple(marker)
 
 
 def _wrap(module, name, label, timestamp_names, reset):
     original = getattr(module, name)
-    marker = f"_tier_s_idle_wrapped_{name}"
-    if getatr(module, marker, False):
+    marker_attr = f"_tier_s_idle_wrapped_{name}"
+    if getattr(module, marker_attr, False):
         return
 
     async def guarded(*args, **kwargs):
         state = args[-1] if args else kwargs.get("bo_nho_ram")
         while True:
             child = asyncio.create_task(original(*args, **kwargs))
-            started = time.monotonic()
+            last_marker = _progress_marker(state, timestamp_names)
+            last_progress_mono = time.monotonic()
             try:
                 while True:
                     done, _ = await asyncio.wait({child}, timeout=CHECK_SECONDS)
                     if child in done:
                         return await child
 
-                    latest = _latest_timestamp(state, timestamp_names)
-                    if latest > 0.0 and time.time() - latest <= FLOW_IDLE_SECONDS:
+                    current_marker = _progress_marker(state, timestamp_names)
+                    if current_marker != last_marker:
+                        last_marker = current_marker
+                        last_progress_mono = time.monotonic()
                         continue
-                    if latest <= 0.0 and time.monotonic() - started <= FLOW_IDLE_SECONDS:
+
+                    if time.monotonic() - last_progress_mono <= FLOW_IDLE_SECONDS:
                         continue
 
                     reset(state)
@@ -98,7 +102,7 @@ def _wrap(module, name, label, timestamp_names, reset):
                         await child
 
     setattr(module, name, guarded)
-    setattr(module, marker, True)
+    setattr(module, marker_attr, True)
 
 
 def install(app):
