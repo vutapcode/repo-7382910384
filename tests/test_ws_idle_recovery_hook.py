@@ -11,6 +11,7 @@ class WsIdleRecoveryHookTest(unittest.TestCase):
             danh_sach_khop_lenh=deque([{"x": 1}]),
             flow_1s_buffer=deque([{"x": 2}]),
             trade_flow_timeline=deque([{"x": 3}]),
+            _micro_regime_hist=deque([{"x": 4}]),
             thoi_gian_dong_tien_cuoi=123.0,
             last_trade_event_time_s=124.0,
             last_3s_window_ts=125.0,
@@ -32,6 +33,7 @@ class WsIdleRecoveryHookTest(unittest.TestCase):
         self.assertEqual(len(state.danh_sach_khop_lenh), 0)
         self.assertEqual(len(state.flow_1s_buffer), 0)
         self.assertEqual(len(state.trade_flow_timeline), 0)
+        self.assertEqual(len(state._micro_regime_hist), 0)
         self.assertEqual(state.thoi_gian_dong_tien_cuoi, 0.0)
         self.assertEqual(state.last_trade_event_time_s, 0.0)
         self.assertEqual(state.last_3s_window_ts, 0.0)
