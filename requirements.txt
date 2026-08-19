@@ -1,6 +1,5 @@
 aiohttp==3.14.3
 binance-futures-connector==4.2.0
-google-genai==2.17.0
 orjson==3.11.9
 python-dotenv==1.2.2
 uvloop==0.22.1
