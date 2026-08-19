@@ -1,6 +1,6 @@
 """Canonical position-aware critical-loop liveness policy for Tier-S health supervision."""
 
-VERSION = "OPS_LIVENESS_POLICY_V1_READINESS_AWARE"
+VERSION = "OPS_LIVENESS_POLICY_V2_SCHEDULER_AWARE"
 
 
 def install(safe_module):
@@ -25,18 +25,18 @@ def install(safe_module):
 
         loops = heartbeat.get("critical_loops") or {}
         position_active = bool(heartbeat.get("shadow_position_active", False))
-        system_ready = bool(heartbeat.get("system_ready", False))
 
-        # Bias remains the directional control loop in every state.
+        # Bias is the directional control scheduler in every state.
         limits = {"bias": ops.BIAS_ENTRY_STALE_SECONDS}
 
         if position_active:
-            # Entry is intentionally dormant while Guardian owns an open trade.
+            # Entry is intentionally dormant while Guardian owns an open position.
             limits["guardian"] = ops.GUARDIAN_STALE_SECONDS
-        elif system_ready:
-            # Only require Entry when fresh price data makes evaluation possible.
+        else:
+            # Entry liveness now measures its scheduler pulse (_spot_fresh), not whether
+            # the Council was eligible to evaluate. Feed-stale WAIT cycles therefore remain
+            # healthy while a genuinely stuck Entry scheduler is detectable.
             limits["entry"] = ops.BIAS_ENTRY_STALE_SECONDS
-        # Flat + not ready is a deliberate safety wait, not an Entry stall.
 
         for name, limit in limits.items():
             item = loops.get(name) or {}
