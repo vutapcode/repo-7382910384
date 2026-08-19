@@ -1,7 +1,9 @@
 """Small wrapper that suppresses stale critical-loop state only during PID startup grace."""
+import sys
 import time
 
 from loi_he_thong import ops_supervisor as ops
+from loi_he_thong import ops_liveness_policy
 
 _orig_build_snapshot = ops.build_snapshot
 _PID_FIRST_SEEN_MONO = {}
@@ -31,7 +33,6 @@ def _heartbeat_monotonic_age(heartbeat):
         return None
     if stamp <= 0:
         return None
-
     delta_ns = int(time.monotonic_ns()) - stamp
     if delta_ns < 0:
         return float("inf")
@@ -130,11 +131,13 @@ def build_snapshot(now=None):
             bool(persistence.get("dirty", False))
             and snapshot["bot"].get("classification") in {"IDLE_MARKET", "SAFETY_BLOCK"}
         ):
-            snapshot["bot"]["classification"] = "PERSISTENCE_DEGRADED"
+            snapshot["bot"]["classification"] = "PERSISTENCE_DEGRADDED"
             snapshot["status"] = "ERROR"
 
     return snapshot
 
+
+ops_liveness_policy.install(sys.modules[__name__])
 
 ops.build_snapshot = build_snapshot
 
@@ -200,7 +203,7 @@ def _run_forever_action_aware():
                     snapshot["bot"]["restart_skip_reason"] = "PID_CHANGED_OR_UNAVAILABLE"
             ops._atomic_json(ops.OUTPUT, snapshot)
         except Exception:
-            ops.logging.exception("[OPS] Health supervisor iteration failed")
+            ops.logging.exception("[OPS] health supervisor iteration failed")
         elapsed = ops.time.time() - started
         ops.time.sleep(max(0.2, ops.INTERVAL_SECONDS - elapsed))
 
