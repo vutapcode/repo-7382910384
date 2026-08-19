@@ -19,7 +19,7 @@ class TierSKernelContractTests(unittest.TestCase):
         for name in required:
             self.assertTrue(hasattr(khoi_dong, name), name)
 
-    def test_kernel_exports_active_module_surface(self):
+    def test_kernel_exports_active_data_module_surface(self):
         required = (
             "tai_gia_tick",
             "tai_dong_tien",
@@ -29,9 +29,6 @@ class TierSKernelContractTests(unittest.TestCase):
             "delta_cvd",
             "ATR",
             "giam_sat_he_thong",
-            "bias_council",
-            "entry_council",
-            "guardian",
         )
         for name in required:
             self.assertTrue(hasattr(khoi_dong, name), name)
