@@ -23,7 +23,7 @@ class PositionAwareLivenessTests(unittest.TestCase):
             },
         }
 
-    def test_flat_ready_state_requires_entry_liveness(self):
+    def test_flat_ready_state_requires_entry_scheduler_liveness(self):
         available, classification = safe._critical_loop_monotonic_classification(
             self._heartbeat(
                 position_active=False,
@@ -32,14 +32,25 @@ class PositionAwareLivenessTests(unittest.TestCase):
             )
         )
         self.assertTrue(available)
-        self.assertEqual(classification, "ENTRY_LOOP_STALEED")
+        self.assertEqual(classification, "ENTRY_LOOP_STALLED")
 
-    def test_flat_not_ready_does_not_treat_dormant_entry_as_stall(self):
+    def test_flat_not_ready_still_requires_entry_scheduler_liveness(self):
         available, classification = safe._critical_loop_monotonic_classification(
             self._heartbeat(
                 position_active=False,
                 system_ready=False,
-                entry_age=safe.ops.BIAS_ENTRY_STALE_SECONDS + 60.0,
+                entry_age=safe.ops.BIAS_ENTRY_STALE_SECONDS + 0.1,
+            )
+        )
+        self.assertTrue(available)
+        self.assertEqual(classification, "ENTRY_LOOP_STALLED")
+
+    def test_flat_not_ready_with_live_scheduler_is_healthy(self):
+        available, classification = safe._critical_loop_monotonic_classification(
+            self._heartbeat(
+                position_active=False,
+                system_ready=False,
+                entry_age=0.1,
             )
         )
         self.assertTrue(available)
