@@ -53,12 +53,14 @@ def _critical_loop_monotonic_classification(heartbeat):
         return True, None
 
     loops = heartbeat.get("critical_loops") or {}
-    limits = {
-        "bias": ops.BIAS_ENTRY_STALE_SECONDS,
-        "entry": ops.BIAS_ENTRY_STALE_SECONDS,
-    }
-    if bool(heartbeat.get("shadow_position_active", False)):
+    position_active = bool(heartbeat.get("shadow_position_active", False))
+    limits = {"bias": ops.BIAS_ENTRY_STALE_SECONDS}
+    if position_active:
+        # Entry is intentionally dormant while a position is open; Guardian owns the live trade.
         limits["guardian"] = ops.GUARDIAN_STALE_SECONDS
+    else:
+        # Flat state requires Entry to stay live so new setups can be evaluated.
+        limits["entry"] = ops.BIAS_ENTRY_STALE_SECONDS
 
     for name, limit in limits.items():
         item = loops.get(name) or {}
