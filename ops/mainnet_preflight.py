@@ -16,7 +16,7 @@ def fail(message):
     raise SystemExit(2)
 
 
-# .env is optional for pure shadow. systemd supplies the canonical fail-closed flags,
+# .env is optional for pure shado. systemd supplies the canonical fail-closed flags,
 # and all active market-data feeds are public. Load local overrides only when present.
 if ENV_PATH.is_file():
     load_dotenv(ENV_PATH, override=False)
@@ -30,6 +30,7 @@ if "https://fapi.binance.com" not in api_source:
 
 unsafe_flags = (
     "SMC_ENABLE_TRADING",
+    "SMC_MAINNET_TRADING_ENABLED",
     "SMC_MAINNET_ARMED",
     "SMC_MAINNET_EXCLUSIVE_ACCOUNT",
 )
@@ -41,13 +42,14 @@ enabled = [
 if enabled:
     fail("shadow package must stay fail-closed; enabled flags: " + ",".join(enabled))
 
-# Credentials are not a startup dependency in canonical shadow mode. The Binance REST
-# adapter may be constructed with empty credentials, while all mutation methods are
-# blocked by the shadow launcher and the systemd flags above remain false.
+# Private credentials are optional in pure shadow. They are not used by the active
+# mutation-blocked runtime. Reject only ambiguous half-configured credentials.
 api_key = os.getenv("BINANCE_API_KEY", "").strip()
 api_secret = os.getenv("BINANCE_API_SECRET", "").strip()
-credential_state = "present" if api_key and api_secret else "not-required"
+if bool(api_key) ^ bool(api_secret):
+    fail("partial Binance credentials configured; provide both or neither")
 
+credential_state = "present" if api_key and api_secret else "not-required"
 print(
     "[PREFLIGHT] OK: Binance Futures MAINNET public-data SHADOW; "
     f"credentials={credential_state}; fail-closed flags verified"
