@@ -12,6 +12,7 @@ from loi_he_thong import shadow_entry_metadata_persistence_hook
 from loi_he_thong import bias_oi_freshness_hook
 from loi_he_thong import entry_futures_flow_scan_hook
 from loi_he_thong import entry_s2_snapshot_quorum_hook
+from loi_he_thong import disk_pressure_gate
 
 # Install early so risk/hardening wrappers capture the lean orchestrator.
 prune.install_app(shadow.app)
@@ -23,6 +24,9 @@ bias_oi_freshness_hook.install(shadow.bias_council)
 # Keep Futures 3s flow scans bounded to the active window; signal semantics stay unchanged.
 entry_futures_flow_scan_hook.install(hardened.runtime.base.entry_council)
 entry_s2_snapshot_quorum_hook.install(hardened.runtime)
+# Refuse only new shadow entries when journal storage is under pressure. Existing positions
+# remain owned by Guardian/Risk, so disk protection never suppresses an exit.
+disk_pressure_gate.install(hardened.runtime)
 
 # Use two-tier arrival alignment, then weight persistence by normalized venue volume.
 flow_alignment_hook.install(hardened.runtime.edge.regime_engine.flow_lead_engine)
