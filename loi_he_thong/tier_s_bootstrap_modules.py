@@ -32,6 +32,8 @@ tai_dong_tien = load_module("tai_dong_tien", CURRENT_DIR/"1_tai_du_lieu"/"tai_do
 delta_cvd = load_module("delta_cvd", CURRENT_DIR/"2_suy_luan_mapping"/"map_dong_tien"/"delta_cvd.py")
 ATR = load_module("ATR", CURRENT_DIR/"2_suy_luan_mapping"/"map-nen-offline"/"ATR.py")
 bo_nho_ram = load_module("bo_nho_ram", CURRENT_DIR/"loi_he_thong"/"bo_nho_ram.py")
+# Fail-closed at the module-registry boundary before any launcher policy can run.
+bo_nho_ram.state.execution_allowed = False
 
 # Mainnet execution/account primitives.
 binance_api = load_module("binance_api", CURRENT_DIR/"3_thuc_thi"/"binance_api.py")
