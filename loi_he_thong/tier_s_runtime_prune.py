@@ -3,7 +3,7 @@ import asyncio
 import logging
 from loi_he_thong import tier_s_atr_only
 
-VERSION = "TIER_S_RUNTIME_PRUNE_V3_MAINNET_ONLY"
+VERSION = "TIER_S_RUNTIME_PRUNE_V4_LOW_WAKEUP"
 
 
 async def _spot_flow_loop(app):
@@ -16,7 +16,7 @@ async def _spot_flow_loop(app):
             app.delta_cvd.cap_nhat_cvd(trade, state)
         else:
             app.delta_cvd.kiem_tra_idle(state)
-            await asyncio.sleep(0.001)
+            await asyncio.sleep(0.005)
 
 
 async def _lean_main(app):
