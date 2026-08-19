@@ -14,6 +14,7 @@ import websockets
 
 
 EXECUTION_IDLE_FALLBACK_SECONDS = 2.0
+SPOT_BOOK_IDLE_RECONNECT_SECONDS = 3.0
 
 
 def _apply_execution_book_ticker(data, bo_nho_ram):
@@ -72,7 +73,19 @@ async def hung_gia_tick_futures(symbol: str, bo_nho_ram):
         try:
             async with websockets.connect(stream_url, ping_interval=20, ping_timeout=10) as ws:
                 logging.info("[TICK] Da ket noi bookTicker mainnet: %s", symbol.upper())
-                async for message in ws:
+                while True:
+                    try:
+                        message = await asyncio.wait_for(
+                            ws.recv(), timeout=SPOT_BOOK_IDLE_RECONNECT_SECONDS
+                        )
+                    except asyncio.TimeoutError:
+                        logging.warning(
+                            "[TICK] Spot bookTicker idle %.1fs; reconnect",
+                            SPOT_BOOK_IDLE_RECONNECT_SECONDS,
+                        )
+                        break
+                    if message is None:
+                        break
                     try:
                         data = orjson.loads(message)
                     except (TypeError, ValueError):
@@ -100,7 +113,7 @@ async def hung_gia_tick_execution(symbol: str, bo_nho_ram):
                     stream_url, ping_interval=20, ping_timeout=10
                 ) as ws:
                     logging.info(
-                        "[EXECUTION TICK] Da ket noi bookTicker MAINNET: %s",
+                        "[EXECUTION TICK] La ket noi bookTicker MAINNET: %s",
                         symbol.upper(),
                     )
                     while True:
