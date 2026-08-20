@@ -1,15 +1,22 @@
-"""Reduce correlated Binance double-counting without hard-requiring Coinbase availability."""
+"""Reduce correlated Binance double-counting while preserving availability with evidence-strength fallbacks."""
 from __future__ import annotations
 
-VERSION = "ENTRY_EXCHANGE_INDEPENDENCE_V2_CONFIDENCE_AWARE"
+VERSION = "ENTRY_EXCHANGE_INDEPENDENCE_V3_EFFECTIVE_DEGRADED_WINDOW"
 
 _BINANCE_PAIR = {"spot", "futures"}
 _SOFT_PRICE_FRACTION = 0.25
 _SOFT_PRICE_FLOOR_BPS = 0.10
 _SOFT_FLOW_IMBALANCE = 0.04
-_COINBASE_MAX_AGE_SEC = 5.0
-_STALE_EXTERNAL_CONFIDENCE_FACTOR = 0.85
-_STALE_EXTERNAL_CONFIDENCE_CAP = 0.68
+_COINBASE_STRICT_AGE_SEC = 2.50
+_COINBASE_MAX_AGE_SEC = 5.00
+_DEGRADED_CONFIDENCE_FACTOR = 0.85
+_DEGRADED_CONFIDENCE_CAP = 0.68
+
+
+def _strong_native(s1, s2):
+    price = set(s1.get("strong_supporters") or ()) & _BINANCE_PAIR
+    flow = set(s2.get("strong_supporters") or ()) & _BINANCE_PAIR
+    return bool(price), bool(flow), sorted(price), sorted(flow)
 
 
 def _soft_external_ok(result):
@@ -24,13 +31,36 @@ def _soft_external_ok(result):
     now = float(result.get("ts", 0.0) or 0.0)
     freshness = result.get("freshness") or {}
     cb_ts = float(freshness.get("coinbase", 0.0) or 0.0)
-    cb_fresh = cb_ts > 0.0 and now >= cb_ts and now - cb_ts <= _COINBASE_MAX_AGE_SEC
-    if not cb_fresh:
-        return True, {
+    if cb_ts <= 0.0 or now < cb_ts:
+        return False, {
             "applies": True,
+            "mode": "EXTERNAL_TIMESTAMP_INVALID",
             "coinbase_fresh": False,
-            "availability_neutral": True,
             "confidence_degraded": True,
+        }
+
+    age = now - cb_ts
+    if age > _COINBASE_MAX_AGE_SEC:
+        return False, {
+            "applies": True,
+            "mode": "EXTERNAL_UNAVAILABLE",
+            "coinbase_fresh": False,
+            "coinbase_age_s": round(age, 4),
+            "confidence_degraded": True,
+        }
+
+    if age > _COINBASE_STRICT_AGE_SEC:
+        price_strong, flow_strong, price_names, flow_names = _strong_native(s1, s2)
+        return price_strong and flow_strong, {
+            "applies": True,
+            "mode": "DEGRADED_EXTERNAL_STRONG_NATIVE",
+            "coinbase_fresh": True,
+            "coinbase_strict_fresh": False,
+            "coinbase_age_s": round(age, 4),
+            "confidence_degraded": True,
+            "native_price_strong": price_names,
+            "native_flow_strong": flow_names,
+            "native_strength_ok": bool(price_strong and flow_strong),
         }
 
     threshold = float(result.get("price_threshold_bps", 0.0) or 0.0)
@@ -41,7 +71,10 @@ def _soft_external_ok(result):
     flow_ok = cb_flow >= _SOFT_FLOW_IMBALANCE
     return price_ok or flow_ok, {
         "applies": True,
+        "mode": "STRICT_EXTERNAL_SOFT_CORROBORATION",
         "coinbase_fresh": True,
+        "coinbase_strict_fresh": True,
+        "coinbase_age_s": round(age, 4),
         "coinbase_price_bps": round(cb_move, 4),
         "coinbase_flow_imbalance": round(cb_flow, 4),
         "soft_price_threshold_bps": round(soft_price_threshold, 4),
@@ -71,15 +104,21 @@ def install(entry_council):
             if meta.get("confidence_degraded"):
                 original_conf = float(out.get("confidence", 0.0) or 0.0)
                 out["confidence"] = min(
-                    original_conf * _STALE_EXTERNAL_CONFIDENCE_FACTOR,
-                    _STALE_EXTERNAL_CONFIDENCE_CAP,
+                    original_conf * _DEGRADED_CONFIDENCE_FACTOR,
+                    _DEGRADED_CONFIDENCE_CAP,
                 )
             return out
 
         out["decision"] = "WAIT"
         out["entry_mode"] = "NONE"
         out["phase"] = "PRESSURE_BUILDING"
-        out["reason"] = "WAIT_EXTERNAL_CORROBORATION"
+        mode = meta.get("mode")
+        if mode == "DEGRADED_EXTERNAL_STRONG_NATIVE":
+            out["reason"] = "WAIT_EXTERNAL_DEGRADED_NEEDS_STRONG_NATIVE"
+        elif mode in ("EXTERNAL_UNAVAILABLE", "EXTERNAL_TIMESTAMP_INVALID"):
+            out["reason"] = "WAIT_EXTERNAL_UNAVAILABLE"
+        else:
+            out["reason"] = "WAIT_EXTERNAL_CORROBORATION"
         out["confidence"] = min(float(out.get("confidence", 0.0) or 0.0), 0.49)
         return out
 
