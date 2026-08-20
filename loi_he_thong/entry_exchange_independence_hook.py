@@ -1,7 +1,7 @@
 """Reduce correlated Binance double-counting while preserving availability with evidence-strength fallbacks."""
 from __future__ import annotations
 
-VERSION = "ENTRY_EXCHANGE_INDEPENDENCE_V3_EFFECTIVE_DEGRADED_WINDOW"
+VERSION = "ENTRY_EXCHANGE_INDEPENDENCE_V4_CASH_ANCHORED_DEGRADED_WINDOW"
 
 _BINANCE_PAIR = {"spot", "futures"}
 _SOFT_PRICE_FRACTION = 0.25
@@ -16,7 +16,8 @@ _DEGRADED_CONFIDENCE_CAP = 0.68
 def _strong_native(s1, s2):
     price = set(s1.get("strong_supporters") or ()) & _BINANCE_PAIR
     flow = set(s2.get("strong_supporters") or ()) & _BINANCE_PAIR
-    return bool(price), bool(flow), sorted(price), sorted(flow)
+    cash_anchor = "spot" in price or "spot" in flow
+    return bool(price), bool(flow), cash_anchor, sorted(price), sorted(flow)
 
 
 def _soft_external_ok(result):
@@ -50,8 +51,9 @@ def _soft_external_ok(result):
         }
 
     if age > _COINBASE_STRICT_AGE_SEC:
-        price_strong, flow_strong, price_names, flow_names = _strong_native(s1, s2)
-        return price_strong and flow_strong, {
+        price_strong, flow_strong, cash_anchor, price_names, flow_names = _strong_native(s1, s2)
+        strength_ok = bool(price_strong and flow_strong and cash_anchor)
+        return strength_ok, {
             "applies": True,
             "mode": "DEGRADED_EXTERNAL_STRONG_NATIVE",
             "coinbase_fresh": True,
@@ -60,7 +62,8 @@ def _soft_external_ok(result):
             "confidence_degraded": True,
             "native_price_strong": price_names,
             "native_flow_strong": flow_names,
-            "native_strength_ok": bool(price_strong and flow_strong),
+            "cash_anchor_strong": cash_anchor,
+            "native_strength_ok": strength_ok,
         }
 
     threshold = float(result.get("price_threshold_bps", 0.0) or 0.0)
@@ -114,12 +117,15 @@ def install(entry_council):
         out["phase"] = "PRESSURE_BUILDING"
         mode = meta.get("mode")
         if mode == "DEGRADED_EXTERNAL_STRONG_NATIVE":
-            out["reason"] = "WAIT_EXTERNAL_DEGRADED_NEEDS_STRONG_NATIVE"
+            out["reason"] = "WAIT_EXTERNAL_DEGRADED_NEEDS_CASH_ANCHORED_STRONG_NATIVE"
         elif mode in ("EXTERNAL_UNAVAILABLE", "EXTERNAL_TIMESTAMP_INVALID"):
             out["reason"] = "WAIT_EXTERNAL_UNAVAILABLE"
         else:
             out["reason"] = "WAIT_EXTERNAL_CORROBORATION"
-        out["confidence"] = min(float(out.get("confidence", 0.0) or 0.0), 0.49)
+        out["confidence"] = min(
+            float(out.get("confidence", 0.0) or 0.0),
+            0.49,
+        )
         return out
 
     entry_council.evaluate = evaluate
