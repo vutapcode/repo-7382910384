@@ -1,10 +1,13 @@
 """Lean production task plan for Mainnet Tier-S shadow."""
 import asyncio
 import logging
+import time
 from loi_he_thong import tier_s_atr_only
 from loi_he_thong import host_cpu_governor
 
-VERSION = "TIER_S_RUNTIME_PRUNE_V4_LOW_WAKEUP"
+VERSION = "TIER_S_RUNTIME_PRUNE_V5_FAIR_DRAIN"
+SPOT_DRAIN_MAX_EVENTS = 512
+SPOT_DRAIN_BUDGET_SECONDS = 0.002
 
 
 async def _spot_flow_loop(app):
@@ -13,12 +16,21 @@ async def _spot_flow_loop(app):
         await asyncio.sleep(0.1)
     while True:
         processed = 0
+        started = time.monotonic()
         while state.danh_sach_khop_lenh:
             trade = state.danh_sach_khop_lenh.popleft()
             app.delta_cvd.cap_nhat_cvd(trade, state)
             processed += 1
-            if processed % 4096 == 0:
-                await asyncio.sleep(0)
+            if (
+                processed >= SPOT_DRAIN_MAX_EVENTS
+                or time.monotonic() - started >= SPOT_DRAIN_BUDGET_SECONDS
+            ):
+                break
+        if state.danh_sach_khop_lenh:
+            # Preserve throughput while giving BBO, Ignition and Guardian a
+            # scheduling turn during liquidation/reconnect bursts.
+            await asyncio.sleep(0)
+            continue
         if not processed:
             app.delta_cvd.kiem_tra_idle(state)
         mode = str(getattr(state, "governor_mode", "WARMUP"))

@@ -22,13 +22,21 @@
      `IGNITION -> PROBE -> PROVE`.
    - Cash may propose. Futures may alert, but cannot open without independent
      Binance Spot or Coinbase price plus executed-flow response within 600 ms.
+   - The frozen Bias handoff includes cash direction phase, hysteresis, story,
+     price/flow votes and OI regime. A pending two-step reversal cannot reuse
+     the old direction to authorize Entry.
    - PROVE is failed reversion or two accelerating 100 ms metaorder buckets.
-     Only IGNITION/EARLY with consumed fraction at most 0.35 may enter.
+     Failed reversion requires material opposition, adverse excursion, material
+     reclaim and at least 100 ms of material same-side acceptance.
+   - Consumed fraction is observed cash displacement divided by live 1m ATR;
+     missing ATR fails closed. Only IGNITION/EARLY at most 0.35 may enter.
    - Coinbase older than five seconds fails closed. Static walls/cancels and
      BBO quantity without executed flow never authorize Entry.
 5. Residual Edge
-   - Structural remaining-path proxy and verified executable costs replace the
-     13/20/35 bps prior. Those values remain historical metadata only.
+   - Only the observed cash lead over Futures is treated as structural residual;
+     ATR headroom and candle ranges never predict the remaining wave.
+     Verified executable costs replace the 13/20/35 bps prior. Those values
+     remain historical metadata only.
    - Shadow bootstrap may collect structurally valid trades. Real money needs
      at least 30 persisted outcomes, positive expectancy, non-negative LCB,
      non-negative 25 bps stress and verified commission.

@@ -53,7 +53,104 @@ def warm(s, venue, start_ms=0):
     ignition_signals.snapshot(s, start_ms + ignition_signals.WARMUP_BUCKETS * 100 + 1)
 
 
+def evidence_row(receive_ms, side, price, *, strong=True, material=True):
+    sign = 1.0 if side == "LONG" else -1.0
+    conversion = 0.20 * sign if material else 0.01 * sign
+    return {
+        "venue": "binance_spot", "receive_time_ms": receive_ms,
+        "bucket_start_ms": receive_ms - 100, "corrected_event_time_ms": receive_ms - 10,
+        "clock_uncertainty_ms": 5.0, "clock_valid": True, "epoch": 1,
+        "side": side, "strong": strong, "total_qty": 0.10 if material else 0.001,
+        "imbalance": 0.60 * sign, "price_conversion_bps": conversion,
+        "first_price": price - conversion / 10_000.0 * price,
+        "price": price, "high": price, "low": price,
+        "surprise_ratio": 2.0, "flow_acceleration": 1.0,
+    }
+
+
 class IgnitionCoreTests(unittest.TestCase):
+    def test_frozen_bias_keeps_direction_context(self):
+        s = state()
+        s.bias_council = {
+            "hysteresis": "STABLE",
+            "story": {"name": "NEW_LONG_BUILD_CONFIRMED"},
+            "direction_memory": {
+                "phase": "ESTABLISHED_TREND", "context_side": "LONG",
+                "candidate_side": "ABSTAIN",
+            },
+            "s_votes": {
+                "S1_cross_price": {"vote": "LONG"},
+                "S2_price_x_oi": {"metrics": {"regime": "NEW_LONG_BUILD"}},
+                "S3_multi_flow": {"vote": "LONG"},
+            },
+        }
+        ignition_core._remember_bias(s, 2.0)
+        frozen = s._ignition_bias_snapshots[-1]["direction_context"]
+        self.assertEqual(frozen["phase"], "ESTABLISHED_TREND")
+        self.assertEqual(frozen["oi_regime"], "NEW_LONG_BUILD")
+        self.assertEqual(frozen["flow_vote"], "LONG")
+
+    def test_reversal_candidate_cannot_reuse_old_frozen_bias(self):
+        s = state()
+        s.bias_council = {
+            "direction_memory": {
+                "phase": "REVERSAL_CANDIDATE", "context_side": "LONG",
+                "candidate_side": "SHORT",
+            },
+            "s_votes": {},
+        }
+        ignition_core._remember_bias(s, 2.0)
+        signal = evidence_row(3_100, "LONG", 100.01)
+        self.assertIsNone(ignition_core._start_episode(s, signal))
+        self.assertEqual(s._ignition_last_reject, "BIAS_REVERSAL_CANDIDATE_PENDING")
+
+    def test_failed_reversion_needs_material_timed_acceptance(self):
+        pre = evidence_row(900, "LONG", 100.0)
+        initial = evidence_row(1_000, "LONG", 100.002)
+        shock = evidence_row(1_100, "SHORT", 99.995)
+        shock["low"] = 99.995
+        reclaim = evidence_row(1_200, "LONG", 100.001)
+        acceptance = evidence_row(1_300, "LONG", 100.003)
+        proof = ignition_core._failed_reversion(
+            [pre, initial, shock, reclaim, acceptance], "LONG", 1_000
+        )
+        self.assertIsNotNone(proof)
+        detail = proof["_failed_reversion_evidence"]
+        self.assertEqual(detail["version"], "FAILED_REVERSION_V3")
+        self.assertGreaterEqual(detail["acceptance_duration_ms"], 100)
+        self.assertGreaterEqual(detail["acceptance_material_buckets"], 1)
+
+        weak_acceptance = evidence_row(1_300, "LONG", 100.003, material=False)
+        rejected = ignition_core._failed_reversion(
+            [pre, initial, shock, reclaim, weak_acceptance], "LONG", 1_000
+        )
+        self.assertIsNone(rejected)
+
+    def test_phase_is_observed_cash_displacement_over_atr(self):
+        s = state()
+        measured = ignition_core._phase_measurement(
+            s, "LONG", ["binance_spot"], {"binance_spot": 2.0},
+            {"price_conversion_bps": 0.5},
+        )
+        self.assertTrue(measured["valid"])
+        self.assertEqual(measured["source"], "CASH_DISPLACEMENT_OVER_ATR_1M")
+        self.assertAlmostEqual(measured["phase_scale_bps"], 10.0, places=3)
+        self.assertAlmostEqual(measured["consumed_fraction"], 0.2, places=3)
+
+    def test_oi_intent_direction_conflict_is_explicit(self):
+        s = state(now=3.0)
+        # A later mutable council update must not rewrite the pre-impulse OI
+        # classification used by this candidate.
+        s.bias_council = {"s_votes": {"S2_price_x_oi": {
+            "metrics": {"regime": "NEW_SHORT_BUILD"}
+        }}}
+        frozen = {"direction_context": {"oi_regime": "SHORT_COVERING"}}
+        intent = ignition_core._oi_intent(s, "SHORT", 3.0, frozen)
+        self.assertTrue(intent["fresh"])
+        self.assertFalse(intent["aligned_with_entry"])
+        self.assertEqual(intent["causal_class"], "OI_DIRECTION_CONFLICT")
+        self.assertEqual(intent["raw_regime"], "SHORT_COVERING")
+
     def test_cash_metaorder_proves_early_and_only_once(self):
         s = state()
         warm(s, "binance_spot")

@@ -30,7 +30,7 @@ os.environ["SMC_MAINNET_EXCLUSIVE_ACCOUNT"] = "false"
 
 import khoi_dong as app
 
-VERSION = "MAINNET_TIER_S_SHADOW_V1"
+VERSION = "MAINNET_TIER_S_SHADOW_V2_CPU_SPLIT"
 ENTRY_POLL = 0.10
 BIAS_SCOUT = 0.25
 GUARD_POLL = 0.05
@@ -83,6 +83,17 @@ LIVE_CAPABLE = AUTO_PROMOTE or DIRECT_LIVE
 PROMOTION = PromotionController()
 _POSITION_RECORD_AT = 0.0
 _POSITION_RECORD_IDENTITY = None
+
+
+def _live_entry_authority(state):
+    """CPU may seal real entries, but must not censor shadow samples."""
+    return bool(getattr(state, "wstrade_live_armed", False))
+
+
+def _authority_delay(state, normal_delay):
+    if _live_entry_authority(state):
+        return host_cpu_governor.feature_delay(state, normal_delay)
+    return float(normal_delay)
 
 
 async def _idle(*_args, **_kwargs):
@@ -882,6 +893,11 @@ async def _open_position(side, result, now):
         app.state.mainnet_shadow_last_skip = "STALE_ENTRY_RUNTIME_HEALTH"
         return None
     if bool(getattr(app.state, "wstrade_live_armed", False)):
+        if not bool(getattr(app.state, "mainnet_live_entry_ready", False)) or not (
+            host_cpu_governor.entry_allowed(app.state)
+        ):
+            app.state.mainnet_shadow_last_skip = "LIVE_HOST_CPU_OR_HEALTH_BLOCKED"
+            return None
         edge_report = dict(getattr(app.state, "entry_edge_tier", {}) or {})
         if not bool(edge_report.get("live_empirical_ok", False)):
             app.state.mainnet_shadow_last_skip = "EMPIRICAL_ALPHA_NOT_READY"
@@ -919,6 +935,11 @@ async def _close_position(pos, guardian_result, now):
 
 async def _promote_live(snapshot):
     s = app.state
+    if not bool(getattr(s, "mainnet_live_entry_ready", False)) or not (
+        host_cpu_governor.entry_allowed(s)
+    ):
+        s.wstrade_live_arm_reason = "LIVE_HOST_CPU_OR_HEALTH_BLOCKED"
+        return False
     pos = getattr(s, "mainnet_shadow_position", None)
     if pos is not None and bool(getattr(pos, "active", False)):
         s.wstrade_live_arm_reason = "WAIT_SHADOW_POSITION_FLAT"
@@ -1119,7 +1140,9 @@ async def _bias_loop():
         try:
             s = app.state
             pos = getattr(s, "mainnet_shadow_position", None)
-            if str(getattr(s, "governor_mode", "")) == "SAFETY_ONLY" and not (
+            if _live_entry_authority(s) and str(
+                getattr(s, "governor_mode", "")
+            ) == "SAFETY_ONLY" and not (
                 pos is not None and bool(getattr(pos, "active", False))
             ):
                 await asyncio.sleep(1.0)
@@ -1136,7 +1159,7 @@ async def _bias_loop():
             raise
         except Exception:
             logging.exception("[MAINNET-SHADOW] fast bias scout failure")
-        await asyncio.sleep(host_cpu_governor.feature_delay(app.state, BIAS_SCOUT))
+        await asyncio.sleep(_authority_delay(app.state, BIAS_SCOUT))
 
 
 async def _entry_loop():
@@ -1222,10 +1245,11 @@ async def _entry_loop():
             if isinstance(getattr(s, "mainnet_shadow_pending_entry", None), dict):
                 await asyncio.sleep(ENTRY_POLL)
                 continue
-            if not host_cpu_governor.entry_allowed(s):
+            if _live_entry_authority(s) and not host_cpu_governor.entry_allowed(s):
                 s.mainnet_shadow_entry_state = "WAIT_HOST_CPU_BUDGET"
                 await asyncio.sleep(host_cpu_governor.feature_delay(s, ENTRY_POLL))
                 continue
+            s.mainnet_shadow_cpu_degraded = not host_cpu_governor.entry_allowed(s)
             if not _spot_fresh(now):
                 s.mainnet_shadow_entry_state = "WAIT_STALE_SPOT"
                 await asyncio.sleep(ENTRY_POLL)
@@ -1243,7 +1267,7 @@ async def _entry_loop():
                 round(float(getattr(s, "open_interest", 0.0) or 0.0), 3),
             )
             if revision == last_revision and now - last_eval_at < 0.50:
-                await asyncio.sleep(host_cpu_governor.feature_delay(s, ENTRY_POLL))
+                await asyncio.sleep(_authority_delay(s, ENTRY_POLL))
                 continue
             last_revision, last_eval_at = revision, now
             result = entry_council.evaluate(s, now=now)
@@ -1463,7 +1487,7 @@ async def _entry_loop():
         except Exception:
             logging.exception("[MAINNET-SHADOW] entry loop failure")
             await asyncio.sleep(0.5)
-        await asyncio.sleep(host_cpu_governor.feature_delay(app.state, ENTRY_POLL))
+        await asyncio.sleep(_authority_delay(app.state, ENTRY_POLL))
 
 
 async def _guardian_loop():

@@ -21,6 +21,7 @@ EVIDENCE_GAP_MS = 300
 EPISODE_MAX_MS = 5_000
 LEAD_FLOOR_MS = 100.0
 MAX_CONSUMED_FRACTION = 0.35
+MIN_ACCEPTANCE_MS = 100
 MIN_VOL_BTC_BY_VENUE = {
     "spot": ignition_signals.MIN_QTY["binance_spot"],
     "coinbase": ignition_signals.MIN_QTY["coinbase_spot"],
@@ -168,16 +169,44 @@ def _remember_bias(state, now=None):
     if not isinstance(history, deque):
         history = deque(maxlen=40)
         state._ignition_bias_snapshots = history
+    council = getattr(state, "bias_council", None) or {}
+    memory = council.get("direction_memory") or {}
+    story = council.get("story") or {}
+    seats = council.get("s_votes") or {}
+    price_seat = seats.get("S1_cross_price") or {}
+    flow_seat = seats.get("S3_multi_flow") or {}
+    oi_seat = seats.get("S2_price_x_oi") or {}
     row = {
         "direction": str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper(),
         "confidence": _f(getattr(state, "bias_confidence", 0.0)),
         "updated_at": _f(getattr(state, "bias_updated_at", 0.0)),
         "version": getattr(state, "bias_version", None),
         "captured_at": time.time() if now is None else float(now),
+        # Keep the causal context that produced the direction.  Copy only the
+        # compact fields consumed by Ignition so the frozen row is immutable
+        # and bounded instead of retaining the live council dictionary.
+        "direction_context": {
+            "phase": str(memory.get("phase") or "UNKNOWN"),
+            "context_side": str(memory.get("context_side") or "ABSTAIN"),
+            "candidate_side": str(memory.get("candidate_side") or "ABSTAIN"),
+            "hysteresis": str(council.get("hysteresis") or "UNKNOWN"),
+            "story": str(story.get("name") or council.get("reason") or "UNKNOWN"),
+            "price_vote": str(price_seat.get("vote") or "ABSTAIN"),
+            "flow_vote": str(flow_seat.get("vote") or "ABSTAIN"),
+            "oi_regime": str((oi_seat.get("metrics") or {}).get("regime") or "UNKNOWN"),
+            "flow_price_trap": bool(
+                str(story.get("name") or council.get("reason") or "")
+                == "FLOW_NOT_CONVERTED_TO_PRICE"
+            ),
+        },
     }
     if not history or (
-        history[-1].get("direction"), history[-1].get("confidence"), history[-1].get("updated_at")
-    ) != (row["direction"], row["confidence"], row["updated_at"]):
+        history[-1].get("direction"), history[-1].get("confidence"),
+        history[-1].get("updated_at"), history[-1].get("direction_context")
+    ) != (
+        row["direction"], row["confidence"], row["updated_at"],
+        row["direction_context"],
+    ):
         history.append(row)
 
 
@@ -210,6 +239,18 @@ def _start_episode(state, signal):
     side = str(signal.get("side") or "NEUTRAL").upper()
     if side != bias.get("direction") or _f(bias.get("confidence")) < BIAS_MIN_CONF:
         state._ignition_last_reject = "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS"
+        return None
+    context = bias.get("direction_context") or {}
+    candidate = str(context.get("candidate_side") or "ABSTAIN").upper()
+    if (
+        str(context.get("phase") or "").upper() == "REVERSAL_CANDIDATE"
+        and candidate in ("LONG", "SHORT")
+        and candidate != side
+    ):
+        state._ignition_last_reject = "BIAS_REVERSAL_CANDIDATE_PENDING"
+        return None
+    if bool(context.get("flow_price_trap")):
+        state._ignition_last_reject = "FROZEN_BIAS_FLOW_PRICE_TRAP"
         return None
     episode = {
         "causal_episode_id": _episode_id(signal), "side": side,
@@ -319,6 +360,10 @@ def _failed_reversion(history, side, proposer_ms):
         acceptance_rows = rows[reclaim_index + 1:]
         if not acceptance_rows or latest_ms - shock_ms > EVIDENCE_GAP_MS:
             continue
+        reclaim_ms = int(rows[reclaim_index].get("receive_time_ms", 0))
+        acceptance_ms = latest_ms - reclaim_ms
+        if acceptance_ms < MIN_ACCEPTANCE_MS:
+            continue
         if any(
             sign * _bps(_f(row.get("price")), anchor) < 0.0
             for row in acceptance_rows
@@ -330,11 +375,17 @@ def _failed_reversion(history, side, proposer_ms):
             for row in acceptance_rows
         ):
             continue
+        material_acceptance = [
+            row for row in acceptance_rows
+            if str(row.get("side")) == str(side) and _material_flow(row)
+        ]
+        if not material_acceptance:
+            continue
 
         reclaim = rows[reclaim_index]
         proof = dict(latest)
         proof["_failed_reversion_evidence"] = {
-            "version": "FAILED_REVERSION_V2",
+            "version": "FAILED_REVERSION_V3",
             "venue": str(shock.get("venue") or latest.get("venue") or ""),
             "anchor_price": round(anchor, 10),
             "anchor_method": anchor_method,
@@ -348,6 +399,8 @@ def _failed_reversion(history, side, proposer_ms):
             "acceptance_receive_time_ms": latest_ms,
             "acceptance_bps": round(sign * _bps(_f(latest.get("price")), anchor), 6),
             "acceptance_buckets": len(acceptance_rows),
+            "acceptance_material_buckets": len(material_acceptance),
+            "acceptance_duration_ms": acceptance_ms,
         }
         return proof
     return None
@@ -403,17 +456,60 @@ def _leader(episode):
     return (str(first.get("venue")) if lower >= LEAD_FLOOR_MS else "SIMULTANEOUS"), lower
 
 
-def _oi_intent(state, side, now):
-    council = getattr(state, "bias_council", None) or {}
-    seat = ((council.get("s_votes") or {}).get("S2_price_x_oi") or {})
-    metrics = seat.get("metrics") or {}
-    regime = str(metrics.get("regime") or "UNKNOWN").upper()
+def _oi_intent(state, side, now, bias_snapshot=None):
+    frozen = (bias_snapshot or {}).get("direction_context") or {}
+    regime = str(frozen.get("oi_regime") or "UNKNOWN").upper()
     age = now - _f(getattr(state, "open_interest_updated_at", 0.0))
+    intent = (
+        "UNWIND" if regime in ("SHORT_COVERING", "LONG_LIQUIDATION_CLOSING") else
+        "POSITION_BUILD" if regime in ("NEW_LONG_BUILD", "NEW_SHORT_BUILD") else "NEUTRAL"
+    )
+    expected_side = {
+        "SHORT_COVERING": "LONG", "LONG_LIQUIDATION_CLOSING": "SHORT",
+        "NEW_LONG_BUILD": "LONG", "NEW_SHORT_BUILD": "SHORT",
+    }.get(regime)
+    aligned = expected_side in (None, str(side).upper())
     return {
-        "intent": "UNWIND" if regime in ("SHORT_COVERING", "LONG_LIQUIDATION_CLOSING") else
-                  "POSITION_BUILD" if regime in ("NEW_LONG_BUILD", "NEW_SHORT_BUILD") else "NEUTRAL",
+        "intent": intent,
         "raw_regime": regime, "fresh": age <= 6.0, "age_seconds": round(max(0.0, age), 4),
-        "side": side,
+        "side": side, "expected_side": expected_side, "aligned_with_entry": aligned,
+        "causal_class": (
+            "ALIGNED_BUILD" if intent == "POSITION_BUILD" and aligned else
+            "CASH_LED_UNWIND" if intent == "UNWIND" and aligned else
+            "OI_DIRECTION_CONFLICT" if intent != "NEUTRAL" else "OI_NEUTRAL"
+        ),
+    }
+
+
+def _phase_measurement(state, side, cash_venues, venue_moves, latest):
+    """Volatility-normalized displacement observed before proof.
+
+    This is not a forecast of the final wave.  ATR supplies only a local scale;
+    the measured numerator is cash displacement already visible at decision
+    time.  Missing ATR fails closed instead of inventing a 20/35/65% phase.
+    """
+    spot = (_f(getattr(state, "best_bid", 0.0)) + _f(getattr(state, "best_ask", 0.0))) / 2.0
+    atr = _f(getattr(state, "atr_1m", 0.0))
+    atr_bps = atr / spot * 10_000.0 if spot > 0.0 and atr > 0.0 else 0.0
+    progress = max(
+        (max(0.0, _f(venue_moves.get(name))) for name in cash_venues),
+        default=0.0,
+    )
+    if atr_bps <= 0.0:
+        return {
+            "valid": False, "source": "ATR_1M_UNAVAILABLE",
+            "cash_displacement_bps": round(progress, 6),
+            "phase_scale_bps": None, "consumed_fraction": 1.0,
+        }
+    consumed = max(0.0, min(1.5, progress / atr_bps))
+    return {
+        "valid": True, "source": "CASH_DISPLACEMENT_OVER_ATR_1M",
+        "cash_displacement_bps": round(progress, 6),
+        "phase_scale_bps": round(atr_bps, 6),
+        "consumed_fraction": round(consumed, 6),
+        "latest_conversion_bps": round(
+            max(0.0, _sign(side) * _f(latest.get("price_conversion_bps"))), 6
+        ),
     }
 
 
@@ -434,8 +530,6 @@ def _result_from_episode(state, episode, histories, freshness, now):
         or (cash_response_ms and cash_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
     )
     latest = proof_signal or episode["signals"][-1]
-    acceleration = _f(latest.get("flow_acceleration"))
-    consumed = 0.20 if acceleration > 0.0 and len(episode["signals"]) <= 4 else 0.35 if acceleration >= 0.0 else 0.65
     venue_moves = {}
     venue_anchors = {}
     venue_anchor_methods = {}
@@ -456,9 +550,12 @@ def _result_from_episode(state, episode, histories, freshness, now):
         max(0.0, cash_move - futures_move)
         if futures_move is not None else 0.0
     )
-    conversion = max(0.0, _sign(side) * _f(latest.get("price_conversion_bps")))
-    residual_proxy = max(fair_value_gap, conversion * max(0.0, (1.0 - consumed) / max(consumed, 0.05)))
-    oi = _oi_intent(state, side, now)
+    phase_measurement = _phase_measurement(state, side, cash_venues, venue_moves, latest)
+    consumed = _f(phase_measurement.get("consumed_fraction"), 1.0)
+    # Only an observed cash lead over Futures is directly residual at decision
+    # time.  ATR headroom and candle ranges are metadata, never predicted edge.
+    residual_proxy = fair_value_gap
+    oi = _oi_intent(state, side, now, episode.get("bias_snapshot"))
     payload = {
         "causal_episode_id": episode["causal_episode_id"], "state": "PROBE",
         "side": side, "proposer": episode["proposer"], "leader": leader,
@@ -483,7 +580,10 @@ def _result_from_episode(state, episode, histories, freshness, now):
         ),
         "impulse_phase": "EARLY" if consumed <= 0.35 else "MATURE",
         "consumed_fraction": consumed, "fair_value_gap_bps": round(fair_value_gap, 6),
-        "residual_edge_proxy_bps": round(residual_proxy, 6), "oi_intent": oi,
+        "phase_measurement": phase_measurement,
+        "residual_edge_proxy_bps": round(residual_proxy, 6),
+        "residual_edge_source": "OBSERVED_CASH_FUTURES_GAP_ONLY",
+        "oi_intent": oi,
         "clock_quality": {name: {
             "uncertainty_ms": rows[-1].get("clock_uncertainty_ms"),
             "valid": rows[-1].get("clock_valid"), "epoch": rows[-1].get("epoch"),
@@ -514,6 +614,11 @@ def _result_from_episode(state, episode, histories, freshness, now):
         return _wait(now, side, "WAIT_CAUSAL_LEADER_UNCERTAIN", "PROBE", payload, freshness)
     if proof_type is None:
         return _wait(now, side, "WAIT_IGNITION_PROOF", "PROBE", payload, freshness)
+    if not phase_measurement.get("valid"):
+        return _wait(now, side, "WAIT_PHASE_SCALE_UNAVAILABLE", "PROBE", payload, freshness)
+    if oi.get("fresh") and not oi.get("aligned_with_entry", True):
+        state._ignition_episode = None
+        return _wait(now, side, "OI_INTENT_DIRECTION_CONFLICT", "INVALID", payload, freshness)
     if consumed > MAX_CONSUMED_FRACTION:
         state._ignition_episode = None
         return _wait(now, side, "WAIT_IMPULSE_ALREADY_CONSUMED", "MATURE", payload, freshness)

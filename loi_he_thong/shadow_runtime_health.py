@@ -28,15 +28,17 @@ def health(base,s,now=None):
     blockers=[]
     if bool(getattr(s,"event_loop_stalled",False)):blockers.append("event_loop_stalled")
     if bool(getattr(s,"cpu_runaway",False)):blockers.append("cpu_runaway")
-    if not bool(getattr(s,"host_cpu_entry_allowed",True)):blockers.append("host_cpu_budget")
     if bool(getattr(s,"journal_stalled",False)):blockers.append("journal_stalled")
     if bool(getattr(s,"supervisor_fault_latched",False)):blockers.append("supervisor_fault")
     if bool(getattr(s,"shadow_persistence_dirty",False)):blockers.append("persistence_dirty")
     if bool(getattr(s,"shadow_integrity_fault",False)):blockers.append("integrity_fault")
+    live_blockers=list(blockers)
+    if not bool(getattr(s,"host_cpu_entry_allowed",True)):live_blockers.append("host_cpu_budget")
     feeds_ready=sp and cp and fp and sf and ff
     ready=feeds_ready and not blockers
-    out={"ts":now,"entry_ready":bool(ready),"full_tier_s_ready":bool(ready and mf),"spot_price":sp,"coinbase_price":cp,"futures_price":fp,"spot_flow":sf,"coinbase_flow":cf,"futures_flow":ff,"macro_oi_funding":mf,"operational_blockers":blockers}
-    s.mainnet_shadow_health=out; s.mainnet_shadow_ready=bool(ready); s.shadow_readiness_authoritative=True; s.system_ready=bool(ready)
+    live_ready=ready and not live_blockers
+    out={"ts":now,"entry_ready":bool(ready),"live_entry_ready":bool(live_ready),"full_tier_s_ready":bool(ready and mf),"live_full_tier_s_ready":bool(live_ready and mf),"spot_price":sp,"coinbase_price":cp,"futures_price":fp,"spot_flow":sf,"coinbase_flow":cf,"futures_flow":ff,"macro_oi_funding":mf,"operational_blockers":blockers,"live_operational_blockers":live_blockers}
+    s.mainnet_shadow_health=out; s.mainnet_shadow_ready=bool(ready); s.mainnet_live_entry_ready=bool(live_ready); s.shadow_readiness_authoritative=True; s.system_ready=bool(ready)
     bad=[k for k,v in out.items() if k not in ("ts","entry_ready","full_tier_s_ready") and v is False]
     if ready:s.last_readiness_reason="SHADOW_READY"
     elif blockers:s.last_readiness_reason="SHADOW_OPERATIONAL_BLOCKED:"+",".join(blockers)
