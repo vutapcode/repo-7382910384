@@ -151,20 +151,35 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(intent["causal_class"], "OI_DIRECTION_CONFLICT")
         self.assertEqual(intent["raw_regime"], "SHORT_COVERING")
 
+    def test_stale_oi_is_labeled_context_not_position_build(self):
+        s = state(now=10.0)
+        s.open_interest_updated_at = 1.0
+        frozen = {"direction_context": {"oi_regime": "NEW_LONG_BUILD"}}
+        intent = ignition_core._oi_intent(s, "LONG", 10.0, frozen)
+        self.assertFalse(intent["fresh"])
+        self.assertEqual(intent["intent"], "POSITION_BUILD")
+        self.assertEqual(intent["causal_class"], "OI_STALE_CONTEXT")
+
     def test_cash_metaorder_proves_early_and_only_once(self):
         s = state()
         warm(s, "binance_spot")
+        warm(s, "futures")
         ignition_core.evaluate(s, now=2.0)
         bucket(s, "binance_spot", 3_000)
         first = ignition_core.evaluate(s, now=3.101)
         self.assertEqual(first["phase"], "PROBE")
         self.assertEqual(first["decision"], "WAIT")
         bucket(s, "binance_spot", 3_100, base=100.003)
-        proved = ignition_core.evaluate(s, now=3.201)
+        waiting = ignition_core.evaluate(s, now=3.201)
+        self.assertEqual(waiting["decision"], "WAIT")
+        self.assertEqual(waiting["reason"], "WAIT_CASH_IGNITION_FUTURES_RESPONSE")
+        bucket(s, "futures", 3_300, qty=0.20, base=100.003)
+        proved = ignition_core.evaluate(s, now=3.401)
         self.assertEqual(proved["decision"], "GO")
         self.assertEqual(proved["ignition"]["proof_type"], "METAORDER_CONTINUATION")
+        self.assertTrue(proved["ignition"]["futures_follow_ok"])
         self.assertLessEqual(proved["ignition"]["consumed_fraction"], 0.35)
-        repeated = ignition_core.evaluate(s, now=3.202)
+        repeated = ignition_core.evaluate(s, now=3.402)
         self.assertNotEqual(repeated["decision"], "GO")
 
     def test_futures_alert_never_self_opens(self):
@@ -221,11 +236,15 @@ class IgnitionCoreTests(unittest.TestCase):
         s.bias_updated_at = 1.8
         warm(s, "binance_spot")
         warm(s, "coinbase_spot")
+        warm(s, "futures")
         ignition_core.evaluate(s, now=2.0)
         bucket(s, "binance_spot", 3_000)
         ignition_core.evaluate(s, now=3.101)
         bucket(s, "binance_spot", 3_100, base=100.003)
-        proved = ignition_core.evaluate(s, now=3.201)
+        waiting = ignition_core.evaluate(s, now=3.201)
+        self.assertEqual(waiting["reason"], "WAIT_CASH_IGNITION_FUTURES_RESPONSE")
+        bucket(s, "futures", 3_300, qty=0.20, base=100.003)
+        proved = ignition_core.evaluate(s, now=3.401)
         self.assertEqual(proved["decision"], "GO")
         episode_id = proved["causal_episode_id"]
 
@@ -260,6 +279,7 @@ class IgnitionCoreTests(unittest.TestCase):
             "ignition": {
                 "state": "PROVE", "proof_type": "METAORDER_CONTINUATION",
                 "cash_venues": ["binance_spot"], "proposer": "binance_spot",
+                "futures_follow_ok": True,
                 "consumed_fraction": 0.20, "residual_edge_proxy_bps": 1.0,
                 "venue_moves_bps": {"binance_spot": 0.5, "futures": 0.2},
             },
@@ -272,6 +292,111 @@ class IgnitionCoreTests(unittest.TestCase):
         allowed, report = entry_edge_tier.authorize(result, s)
         self.assertFalse(allowed)
         self.assertFalse(report["live_empirical_ok"])
+
+    def test_edge_contract_rejects_cash_go_without_futures_follower(self):
+        result = {
+            "decision": "GO", "side": "LONG", "entry_mode": "IGNITION",
+            "ignition": {
+                "state": "PROVE", "proof_type": "METAORDER_CONTINUATION",
+                "cash_venues": ["binance_spot"], "proposer": "binance_spot",
+                "futures_follow_ok": False, "consumed_fraction": 0.20,
+            },
+        }
+        self.assertFalse(entry_edge_tier.normal_contract_ok(result))
+
+    def test_compat_votes_expose_cash_aliases_to_absorption_gate(self):
+        ignition = {
+            "cash_venues": ["binance_spot", "coinbase_spot"],
+            "supporting_venues": ["binance_spot", "coinbase_spot"],
+            "venue_moves_bps": {
+                "binance_spot": 0.05, "coinbase_spot": 0.04,
+                "futures": 0.06,
+            },
+            "flow_by_venue": {
+                "binance_spot": {"signed_imbalance": 0.60},
+                "coinbase_spot": {"signed_imbalance": 0.55},
+            },
+        }
+        result = {
+            "decision": "GO", "price_threshold_bps": 0.15,
+            "s_votes": ignition_core._compat_votes(True, ignition),
+        }
+        from loi_he_thong import entry_microstructure
+        impact = entry_microstructure.price_impact(result)
+        self.assertTrue(impact["absorbed"])
+        self.assertIn("spot", result["s_votes"]["S1_cross_venue_price_acceptance"]["metrics"]["moves"])
+
+    def test_perp_lead_veto_applies_after_cash_proposer(self):
+        s = state()
+        result = {
+            "decision": "GO", "side": "LONG", "entry_mode": "IGNITION",
+            "phase": "RELEASE", "price_threshold_bps": 0.15,
+            "ignition": {
+                "state": "PROVE", "proof_type": "METAORDER_CONTINUATION",
+                "cash_venues": ["binance_spot"], "proposer": "binance_spot",
+                "futures_follow_ok": True, "consumed_fraction": 0.20,
+                "venue_moves_bps": {"binance_spot": 0.5, "futures": 4.0},
+            },
+            "s_votes": ignition_core._compat_votes(True, {
+                "cash_venues": ["binance_spot"],
+                "supporting_venues": ["binance_spot", "futures"],
+                "venue_moves_bps": {"binance_spot": 0.5, "futures": 4.0},
+            }),
+        }
+        report = entry_edge_tier.classify(result, s)
+        self.assertIn("PERP_LED_VETO", report["hard_vetoes"])
+
+    def test_degraded_coinbase_allows_only_binance_cash_authority(self):
+        def run(proposer):
+            s = state(now=3.4)
+            cash1 = evidence_row(3_100, "LONG", 100.003)
+            cash2 = evidence_row(3_200, "LONG", 100.006)
+            for row in (cash1, cash2):
+                row["venue"] = proposer
+            follower = evidence_row(3_300, "LONG", 100.004, strong=False)
+            follower.update({"venue": "futures", "total_qty": 0.20})
+            episode = {
+                "causal_episode_id": "ign:%s:LONG:3000" % proposer,
+                "side": "LONG", "proposer": proposer,
+                "started_receive_ms": 3_100, "last_evidence_ms": 3_300,
+                "bias_snapshot": {"direction": "LONG", "confidence": 0.8},
+                "signals": [cash1, cash2, follower],
+                "epochs": {proposer: 1, "futures": 1},
+            }
+            histories = {
+                "binance_spot": tuple((cash1, cash2)) if proposer == "binance_spot" else (),
+                "coinbase_spot": tuple((cash1, cash2)) if proposer == "coinbase_spot" else (),
+                "futures": (follower,),
+            }
+            freshness = {
+                "coinbase_mode": "DEGRADED", "binance_spot_ready": True,
+                "futures_ready": True,
+            }
+            return ignition_core._result_from_episode(s, episode, histories, freshness, 3.4)
+
+        allowed = run("binance_spot")
+        self.assertEqual(allowed["decision"], "GO")
+        rejected = run("coinbase_spot")
+        self.assertEqual(rejected["decision"], "WAIT")
+        self.assertEqual(
+            rejected["reason"], "WAIT_DEGRADED_COINBASE_REQUIRES_BINANCE_CASH",
+        )
+
+    def test_cash_discovery_is_side_independent_and_non_authoritative(self):
+        def episode(side):
+            first = evidence_row(3_100, side, 100.003)
+            second = evidence_row(3_350, side, 100.006)
+            first["venue"] = "coinbase_spot"
+            second["venue"] = "binance_spot"
+            return {"signals": [first, second]}
+
+        long = ignition_core._cash_discovery(episode("LONG"))
+        short = ignition_core._cash_discovery(episode("SHORT"))
+        self.assertEqual(long["leader"], "coinbase_spot")
+        self.assertEqual(long["leader"], short["leader"])
+        self.assertEqual(long["status"], "COINBASE_SPOT_LED_CANDIDATE")
+        self.assertFalse(long["authority"])
+        self.assertEqual(long["confirmation"], "TIMING_ONLY_NO_1_3S_ACCEPTANCE")
 
 
 if __name__ == "__main__":

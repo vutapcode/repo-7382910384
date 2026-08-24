@@ -22,6 +22,7 @@ EPISODE_MAX_MS = 5_000
 LEAD_FLOOR_MS = 100.0
 MAX_CONSUMED_FRACTION = 0.35
 MIN_ACCEPTANCE_MS = 100
+MATERIAL_PRICE_BPS = 0.15
 MIN_VOL_BTC_BY_VENUE = {
     "spot": ignition_signals.MIN_QTY["binance_spot"],
     "coinbase": ignition_signals.MIN_QTY["coinbase_spot"],
@@ -62,11 +63,19 @@ def _compat_votes(passed, ignition):
     status = "PASS" if passed else "WAIT"
     cash = list(ignition.get("cash_venues") or ())
     proof = ignition.get("proof_type")
+    move_alias = {
+        "binance_spot": "spot", "coinbase_spot": "coinbase",
+        "futures": "futures",
+    }
+    moves = {
+        move_alias.get(name, name): value
+        for name, value in (ignition.get("venue_moves_bps") or {}).items()
+    }
     price_metrics = {
         "supporters": ["spot" if x == "binance_spot" else "coinbase" for x in cash],
         "strong_supporters": ["spot" if x == "binance_spot" else "coinbase" for x in cash],
         "opponents": list(ignition.get("cash_opponents") or ()),
-        "moves": dict(ignition.get("venue_moves_bps") or {}),
+        "moves": moves,
         "compatibility_only": True,
     }
     flow_metrics = {
@@ -285,7 +294,7 @@ def _material_flow(row):
         venue in ignition_signals.MIN_QTY
         and _f(row.get("total_qty")) >= ignition_signals.MIN_QTY[venue]
         and abs(_f(row.get("imbalance"))) >= 0.20
-        and abs(_f(row.get("price_conversion_bps"))) >= 0.15
+        and abs(_f(row.get("price_conversion_bps"))) >= MATERIAL_PRICE_BPS
         and row.get("clock_valid")
     )
 
@@ -428,23 +437,25 @@ def _proof(episode, histories):
             candidates.append(("FAILED_REVERSION", failed, venue))
 
     if not candidates:
-        return None, None
+        return None, None, None
     candidates.sort(key=lambda item: (
         int(item[1].get("receive_time_ms", 0)),
         proof_rank[item[0]],
         item[2],
     ))
-    proof_type, proof_signal, _venue = candidates[0]
-    return proof_type, proof_signal
+    proof_type, proof_signal, proof_venue = candidates[0]
+    return proof_type, proof_signal, proof_venue
 
 
-def _leader(episode):
+def _leader_from_rows(rows):
     first_by_venue = {}
-    for row in episode["signals"]:
+    for row in rows:
         venue = str(row.get("venue"))
         current = first_by_venue.get(venue)
         if current is None or _f(row.get("corrected_event_time_ms")) < _f(current.get("corrected_event_time_ms")):
             first_by_venue[venue] = row
+    if not first_by_venue:
+        return "UNKNOWN", None
     ordered = sorted(first_by_venue.values(), key=lambda row: _f(row.get("corrected_event_time_ms")))
     first = ordered[0]
     if len(ordered) < 2:
@@ -454,6 +465,39 @@ def _leader(episode):
     uncertainty = _f(first.get("clock_uncertainty_ms")) + _f(second.get("clock_uncertainty_ms"))
     lower = gap - uncertainty
     return (str(first.get("venue")) if lower >= LEAD_FLOOR_MS else "SIMULTANEOUS"), lower
+
+
+def _leader(episode):
+    return _leader_from_rows(episode["signals"])
+
+
+def _cash_discovery(episode):
+    """Side-independent cash venue timing; research metadata only.
+
+    This deliberately does not call a one-episode observation empirical price
+    discovery.  It records who arrived first only when both cash venues exist;
+    correlation and 1-3 second acceptance remain recorder/replay work.
+    """
+    cash_rows = [row for row in episode["signals"] if row.get("venue") in CASH]
+    venues = {str(row.get("venue")) for row in cash_rows}
+    if len(venues) < 2:
+        return {
+            "status": "ONE_CASH_VENUE_ONLY", "leader": "UNKNOWN",
+            "lead_lower_bound_ms": None, "authority": False,
+            "confirmation": "INSUFFICIENT_CROSS_SPOT_RESPONSE",
+        }
+    leader, lower = _leader_from_rows(cash_rows)
+    status = {
+        "binance_spot": "BINANCE_SPOT_LED_CANDIDATE",
+        "coinbase_spot": "COINBASE_SPOT_LED_CANDIDATE",
+        "SIMULTANEOUS": "SIMULTANEOUS",
+    }.get(leader, "UNKNOWN")
+    return {
+        "status": status, "leader": leader,
+        "lead_lower_bound_ms": round(lower, 4) if lower is not None else None,
+        "authority": False,
+        "confirmation": "TIMING_ONLY_NO_1_3S_ACCEPTANCE",
+    }
 
 
 def _oi_intent(state, side, now, bias_snapshot=None):
@@ -469,11 +513,12 @@ def _oi_intent(state, side, now, bias_snapshot=None):
         "NEW_LONG_BUILD": "LONG", "NEW_SHORT_BUILD": "SHORT",
     }.get(regime)
     aligned = expected_side in (None, str(side).upper())
+    fresh = age <= 6.0
     return {
         "intent": intent,
-        "raw_regime": regime, "fresh": age <= 6.0, "age_seconds": round(max(0.0, age), 4),
+        "raw_regime": regime, "fresh": fresh, "age_seconds": round(max(0.0, age), 4),
         "side": side, "expected_side": expected_side, "aligned_with_entry": aligned,
-        "causal_class": (
+        "causal_class": ("OI_STALE_CONTEXT" if not fresh else
             "ALIGNED_BUILD" if intent == "POSITION_BUILD" and aligned else
             "CASH_LED_UNWIND" if intent == "UNWIND" and aligned else
             "OI_DIRECTION_CONFLICT" if intent != "NEUTRAL" else "OI_NEUTRAL"
@@ -514,20 +559,26 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest):
 
 
 def _result_from_episode(state, episode, histories, freshness, now):
-    proof_type, proof_signal = _proof(episode, histories)
+    proof_type, proof_signal, proof_venue = _proof(episode, histories)
     leader, lead_lower = _leader(episode)
+    cash_discovery = _cash_discovery(episode)
     episode["leader"] = leader
     side = episode["side"]
     cash_signals = [row for row in episode["signals"] if row["venue"] in CASH and row["side"] == side]
     futures_signals = [row for row in episode["signals"] if row["venue"] == "futures" and row["side"] == side]
     cash_venues = sorted({row["venue"] for row in cash_signals})
-    futures_response = bool(futures_signals)
+    futures_response_ms = min((int(row["receive_time_ms"]) for row in futures_signals), default=0)
+    futures_response = bool(futures_response_ms)
     cash_opponents = sorted({row["venue"] for row in episode["signals"] if row["venue"] in CASH and row["side"] != side})
     proposer_is_futures = episode["proposer"] == "futures"
     cash_response_ms = min((int(row["receive_time_ms"]) for row in cash_signals), default=0)
     futures_cash_ok = bool(
         not proposer_is_futures
         or (cash_response_ms and cash_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
+    )
+    futures_follow_ok = bool(
+        proposer_is_futures
+        or (futures_response_ms and futures_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
     )
     latest = proof_signal or episode["signals"][-1]
     venue_moves = {}
@@ -560,10 +611,15 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "causal_episode_id": episode["causal_episode_id"], "state": "PROBE",
         "side": side, "proposer": episode["proposer"], "leader": leader,
         "lead_lower_bound_ms": round(lead_lower, 4) if lead_lower is not None else None,
+        "spot_price_discovery": cash_discovery,
         "bias_snapshot": dict(episode["bias_snapshot"]), "proof_type": proof_type,
+        "proof_venue": proof_venue,
         "cash_venues": cash_venues, "cash_opponents": cash_opponents,
         "supporting_venues": sorted({row["venue"] for row in episode["signals"] if row["side"] == side}),
-        "futures_response": futures_response, "futures_cash_response_ok": futures_cash_ok,
+        "futures_response": futures_response,
+        "futures_response_ms": futures_response_ms or None,
+        "futures_follow_ok": futures_follow_ok,
+        "futures_cash_response_ok": futures_cash_ok,
         "flow_by_venue": {row["venue"]: {
             "signed_imbalance": round(_sign(side) * _f(row.get("imbalance")), 6),
             "volume_btc": _f(row.get("total_qty")),
@@ -610,10 +666,21 @@ def _result_from_episode(state, episode, histories, freshness, now):
         return _wait(now, side, "WAIT_FEED_GROUP_NOT_READY", "PROBE", payload, freshness)
     if proposer_is_futures and not futures_cash_ok:
         return _wait(now, side, "WAIT_FUTURES_ALERT_CASH_RESPONSE", "PROBE", payload, freshness)
+    if not proposer_is_futures and not futures_follow_ok:
+        return _wait(now, side, "WAIT_CASH_IGNITION_FUTURES_RESPONSE", "PROBE", payload, freshness)
     if leader == "SIMULTANEOUS" and proof_type != "FAILED_REVERSION":
         return _wait(now, side, "WAIT_CAUSAL_LEADER_UNCERTAIN", "PROBE", payload, freshness)
     if proof_type is None:
         return _wait(now, side, "WAIT_IGNITION_PROOF", "PROBE", payload, freshness)
+    if freshness["coinbase_mode"] == "DEGRADED" and not (
+        episode["proposer"] == "binance_spot"
+        and proof_venue == "binance_spot"
+        and futures_follow_ok
+    ):
+        return _wait(
+            now, side, "WAIT_DEGRADED_COINBASE_REQUIRES_BINANCE_CASH",
+            "PROBE", payload, freshness,
+        )
     if not phase_measurement.get("valid"):
         return _wait(now, side, "WAIT_PHASE_SCALE_UNAVAILABLE", "PROBE", payload, freshness)
     if oi.get("fresh") and not oi.get("aligned_with_entry", True):
@@ -630,6 +697,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "execution_policy": execution,
         "phase": "ACCEPTANCE" if execution == "MAKER" else "RELEASE",
         "confidence": round(confidence, 6), "reason": "IGNITION_" + proof_type,
+        "price_threshold_bps": MATERIAL_PRICE_BPS,
         "side": side, "bias_confidence": _f(episode["bias_snapshot"].get("confidence")),
         "s_quorum": 2, "ignition": payload, "causal": _causal(payload),
         "s_votes": _compat_votes(True, payload), "freshness": freshness, "ts": now,
@@ -694,6 +762,23 @@ def evaluate(state, now=None, side=None):
                 episode["signals"].append(dict(row))
                 episode["last_evidence_ms"] = int(row.get("receive_time_ms", now_ms))
                 continue
+        appended = False
+        # A proposer/proof still needs adaptive surprise (``strong``), while
+        # an independent follower only needs the already-established material
+        # price+executed-flow contract.  Requiring another 2-deviation shock
+        # here would mistake corroboration for a second proposer and create
+        # needless misses.
+        if (
+            episode is not None
+            and str(row.get("side")) == str(episode.get("side"))
+            and _material_flow(row)
+            and int(row.get("receive_time_ms", 0))
+                - int(episode.get("started_receive_ms", 0)) <= EPISODE_MAX_MS
+        ):
+            episode["signals"].append(dict(row))
+            episode["last_evidence_ms"] = int(row.get("receive_time_ms", now_ms))
+            episode["epochs"][row.get("venue")] = int(row.get("epoch", 0))
+            appended = True
         if not row.get("strong"):
             continue
         if episode is None:
@@ -704,7 +789,7 @@ def evaluate(state, now=None, side=None):
                 continue
             episode = _start_episode(state, row)
             continue
-        if str(row.get("side")) == str(episode.get("side")):
+        if not appended and str(row.get("side")) == str(episode.get("side")):
             if int(row.get("receive_time_ms", 0)) - int(episode.get("started_receive_ms", 0)) <= EPISODE_MAX_MS:
                 episode["signals"].append(dict(row))
                 episode["last_evidence_ms"] = int(row.get("receive_time_ms", now_ms))

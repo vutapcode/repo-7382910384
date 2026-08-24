@@ -35,6 +35,7 @@ def _ignition_contract(result):
         and ignition.get("cash_venues")
         and _f(ignition.get("consumed_fraction"), 1.0) <= 0.35
         and (proposer != "futures" or ignition.get("futures_cash_response_ok"))
+        and (proposer == "futures" or ignition.get("futures_follow_ok"))
     )
 
 
@@ -59,7 +60,7 @@ def classify(result, state):
     futures_move = _f(moves.get("futures"))
     cash_best = max(cash_moves) if cash_moves else 0.0
     perp_lead = futures_move - cash_best
-    if str(ignition.get("proposer")) == "futures" and perp_lead > 3.0:
+    if perp_lead > 3.0:
         basis = dict(basis, status="PERP_EXPANSION", perp_expansion=True,
                      lead_bps=round(perp_lead, 6), limit_bps=3.0)
     # A qualified Ignition bucket already requires cash price conversion. Keep

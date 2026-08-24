@@ -1,4 +1,4 @@
-"""RAM-only flow persistence and freshness-aligned Spot/Perp lead analysis for Tier-S."""
+"""Trade-relative Cash/Perp context; never objective Spot price discovery."""
 VERSION = "FLOW_LEAD_ENGINE_V2_ALIGNED"
 MAX_SKEW_S = 0.30
 
@@ -54,6 +54,8 @@ def analyze(state, side):
             "version": VERSION, "status": "WARMUP", "persistence": 0.0,
             "oppose_ratio": 0.0, "lead": "UNKNOWN", "lead_gap_bps": 0.0,
             "lead_accel_bps": 0.0, "freshness": fresh,
+            "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+            "spot_price_discovery": "NOT_MEASURED_HERE",
         }
 
     recent = flow_rows[-12:]
@@ -69,6 +71,8 @@ def analyze(state, side):
             "flow_mean": round(sum(means) / len(means), 4) if means else 0.0,
             "lead": "UNKNOWN", "lead_gap_bps": 0.0, "lead_accel_bps": 0.0,
             "freshness": fresh,
+            "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+            "spot_price_discovery": "NOT_MEASURED_HERE",
             "policy": "NO_LEAD_INFERENCE_WHEN_FEEDS_ARE_TIME_SKEWED",
         }
 
@@ -110,5 +114,7 @@ def analyze(state, side):
         "lead_gap_bps": round(fast_gap, 4),
         "lead_accel_bps": round(accel, 4),
         "freshness": fresh,
+        "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+        "spot_price_discovery": "NOT_MEASURED_HERE",
         "policy": "CONTEXT_ONLY_TIME_ALIGNED_NO_SIGNAL_AUTHORITY",
     }
