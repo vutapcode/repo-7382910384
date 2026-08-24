@@ -1,0 +1,36 @@
+[Unit]
+Description=WStrade host and Lightsail CPU health supervisor
+After=network-online.target wstrade-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/WStrade
+EnvironmentFile=-/home/ubuntu/WStrade/.env
+ExecStart=/home/ubuntu/WStrade/.venv/bin/python -m loi_he_thong.ops_supervisor_entrypoint
+Restart=always
+RestartSec=5s
+Environment=PYTHONUNBUFFERED=1
+Environment=SMC_RECORDER_DATA_ROOT=/home/ubuntu/smc2026_data
+Environment=SMC_RECORDER_POLICY=ENABLED
+Environment=WSTRADE_SERVICE_PREFIX=wstrade
+Environment=WSTRADE_LIGHTSAIL_CPU_PATH=/home/ubuntu/smc2026_data/health/lightsail_cpu.json
+Environment=AWS_SHARED_CREDENTIALS_FILE=/etc/wstrade/aws_credentials
+UMask=0077
+Nice=5
+CPUAccounting=true
+CPUWeight=700
+MemoryHigh=96M
+MemoryMax=192M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/smc2026_data/health
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=256
+
+[Install]
+WantedBy=multi-user.target

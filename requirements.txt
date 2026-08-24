@@ -1,0 +1,8 @@
+aiohttp==3.14.3
+binance-futures-connector==4.2.0
+orjson==3.11.9
+python-dotenv==1.2.2
+pyarrow==25.0.0
+uvloop==0.22.1
+websockets==16.1
+boto3>=1.34,<2

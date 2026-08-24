@@ -1,0 +1,182 @@
+"""Protect profit ratchet from isolated Futures wicks without weakening hard-stop execution."""
+from __future__ import annotations
+
+VERSION = "RISK_RATCHET_PRICE_QUALITY_V3_CASH_CONFIRMED_FLOOR"
+
+_SPOT_MAX_AGE_SEC = 3.0
+_COINBASE_MAX_AGE_SEC = 5.0
+
+
+def _mid(bid, ask):
+    bid = float(bid or 0.0)
+    ask = float(ask or 0.0)
+    return (bid + ask) / 2.0 if bid > 0.0 and ask > bid else 0.0
+
+
+def _fresh(ts, now, max_age):
+    ts = float(ts or 0.0)
+    return ts > 0.0 and now >= ts and now - ts <= max_age
+
+
+def _fair_price(state, now):
+    if state is None:
+        return None, None, None
+
+    spot = _mid(getattr(state, "best_bid", 0.0), getattr(state, "best_ask", 0.0))
+    cb = float(getattr(state, "coinbase_price", 0.0) or 0.0)
+    spot_fresh = spot > 0.0 and _fresh(getattr(state, "thoi_gian_tick_cuoi", 0.0), now, _SPOT_MAX_AGE_SEC)
+    cb_fresh = cb > 0.0 and _fresh(
+        getattr(state, "thoi_gian_coinbase_ticker_cuoi", 0.0),
+        now,
+        _COINBASE_MAX_AGE_SEC,
+    )
+
+    if not spot_fresh and not cb_fresh:
+        return None, None, None
+
+    if spot_fresh and cb_fresh:
+        fair = (spot + cb) / 2.0
+        source = "SPOT_COINBASE"
+        fallback_multiplier = 1.0
+    elif spot_fresh:
+        fair = spot
+        source = "SPOT_FALLBACK"
+        fallback_multiplier = 1.75
+    else:
+        fair = cb
+        source = "COINBASE_FALLBACK"
+        fallback_multiplier = 1.50
+
+    atr = float(getattr(state, "atr_1m", 0.0) or 0.0)
+    atr_bps = atr / fair * 10000.0 if atr > 0.0 and fair > 0.0 else 0.0
+    base = max(4.0, min(15.0, atr_bps * 0.15 if atr_bps > 0.0 else 6.0))
+    tolerance_bps = min(25.0, base * fallback_multiplier)
+    return fair, tolerance_bps, source
+
+
+def _is_favorable_outlier(p, px, fair, tolerance_bps):
+    side = str(getattr(p, "side", "") or "").upper()
+    sign = 1.0 if side == "LONG" else -1.0
+    if side not in ("LONG", "SHORT") or fair <= 0.0:
+        return False
+    favorable_gap_bps = sign * (float(px) - float(fair)) / float(fair) * 10000.0
+    return favorable_gap_bps > float(tolerance_bps)
+
+
+def _is_isolated_adverse_floor_wick(p, px, floor, fair, tolerance_bps):
+    side = str(getattr(p, "side", "") or "").upper()
+    px, floor, fair = float(px), float(floor), float(fair)
+    if side == "LONG":
+        cash_has_not_crossed = fair > floor
+        adverse_gap_bps = (fair - px) / fair * 10000.0
+        return px <= floor and cash_has_not_crossed and adverse_gap_bps > float(tolerance_bps)
+    if side == "SHORT":
+        cash_has_not_crossed = fair < floor
+        adverse_gap_bps = (px - fair) / fair * 10000.0
+        return px >= floor and cash_has_not_crossed and adverse_gap_bps > float(tolerance_bps)
+    return False
+
+
+def _apply_quality_ratchet(risk, p, fair, guardian):
+    mode, _, _, _ = risk.tier_mode(guardian)
+    side = str(getattr(p, "side", "") or "").upper()
+    sign = 1.0 if side == "LONG" else -1.0
+    entry = float(p.entry_price)
+    r = float(p.r)
+    previous_best = float(p.best)
+    quality_best = max(previous_best, fair) if sign > 0.0 else min(previous_best, fair)
+    p.best = quality_best
+    best_r = max(0.0, sign * (quality_best - entry) / r)
+    p.best_r = best_r
+    floor_r, stage = risk._candidate(best_r, p.fee_r, mode)
+    if floor_r is not None:
+        floor_r = max(p.floor_r, floor_r) if p.floor_r is not None else floor_r
+        p.floor_r = floor_r
+        p.floor = entry + sign * floor_r * r
+        p.stage = stage
+
+
+def install(risk):
+    if getattr(risk, "_ratchet_price_quality_installed", False):
+        return VERSION
+
+    original = risk.assess
+
+    def assess(p, px, guardian=None, market_state=None, now=None):
+        previous = {
+            "best": getattr(p, "best", None),
+            "best_r": getattr(p, "best_r", None),
+            "floor": getattr(p, "floor", None),
+            "floor_r": getattr(p, "floor_r", None),
+            "stage": getattr(p, "stage", None),
+        }
+        result = original(p, px, guardian=guardian, market_state=market_state, now=now)
+
+        if not isinstance(result, dict):
+            return result
+
+        # The exchange hard stop and every causal Guardian exit remain final.
+        # Only a software PROFIT_FLOOR hit caused by an isolated Futures wick
+        # may wait for fresh cash-price confirmation.
+        if result.get("decision") == "EXIT":
+            if result.get("reason") != "PROFIT_FLOOR":
+                return result
+            ts = float(result.get("ts", 0.0) or (now if now is not None else 0.0))
+            fair, tolerance_bps, source = _fair_price(market_state, ts)
+            floor = getattr(p, "floor", None)
+            if (
+                fair is None or floor is None
+                or not _is_isolated_adverse_floor_wick(
+                    p, px, floor, fair, tolerance_bps
+                )
+            ):
+                return result
+            out = dict(result)
+            out["decision"] = "HOLD"
+            out["reason"] = "PROFIT_FLOOR_AWAITING_CASH_CONFIRMATION"
+            out["ratchet_price_quality"] = {
+                "futures_px": float(px),
+                "cross_venue_fair": float(fair),
+                "profit_floor": float(floor),
+                "tolerance_bps": float(tolerance_bps),
+                "mode": "ISOLATED_FUTURES_WICK_SUPPRESSED",
+                "source": source,
+            }
+            return out
+
+        if result.get("decision") != "HOLD":
+            return result
+
+        _, _, _, states = risk.tier_mode(guardian)
+        if states and states[0] == "SUPPORTIVE":
+            return result
+
+        ts = float(result.get("ts", 0.0) or (now if now is not None else 0.0))
+        fair, tolerance_bps, source = _fair_price(market_state, ts)
+        if fair is None or not _is_favorable_outlier(p, px, fair, tolerance_bps):
+            return result
+
+        p.best = previous["best"]
+        p.best_r = previous["best_r"]
+        p.floor = previous["floor"]
+        p.floor_r = previous["floor_r"]
+        p.stage = previous["stage"]
+        _apply_quality_ratchet(risk, p, fair, guardian)
+
+        out = dict(result)
+        out["best_r"] = getattr(p, "best_r", 0.0)
+        out["profit_floor"] = getattr(p, "floor", None)
+        out["floor_r"] = getattr(p, "floor_r", None)
+        out["stage"] = getattr(p, "stage", None)
+        out["ratchet_price_quality"] = {
+            "futures_px": float(px),
+            "cross_venue_fair": float(fair),
+            "tolerance_bps": float(tolerance_bps),
+            "mode": "CROSS_VENUE_CAPPED",
+            "source": source,
+        }
+        return out
+
+    risk.assess = assess
+    risk._ratchet_price_quality_installed = True
+    return VERSION

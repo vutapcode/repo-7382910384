@@ -1,0 +1,70 @@
+[Unit]
+Description=WStrade Ignition Core V1 BTCUSDT engine
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/WStrade
+EnvironmentFile=-/home/ubuntu/WStrade/.env
+LoadCredential=binance_api_key:/etc/wstrade/credentials/binance_api_key
+LoadCredential=binance_api_secret:/etc/wstrade/credentials/binance_api_secret
+# Empty defaults let AUTO_PROMOTE collect shadow evidence before credentials
+# are provisioned. LoadCredential overrides these defaults after secure setup.
+SetCredential=binance_api_key:
+SetCredential=binance_api_secret:
+ExecStartPre=+/usr/bin/install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.local/state/wstrade /home/ubuntu/.local/state/smc2026/runtime /home/ubuntu/.local/state/smc2026/mainnet_shadow /home/ubuntu/smc2026_data/health
+ExecStartPre=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/repo_integrity_check.py
+ExecStartPre=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/shadow_state_guard.py
+ExecStartPre=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/mainnet_preflight.py
+ExecStart=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/mainnet_tier_s_lean_launcher.py
+Restart=always
+RestartSec=15s
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SMC_EXECUTION_VENUE=MAINNET
+Environment=SMC_ENABLE_TRADING=false
+Environment=SMC_MAINNET_ARMED=false
+Environment=SMC_MAINNET_EXCLUSIVE_ACCOUNT=false
+Environment=WSTRADE_MODE=AUTO_PROMOTE
+Environment=WSTRADE_IGNITION_MANUAL_APPROVAL=false
+Environment=WSTRADE_EXECUTION_VENUE=MAINNET
+Environment=WSTRADE_QTY_BTC=0.001
+Environment=WSTRADE_LEVERAGE=20
+Environment=WSTRADE_MARGIN_TYPE=ISOLATED
+Environment=WSTRADE_DAILY_LOSS_USDT=0.60
+Environment=WSTRADE_MAX_PLANNED_LOSS_USDT=0.60
+Environment=WSTRADE_MARGIN_RESERVE_USDT=0.50
+Environment=WSTRADE_MAX_ENTRIES_PER_DAY=0
+Environment=WSTRADE_MAX_CONSECUTIVE_LOSSES=0
+Environment=WSTRADE_CPU_TARGET_PCT=15
+Environment=WSTRADE_CPU_HARD_PCT=20
+Environment=WSTRADE_CPU_WINDOWS_SECONDS=900,3600
+Environment=SMC_SHADOW_BALANCE_USDT=5000
+Environment=SMC_SHADOW_FEE_BPS_PER_SIDE=9.0
+Environment=SMC_RUNTIME_DIR=/home/ubuntu/.local/state/smc2026/runtime
+Environment=SMC_JOURNAL_DIR=/home/ubuntu/.local/state/smc2026/mainnet_shadow
+Environment=SMC_SHADOW_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/mainnet_shadow/events.jsonl
+Environment=SMC_JOURNAL_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/mainnet_shadow/events.jsonl
+Environment=SMC_BOT_HEARTBEAT_PATH=/home/ubuntu/smc2026_data/health/bot_runtime.json
+UMask=0077
+CPUAccounting=true
+MemoryAccounting=true
+CPUWeight=900
+MemoryHigh=768M
+MemoryMax=1G
+OOMScoreAdjust=-500
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/.local/state/wstrade /home/ubuntu/.local/state/smc2026 /home/ubuntu/smc2026_data/health
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

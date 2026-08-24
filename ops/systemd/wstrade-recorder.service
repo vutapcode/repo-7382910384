@@ -1,0 +1,47 @@
+[Unit]
+Description=WStrade low-priority public market recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/WStrade
+ExecStartPre=+/usr/bin/install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.local/state/smc2026/runtime /home/ubuntu/.local/state/smc2026/mainnet_shadow /home/ubuntu/smc2026_data
+ExecStart=/home/ubuntu/WStrade/.venv/bin/python -m recorder.main
+Restart=always
+RestartSec=5s
+RestartPreventExitStatus=73
+Environment=PYTHONUNBUFFERED=1
+Environment=SMC_RECORDER_DATA_ROOT=/home/ubuntu/smc2026_data
+Environment=SMC_RECORDER_SYMBOL=BTCUSDT
+Environment=SMC_RECORDER_QUEUE_MAX=20000
+Environment=SMC_RECORDER_BATCH_MAX=1000
+Environment=SMC_RECORDER_CASH_BATCH_MS=100
+Environment=SMC_RECORDER_CASH_TICKER_SECONDS=0.25
+Environment=SMC_RECORDER_COINBASE_PRODUCT=BTC-USD
+Environment=SMC_RECORDER_OI_SECONDS=15
+Environment=SMC_RECORDER_OI_PRESSURE_SECONDS=5
+Environment=WSTRADE_BOT_HEALTH_PATH=/home/ubuntu/smc2026_data/health/bot_runtime.json
+# Keep the full 72-hour gate plus 12 hours within the measured disk budget.
+Environment=SMC_RECORDER_RETENTION_HOURS=84
+Environment=WSTRADE_CPU_HEALTH_PATH=/home/ubuntu/smc2026_data/health/cpu_status.json
+Environment=SMC_JOURNAL_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/mainnet_shadow/events.jsonl
+Environment=SMC_JOURNAL_CYCLES_PATH=/home/ubuntu/.local/state/smc2026/mainnet_shadow/cycles.json
+UMask=0077
+Nice=10
+CPUAccounting=true
+CPUWeight=50
+MemoryHigh=256M
+MemoryMax=512M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/.local/state/smc2026 /home/ubuntu/smc2026_data
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
