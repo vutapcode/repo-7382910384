@@ -249,35 +249,140 @@ def _material_flow(row):
     )
 
 
+def _venue_anchor(history, started_receive_ms):
+    """Return a venue-local pre-episode reference; never borrow another venue's basis."""
+    rows = [row for row in history if _f(row.get("price")) > 0.0 or _f(row.get("first_price")) > 0.0]
+    before = [row for row in rows if int(row.get("receive_time_ms", 0)) < int(started_receive_ms)]
+    if before:
+        price = _f(before[-1].get("price"))
+        if price > 0.0:
+            return price, "PRE_EPISODE_CLOSE"
+    for row in rows:
+        if int(row.get("receive_time_ms", 0)) >= int(started_receive_ms):
+            price = _f(row.get("first_price"))
+            if price > 0.0:
+                return price, "VENUE_EPISODE_FIRST_TRADE"
+            price = _f(row.get("price"))
+            if price > 0.0:
+                return price, "VENUE_EPISODE_FIRST_CLOSE"
+    return 0.0, "UNAVAILABLE"
+
+
 def _failed_reversion(history, side, proposer_ms):
+    """Prove material opposition -> excursion -> reclaim -> acceptance on one cash venue."""
     sign = _sign(side)
-    rows = [row for row in history if int(row.get("receive_time_ms", 0)) >= proposer_ms]
-    if len(rows) < 2:
-        return False
+    rows = [
+        row for row in history
+        if int(row.get("receive_time_ms", 0)) >= int(proposer_ms)
+    ]
+    if len(rows) < 4:
+        return None
+
+    anchor, anchor_method = _venue_anchor(history, proposer_ms)
+    if anchor <= 0.0:
+        return None
+
     latest = rows[-1]
-    for prior in reversed(rows[:-1]):
-        gap = int(latest.get("receive_time_ms", 0)) - int(prior.get("receive_time_ms", 0))
-        if gap > 300:
+    latest_ms = int(latest.get("receive_time_ms", 0))
+    for shock_index in range(len(rows) - 2, -1, -1):
+        shock = rows[shock_index]
+        shock_ms = int(shock.get("receive_time_ms", 0))
+        if latest_ms - shock_ms > EVIDENCE_GAP_MS:
             break
-        if sign * _f(prior.get("imbalance")) <= -0.12:
-            anchor = _f(rows[0].get("price"))
-            return sign * _bps(_f(latest.get("price")), anchor) >= -0.05
-    return False
+        if str(shock.get("side")) == str(side):
+            continue
+        # "strong" already requires venue MIN_QTY, adaptive quote surprise >= 1.50,
+        # >= 0.20 imbalance, >= 0.15 bps conversion and a valid clock.
+        if not shock.get("strong") or not _material_flow(shock):
+            continue
+
+        adverse_price = _f(shock.get("low")) if sign > 0.0 else _f(shock.get("high"))
+        if adverse_price <= 0.0:
+            adverse_price = _f(shock.get("price"))
+        adverse_excursion = max(0.0, -sign * _bps(adverse_price, anchor))
+        if adverse_excursion < 0.15:
+            continue
+
+        reclaim_index = None
+        for index in range(shock_index + 1, len(rows) - 1):
+            reclaim = rows[index]
+            if int(reclaim.get("receive_time_ms", 0)) - shock_ms > EVIDENCE_GAP_MS:
+                break
+            if str(reclaim.get("side")) != str(side) or not _material_flow(reclaim):
+                continue
+            if sign * _bps(_f(reclaim.get("price")), anchor) >= 0.0:
+                reclaim_index = index
+                break
+        if reclaim_index is None:
+            continue
+
+        acceptance_rows = rows[reclaim_index + 1:]
+        if not acceptance_rows or latest_ms - shock_ms > EVIDENCE_GAP_MS:
+            continue
+        if any(
+            sign * _bps(_f(row.get("price")), anchor) < 0.0
+            for row in acceptance_rows
+            if _f(row.get("price")) > 0.0
+        ):
+            continue
+        if any(
+            str(row.get("side")) != str(side) and _material_flow(row)
+            for row in acceptance_rows
+        ):
+            continue
+
+        reclaim = rows[reclaim_index]
+        proof = dict(latest)
+        proof["_failed_reversion_evidence"] = {
+            "version": "FAILED_REVERSION_V2",
+            "venue": str(shock.get("venue") or latest.get("venue") or ""),
+            "anchor_price": round(anchor, 10),
+            "anchor_method": anchor_method,
+            "shock_receive_time_ms": shock_ms,
+            "shock_volume_btc": round(_f(shock.get("total_qty")), 8),
+            "shock_surprise_ratio": round(_f(shock.get("surprise_ratio")), 6),
+            "shock_signed_imbalance": round(sign * _f(shock.get("imbalance")), 6),
+            "adverse_excursion_bps": round(adverse_excursion, 6),
+            "reclaim_receive_time_ms": int(reclaim.get("receive_time_ms", 0)),
+            "reclaim_bps": round(sign * _bps(_f(reclaim.get("price")), anchor), 6),
+            "acceptance_receive_time_ms": latest_ms,
+            "acceptance_bps": round(sign * _bps(_f(latest.get("price")), anchor), 6),
+            "acceptance_buckets": len(acceptance_rows),
+        }
+        return proof
+    return None
 
 
 def _proof(episode, histories):
-    side, proposer = episode["side"], episode["proposer"]
-    cash_venues = {row["venue"] for row in episode["signals"] if row["venue"] in CASH and row["side"] == side}
+    side = episode["side"]
+    cash_venues = sorted({
+        row["venue"] for row in episode["signals"]
+        if row["venue"] in CASH and row["side"] == side
+    })
     candidates = []
+    proof_rank = {"METAORDER_CONTINUATION": 0, "FAILED_REVERSION": 1}
     for venue in cash_venues:
-        rows = [row for row in histories.get(venue, ())
-                if row.get("side") == side and int(row.get("receive_time_ms", 0)) >= episode["started_receive_ms"]]
+        rows = [
+            row for row in histories.get(venue, ())
+            if row.get("side") == side
+            and int(row.get("receive_time_ms", 0)) >= episode["started_receive_ms"]
+        ]
         if len(rows) >= 2 and rows[-1].get("strong") and rows[-2].get("strong"):
             if _f(rows[-1].get("flow_acceleration")) >= 0.0:
-                candidates.append(("METAORDER_CONTINUATION", rows[-1]))
-        if _failed_reversion(histories.get(venue, ()), side, episode["started_receive_ms"]):
-            candidates.append(("FAILED_REVERSION", rows[-1] if rows else episode["signals"][-1]))
-    return candidates[0] if candidates else (None, None)
+                candidates.append(("METAORDER_CONTINUATION", rows[-1], venue))
+        failed = _failed_reversion(histories.get(venue, ()), side, episode["started_receive_ms"])
+        if failed is not None:
+            candidates.append(("FAILED_REVERSION", failed, venue))
+
+    if not candidates:
+        return None, None
+    candidates.sort(key=lambda item: (
+        int(item[1].get("receive_time_ms", 0)),
+        proof_rank[item[0]],
+        item[2],
+    ))
+    proof_type, proof_signal, _venue = candidates[0]
+    return proof_type, proof_signal
 
 
 def _leader(episode):
@@ -331,14 +436,26 @@ def _result_from_episode(state, episode, histories, freshness, now):
     latest = proof_signal or episode["signals"][-1]
     acceleration = _f(latest.get("flow_acceleration"))
     consumed = 0.20 if acceleration > 0.0 and len(episode["signals"]) <= 4 else 0.35 if acceleration >= 0.0 else 0.65
-    anchor = _f(episode["signals"][0].get("price"))
     venue_moves = {}
-    for venue, rows in histories.items():
-        if rows:
-            venue_moves[venue] = round(_sign(side) * _bps(_f(rows[-1].get("price")), anchor), 6)
-    cash_move = max((venue_moves.get(name, 0.0) for name in cash_venues), default=0.0)
-    futures_move = venue_moves.get("futures", 0.0)
-    fair_value_gap = max(0.0, cash_move - futures_move)
+    venue_anchors = {}
+    venue_anchor_methods = {}
+    for venue, history in histories.items():
+        if not history:
+            continue
+        anchor, anchor_method = _venue_anchor(history, episode["started_receive_ms"])
+        if anchor <= 0.0:
+            continue
+        venue_anchors[venue] = round(anchor, 10)
+        venue_anchor_methods[venue] = anchor_method
+        venue_moves[venue] = round(
+            _sign(side) * _bps(_f(history[-1].get("price")), anchor), 6
+        )
+    cash_move = max((venue_moves[name] for name in cash_venues if name in venue_moves), default=0.0)
+    futures_move = venue_moves.get("futures")
+    fair_value_gap = (
+        max(0.0, cash_move - futures_move)
+        if futures_move is not None else 0.0
+    )
     conversion = max(0.0, _sign(side) * _f(latest.get("price_conversion_bps")))
     residual_proxy = max(fair_value_gap, conversion * max(0.0, (1.0 - consumed) / max(consumed, 0.05)))
     oi = _oi_intent(state, side, now)
@@ -356,7 +473,15 @@ def _result_from_episode(state, episode, histories, freshness, now):
             "surprise_ratio": _f(row.get("surprise_ratio")),
             "flow_acceleration": _f(row.get("flow_acceleration")),
         } for row in episode["signals"][-3:]},
-        "venue_moves_bps": venue_moves, "impulse_phase": "EARLY" if consumed <= 0.35 else "MATURE",
+        "venue_moves_bps": venue_moves,
+        "venue_anchor_prices": venue_anchors,
+        "venue_anchor_methods": venue_anchor_methods,
+        "venue_anchor_policy": "PER_VENUE_PRE_EPISODE",
+        "failed_reversion_evidence": (
+            dict(proof_signal.get("_failed_reversion_evidence") or {})
+            if proof_type == "FAILED_REVERSION" and isinstance(proof_signal, dict) else {}
+        ),
+        "impulse_phase": "EARLY" if consumed <= 0.35 else "MATURE",
         "consumed_fraction": consumed, "fair_value_gap_bps": round(fair_value_gap, 6),
         "residual_edge_proxy_bps": round(residual_proxy, 6), "oi_intent": oi,
         "clock_quality": {name: {
@@ -364,7 +489,19 @@ def _result_from_episode(state, episode, histories, freshness, now):
             "valid": rows[-1].get("clock_valid"), "epoch": rows[-1].get("epoch"),
         } for name, rows in histories.items() if rows},
     }
-    if cash_opponents:
+    resolved_reversion_venue = None
+    if proof_type == "FAILED_REVERSION" and isinstance(proof_signal, dict):
+        resolved_reversion_venue = (
+            (proof_signal.get("_failed_reversion_evidence") or {}).get("venue")
+        )
+    unresolved_cash_opponents = [
+        venue for venue in cash_opponents if venue != resolved_reversion_venue
+    ]
+    payload["resolved_cash_opponents"] = (
+        [resolved_reversion_venue] if resolved_reversion_venue else []
+    )
+    payload["unresolved_cash_opponents"] = unresolved_cash_opponents
+    if unresolved_cash_opponents:
         state._ignition_episode = None
         return _wait(now, side, "OPPOSING_CASH_FLOW", "INVALID", payload, freshness)
     if freshness["coinbase_mode"] == "STALE":
