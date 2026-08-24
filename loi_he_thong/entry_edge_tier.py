@@ -94,7 +94,9 @@ def classify(result, state):
         edge_class = "BOOTSTRAP_UNVERIFIED"
 
     calibration = edge_calibration_v2.factor(
-        state, mode, str(regime.get("regime") or "NORMAL"), side, edge_class
+        state, mode, str(regime.get("regime") or "NORMAL"), side, edge_class,
+        ignition.get("proof_type"), ignition.get("proposer"),
+        costs.get("execution_style"),
     )
     samples = int(calibration.get("samples", 0) or 0)
     empirical_mean = calibration.get("mean_net_bps")
@@ -111,7 +113,7 @@ def classify(result, state):
         and calibration.get("live_empirical_ok")
         and empirical_mean is not None and _f(empirical_mean) > 0.0
         and empirical_lcb is not None and _f(empirical_lcb) >= 0.0
-        and stress_ok and economic_ok
+        and stress_ok and not hard_vetoes
         and costs.get("commission_verified")
     )
     live = bool(getattr(state, "wstrade_live_armed", False))
@@ -145,14 +147,17 @@ def classify(result, state):
             "status": calibration.get("status"),
         },
         "live_empirical_ok": live_empirical_ok,
-        "policy": "STRUCTURAL_RESIDUAL_SHADOW_BOOTSTRAP_LIVE_EMPIRICAL_LCB",
+        "policy": "SHADOW_BOOTSTRAP_LIVE_EMPIRICAL_GUARDIAN_OUTCOME_LCB",
     }
 
 
 def authorize(result, state):
     report = classify(result, state)
     if bool(getattr(state, "wstrade_live_armed", False)):
-        allowed = bool(report["cost_ok"] and report["live_empirical_ok"])
+        # Completed shadow outcomes are already net of executable fills, fees
+        # and slippage.  Requiring the structural proxy again would recreate
+        # the cash/Futures convergence contradiction fixed above.
+        allowed = bool(report["live_empirical_ok"])
     else:
         allowed = bool(report["cost_ok"] or report["bootstrap_shadow_allowed"])
     return bool((result or {}).get("decision") == "GO" and allowed), report

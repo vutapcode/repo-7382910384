@@ -36,12 +36,13 @@ def state():
 
 
 class BiasCouncilTests(unittest.TestCase):
-    def test_two_s_votes_create_long_consensus(self):
+    def test_price_and_price_oi_are_not_two_independent_votes(self):
         s = state()
         r = council.evaluate(s, now=100.0, force_full=False)
         self.assertEqual(r["s_votes"]["S1_cross_price"]["vote"], "LONG")
         self.assertEqual(r["s_votes"]["S2_price_x_oi"]["vote"], "LONG")
-        self.assertEqual(r["bias"], "LONG")
+        self.assertEqual(r["bias"], "ABSTAIN")
+        self.assertEqual(r["reason"], "PRICE_OI_NOT_INDEPENDENT_WITHOUT_FLOW")
         self.assertGreaterEqual(r["quorum"], 2)
 
     def test_four_second_impulse_cannot_create_bias_without_slow_confirmation(self):
@@ -105,6 +106,22 @@ class BiasCouncilTests(unittest.TestCase):
         side, _, reason = council._hyst(s, raw)
         self.assertEqual(side, "LONG")
         self.assertEqual(reason, "HOLD_CONTEXT_PULLBACK")
+
+    def test_established_context_survives_short_raw_abstain_latch(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "LONG", 0.8
+        s._bias_last_supported_at = 90.0
+        raw = {
+            "ts": 100.0, "bias": "ABSTAIN", "confidence": 0.0,
+            "quorum": 0, "story": {"name": "MIXED_OR_INCOMPLETE"},
+            "direction_memory": {
+                "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+            },
+        }
+        side, confidence, reason = council._hyst(s, raw)
+        self.assertEqual(side, "LONG")
+        self.assertGreaterEqual(confidence, 0.35)
+        self.assertEqual(reason, "HOLD_CONTEXT_THROUGH_ABSTAIN")
 
 
 

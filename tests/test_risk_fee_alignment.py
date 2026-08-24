@@ -26,6 +26,14 @@ class RiskFeeAlignmentTest(unittest.TestCase):
         hook._refresh_fee_r(p, 9.0)
         self.assertAlmostEqual(p.fee_r, (100000.0 * 8.5 / 10000.0) / 500.0)
 
+    def test_generic_live_execution_plan_overrides_flat_fallback(self):
+        p = SimpleNamespace(
+            entry_price=100000.0, r=500.0, fee_r=0.0,
+            execution_cost_plan={"total_cost_bps": 7.25},
+        )
+        hook._refresh_fee_r(p, 9.0)
+        self.assertAlmostEqual(p.fee_r, (100000.0 * 7.25 / 10000.0) / 500.0)
+
 
 if __name__ == "__main__":
     unittest.main()

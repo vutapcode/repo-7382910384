@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from loi_he_thong import ignition_core, ignition_signals, entry_edge_tier
 
@@ -69,6 +70,57 @@ def evidence_row(receive_ms, side, price, *, strong=True, material=True):
 
 
 class IgnitionCoreTests(unittest.TestCase):
+    def test_persistent_metaorder_is_shadow_telemetry_only(self):
+        histories = {}
+        for venue in ("binance_spot", "futures"):
+            rows = []
+            for index in range(3):
+                row = evidence_row((index + 1) * 1_000, "LONG", 100.0 + index * 0.01)
+                row["venue"] = venue
+                row["buy_qty"], row["sell_qty"] = 0.08, 0.02
+                rows.append(row)
+            histories[venue] = rows
+        histories["coinbase_spot"] = []
+        report = ignition_core._persistent_metaorder_shadow(histories, "LONG", 3_100)
+        self.assertEqual(report["status"], "PERSISTENT_METAORDER_CANDIDATE")
+        self.assertFalse(report["authority"])
+        self.assertEqual(report["policy"], "TELEMETRY_ONLY_NEVER_OPENS_OR_VETOES")
+
+    def test_persistent_metaorder_is_observed_without_ignition_episode(self):
+        histories = {}
+        for venue in ("binance_spot", "futures"):
+            rows = []
+            for index in range(3):
+                row = evidence_row((index + 1) * 1_000, "LONG", 100.0 + index * 0.01,
+                                   strong=False)
+                row.update({"venue": venue, "buy_qty": 0.08, "sell_qty": 0.02})
+                rows.append(row)
+            histories[venue] = tuple(rows)
+        histories["coinbase_spot"] = ()
+        s = state(now=3.1)
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertIsNone(getattr(s, "_ignition_episode", None))
+        self.assertEqual(s.persistent_metaorder_shadow["candidate_side"], "LONG")
+        self.assertFalse(s.persistent_metaorder_shadow["authority"])
+
+    def test_persistent_metaorder_does_not_bridge_empty_seconds(self):
+        histories = {}
+        for venue in ("binance_spot", "futures"):
+            rows = []
+            for index, receive_ms in enumerate((1_000, 3_000, 5_000)):
+                row = evidence_row(receive_ms, "LONG", 100.0 + index * 0.01)
+                row["venue"] = venue
+                row["buy_qty"], row["sell_qty"] = 0.08, 0.02
+                rows.append(row)
+            histories[venue] = rows
+        histories["coinbase_spot"] = []
+        report = ignition_core._persistent_metaorder_shadow(histories, "LONG", 5_100)
+        self.assertEqual(report["status"], "OBSERVING")
+        self.assertFalse(report["venues"]["binance_spot"]["contiguous_seconds"])
+
     def test_frozen_bias_keeps_direction_context(self):
         s = state()
         s.bias_council = {
@@ -177,6 +229,12 @@ class IgnitionCoreTests(unittest.TestCase):
         proved = ignition_core.evaluate(s, now=3.401)
         self.assertEqual(proved["decision"], "GO")
         self.assertEqual(proved["ignition"]["proof_type"], "METAORDER_CONTINUATION")
+        self.assertEqual(proved["ignition"]["residual_edge_proxy_bps"], 0.0)
+        self.assertEqual(
+            proved["ignition"]["residual_edge_source"],
+            "EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED",
+        )
+        self.assertIn("handoff_gap_bps", proved["ignition"])
         self.assertTrue(proved["ignition"]["futures_follow_ok"])
         self.assertLessEqual(proved["ignition"]["consumed_fraction"], 0.35)
         repeated = ignition_core.evaluate(s, now=3.402)
@@ -292,6 +350,43 @@ class IgnitionCoreTests(unittest.TestCase):
         allowed, report = entry_edge_tier.authorize(result, s)
         self.assertFalse(allowed)
         self.assertFalse(report["live_empirical_ok"])
+
+    def test_live_uses_net_empirical_outcome_not_handoff_gap_proxy(self):
+        s = state()
+        s.wstrade_live_armed = True
+        s.wstrade_promotion = {
+            "shadow_trades": 30, "stress_25bps_pnl_usdt": 1.0,
+        }
+        ignition = {
+            "state": "PROVE", "proof_type": "METAORDER_CONTINUATION",
+            "cash_venues": ["binance_spot"], "proposer": "binance_spot",
+            "futures_follow_ok": True, "consumed_fraction": 0.20,
+            "residual_edge_proxy_bps": 0.0,
+            "venue_moves_bps": {"binance_spot": 0.5, "futures": 0.4},
+            "flow_by_venue": {"binance_spot": {"signed_imbalance": 0.6}},
+        }
+        result = {
+            "decision": "GO", "side": "LONG", "entry_mode": "IGNITION",
+            "phase": "RELEASE", "ignition": ignition,
+            "s_votes": ignition_core._compat_votes(True, ignition),
+        }
+        empirical = {
+            "samples": 30, "live_empirical_ok": True,
+            "mean_net_bps": 4.0, "lower_confidence_bound_bps": 1.0,
+            "status": "ACTIVE",
+        }
+        costs = {
+            "total_cost_bps": 10.0, "minimum_net_edge_bps": 2.0,
+            "commission_verified": True, "commission_source": "TEST",
+            "execution_style": "TAKER",
+        }
+        with patch.object(entry_edge_tier.edge_calibration_v2, "factor", return_value=empirical), patch.object(
+            entry_edge_tier.verified_cost_model, "estimate", return_value=costs
+        ):
+            allowed, report = entry_edge_tier.authorize(result, s)
+        self.assertFalse(report["cost_ok"])
+        self.assertTrue(report["live_empirical_ok"])
+        self.assertTrue(allowed)
 
     def test_edge_contract_rejects_cash_go_without_futures_follower(self):
         result = {

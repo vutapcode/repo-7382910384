@@ -182,7 +182,8 @@ def shadow_execution_plan(result, state, execution_style):
 
 def position_total_cost_bps(position, fallback_bps=18.0):
     """Cost floor used by Risk for an existing position, including slippage."""
-    plan = getattr(position, "shadow_cost_plan", None) or {}
+    plan = (getattr(position, "execution_cost_plan", None)
+            or getattr(position, "shadow_cost_plan", None) or {})
     try:
         value = float(plan.get("total_cost_bps", 0.0) or 0.0)
     except (AttributeError, TypeError, ValueError):

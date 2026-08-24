@@ -101,6 +101,22 @@ class LiveExecutionTests(unittest.TestCase):
         self.assertEqual(thesis['cash_anchors'], ['coinbase', 'spot'])
         self.assertEqual(thesis['handoff_status'], 'SPOT_HANDOFF')
 
+    def test_ignition_thesis_preserves_frozen_long_context(self):
+        thesis = live._entry_causal_thesis({'ignition': {
+            'cash_venues': ['binance_spot'], 'proposer': 'binance_spot',
+            'bias_snapshot': {
+                'bias': 'LONG', 'confidence': 0.8, 'hysteresis': 'STABLE',
+                'direction_context': {
+                    'context_side': 'LONG', 'phase': 'ESTABLISHED_TREND',
+                    'candidate_side': 'ABSTAIN', 'price_vote': 'LONG',
+                    'flow_vote': 'LONG', 'oi_regime': 'NEW_LONG_BUILD',
+                },
+            },
+        }})
+        self.assertEqual(thesis['bias_thesis']['context_side'], 'LONG')
+        self.assertEqual(thesis['bias_thesis']['phase'], 'ESTABLISHED_TREND')
+        self.assertEqual(thesis['bias_thesis']['flow_vote'], 'LONG')
+
     def test_promotion_requires_private_user_stream(self):
         async def run():
             s = state()
@@ -166,6 +182,7 @@ class LiveExecutionTests(unittest.TestCase):
             self.assertIsNotNone(pos)
             self.assertEqual(pos.hard_sl_algo_id, 7)
             self.assertTrue(pos.active)
+            self.assertEqual(pos.execution_cost_plan['execution_style'], 'TAKER')
         asyncio.run(run())
 
     def test_stop_failure_immediately_flattens_and_never_publishes_position(self):

@@ -51,7 +51,8 @@ regime_snapshot_hook.install(hardened.runtime.edge.regime_engine)
 # never modifies the structural decision or authorizes a hard veto.
 # Persist shadow entry metadata alongside active position state.
 shadow_entry_metadata_persistence_hook.install(hardened.runtime.runtime_state)
-# Learn only from completed shadow outcomes, using side/mode/regime/edge-class buckets.
+# Learn only from completed outcomes; proof/proposer/execution cohorts must not
+# subsidize one another.
 shadow_calibration_hook_v2.install(hardened)
 
 if __name__ == "__main__":

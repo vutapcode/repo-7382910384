@@ -500,6 +500,119 @@ def _cash_discovery(episode):
     }
 
 
+def _persistent_metaorder_shadow(histories, side, now_ms):
+    """Bounded 1-6 s persistence measurement; never Entry authority.
+
+    It deliberately reuses exact executed-flow buckets instead of inventing a
+    second signal stack.  The fixed-size history keeps hot-path work bounded.
+    """
+    cutoff = int(now_ms) - 6_000
+    sign = _sign(side)
+    venues = {}
+    for venue in ("binance_spot", "coinbase_spot", "futures"):
+        rows = [
+            row for row in histories.get(venue, ())
+            if int(row.get("receive_time_ms", 0)) >= cutoff
+        ]
+        seconds = {}
+        for row in rows:
+            key = int(row.get("receive_time_ms", 0)) // 1_000
+            cell = seconds.setdefault(key, {
+                "buy": 0.0, "sell": 0.0, "first": 0.0, "last": 0.0,
+            })
+            cell["buy"] += _f(row.get("buy_qty"))
+            cell["sell"] += _f(row.get("sell_qty"))
+            price = _f(row.get("price"))
+            if price > 0.0:
+                if cell["first"] <= 0.0:
+                    cell["first"] = price
+                cell["last"] = price
+        second_keys = sorted(seconds)
+        ordered = [seconds[key] for key in second_keys]
+        contiguous = bool(
+            len(second_keys) >= 3
+            and all(b - a == 1 for a, b in zip(second_keys, second_keys[1:]))
+        )
+        aligned = opposed = observed = 0
+        first_price = last_price = 0.0
+        for cell in ordered:
+            total = cell["buy"] + cell["sell"]
+            if total <= 0.0:
+                continue
+            observed += 1
+            imbalance = sign * (cell["buy"] - cell["sell"]) / total
+            aligned += int(imbalance >= 0.20)
+            opposed += int(imbalance <= -0.20)
+            if first_price <= 0.0 and cell["first"] > 0.0:
+                first_price = cell["first"]
+            if cell["last"] > 0.0:
+                last_price = cell["last"]
+        progress = sign * _bps(last_price, first_price) if first_price > 0.0 else 0.0
+        persistence = aligned / observed if observed else 0.0
+        structural = bool(
+            contiguous and observed >= 3 and aligned >= 2
+            and persistence >= (2.0 / 3.0)
+            and opposed == 0 and progress >= 0.15
+        )
+        venues[venue] = {
+            "observed_seconds": observed, "aligned_seconds": aligned,
+            "opposed_seconds": opposed,
+            "contiguous_seconds": contiguous,
+            "persistence_ratio": round(persistence, 6),
+            "price_progress_bps": round(progress, 6),
+            "structural_candidate": structural,
+        }
+    cash = [name for name in CASH if venues[name]["structural_candidate"]]
+    futures_follow = venues["futures"]["structural_candidate"]
+    status = (
+        "PERSISTENT_METAORDER_CANDIDATE" if cash and futures_follow else
+        "WAIT_PERSISTENT_FUTURES_FOLLOW" if cash else "OBSERVING"
+    )
+    return {
+        "version": "PERSISTENT_METAORDER_SHADOW_V1", "status": status,
+        "cash_candidates": sorted(cash), "futures_follow": futures_follow,
+        "venues": venues, "authority": False,
+        "calibration_status": "BOOTSTRAP_UNVERIFIED",
+        "policy": "TELEMETRY_ONLY_NEVER_OPENS_OR_VETOES",
+    }
+
+
+def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
+    """Observe slow cash persistence independently from 100 ms ignition.
+
+    This is deliberately recorder-only.  Evaluating both sides here makes a
+    1-6 second metaorder visible even when no two-deviation proposer ever
+    creates an Ignition episode.
+    """
+    sides = {
+        side: _persistent_metaorder_shadow(histories, side, now_ms)
+        for side in ("LONG", "SHORT")
+    }
+    candidates = [
+        side for side, report in sides.items()
+        if report.get("status") == "PERSISTENT_METAORDER_CANDIDATE"
+    ]
+    candidate_side = candidates[0] if len(candidates) == 1 else "ABSTAIN"
+    status = (
+        candidate_side + "_CANDIDATE" if candidate_side != "ABSTAIN" else
+        "DIRECTION_CONFLICT" if len(candidates) > 1 else "OBSERVING"
+    )
+    identity = (status, candidate_side)
+    previous_identity = (
+        str((previous or {}).get("status", "")),
+        str((previous or {}).get("candidate_side", "")),
+    )
+    return {
+        "version": "PERSISTENT_METAORDER_SHADOW_V2",
+        "status": status,
+        "candidate_side": candidate_side,
+        "sides": sides,
+        "authority": False,
+        "policy": "RECORDER_ONLY_NEVER_OPENS_OR_VETOES",
+        "transition": identity != previous_identity,
+    }
+
+
 def _oi_intent(state, side, now, bias_snapshot=None):
     frozen = (bias_snapshot or {}).get("direction_context") or {}
     regime = str(frozen.get("oi_regime") or "UNKNOWN").upper()
@@ -564,6 +677,12 @@ def _result_from_episode(state, episode, histories, freshness, now):
     cash_discovery = _cash_discovery(episode)
     episode["leader"] = leader
     side = episode["side"]
+    persistent_snapshot = dict(
+        getattr(state, "persistent_metaorder_shadow", {}) or {}
+    )
+    persistent_shadow = dict(
+        (persistent_snapshot.get("sides") or {}).get(side) or {}
+    )
     cash_signals = [row for row in episode["signals"] if row["venue"] in CASH and row["side"] == side]
     futures_signals = [row for row in episode["signals"] if row["venue"] == "futures" and row["side"] == side]
     cash_venues = sorted({row["venue"] for row in cash_signals})
@@ -603,15 +722,17 @@ def _result_from_episode(state, episode, histories, freshness, now):
     )
     phase_measurement = _phase_measurement(state, side, cash_venues, venue_moves, latest)
     consumed = _f(phase_measurement.get("consumed_fraction"), 1.0)
-    # Only an observed cash lead over Futures is directly residual at decision
-    # time.  ATR headroom and candle ranges are metadata, never predicted edge.
-    residual_proxy = fair_value_gap
+    # The cash/Futures gap measures handoff timing, not remaining alpha.  Using
+    # it as edge inverted confirmation: better Futures follow meant less edge.
+    # Completed Guardian outcomes are the only promotion authority.
+    residual_proxy = 0.0
     oi = _oi_intent(state, side, now, episode.get("bias_snapshot"))
     payload = {
         "causal_episode_id": episode["causal_episode_id"], "state": "PROBE",
         "side": side, "proposer": episode["proposer"], "leader": leader,
         "lead_lower_bound_ms": round(lead_lower, 4) if lead_lower is not None else None,
         "spot_price_discovery": cash_discovery,
+        "persistent_metaorder_shadow": persistent_shadow,
         "bias_snapshot": dict(episode["bias_snapshot"]), "proof_type": proof_type,
         "proof_venue": proof_venue,
         "cash_venues": cash_venues, "cash_opponents": cash_opponents,
@@ -636,9 +757,10 @@ def _result_from_episode(state, episode, histories, freshness, now):
         ),
         "impulse_phase": "EARLY" if consumed <= 0.35 else "MATURE",
         "consumed_fraction": consumed, "fair_value_gap_bps": round(fair_value_gap, 6),
+        "handoff_gap_bps": round(fair_value_gap, 6),
         "phase_measurement": phase_measurement,
         "residual_edge_proxy_bps": round(residual_proxy, 6),
-        "residual_edge_source": "OBSERVED_CASH_FUTURES_GAP_ONLY",
+        "residual_edge_source": "EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED",
         "oi_intent": oi,
         "clock_quality": {name: {
             "uncertainty_ms": rows[-1].get("clock_uncertainty_ms"),
@@ -716,6 +838,12 @@ def evaluate(state, now=None, side=None):
     side = str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
     freshness = _freshness(state, now)
     histories = ignition_signals.snapshot(state, now_ms)
+    previous_persistent = getattr(state, "persistent_metaorder_shadow", None)
+    persistent_snapshot = _persistent_metaorder_snapshot(
+        histories, now_ms, previous_persistent
+    )
+    state.persistent_metaorder_shadow = persistent_snapshot
+    state.persistent_metaorder_updated_at = now
     rows = _new_signals(state, histories)
     episode = getattr(state, "_ignition_episode", None)
 

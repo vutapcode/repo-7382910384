@@ -233,6 +233,10 @@ def combine(sv,st):
  if len(L)>=2: side_,sup,opp="LONG",L,S
  elif len(S)>=2: side_,sup,opp="SHORT",S,L
  else:return "ABSTAIN",0.,max(len(L),len(S)),"INSUFFICIENT_S_QUORUM",ls,ss
+ # Price and price x OI reuse the same Spot move. Without executed-flow
+ # support they are context plus one observation, not two independent seats.
+ if {k for k,_ in sup}=={"S1_cross_price","S2_price_x_oi"}:
+  return "ABSTAIN",0.,len(sup),"PRICE_OI_NOT_INDEPENDENT_WITHOUT_FLOW",ls,ss
  if sd not in ("ABSTAIN",side_):return "ABSTAIN",0.,len(sup),"STORY_DIRECTION_CONFLICT",ls,ss
  absorb=name in ("SELL_FLOW_ABSORBED_BY_LONG_BUILD","BUY_FLOW_ABSORBED_BY_SHORT_BUILD")
  if opp and not absorb and max(v["confidence"] for _,v in opp)>=.75:return "ABSTAIN",0.,len(sup),"STRONG_S_OPPOSITION",ls,ss
@@ -292,6 +296,8 @@ def _hyst(s,r):
   s._bias_flip_candidate="";s._bias_flip_since=0.;s._bias_last_supported_at=now;return old,nc,"STABLE"
  if new=="ABSTAIN":
   s._bias_flip_candidate="";s._bias_flip_since=0.
+  if context==old and phase in ("ESTABLISHED_TREND","PULLBACK_AGAINST_CONTEXT","CONTEXT_WITHOUT_CONFIRMATION"):
+   return old,max(.35,oc*.92),"HOLD_CONTEXT_THROUGH_ABSTAIN"
   return (old,oc*.82,"HOLD_THROUGH_ABSTAIN") if last>0 and now-last<=H_ABS else ("ABSTAIN",0.,"RELEASE_TO_ABSTAIN")
  confirmed=(r.get("story") or {}).get("name") in ("NEW_LONG_BUILD_CONFIRMED","NEW_SHORT_BUILD_CONFIRMED")
  if context==old and new!=old:

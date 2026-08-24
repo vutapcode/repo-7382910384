@@ -263,6 +263,35 @@ def _entry_thesis_break(state,pos,now,s1,s2,s3):
         "price_adverse":sorted(price_adverse),"flow_adverse":sorted(flow_adverse),
     }
 
+def _trend_context_shield(state,pos):
+    """Let a verified frozen trend survive normal noise, never hard danger."""
+    thesis=dict(getattr(pos,"entry_causal_thesis",{}) or {})
+    frozen=dict(thesis.get("bias_thesis") or {})
+    current=dict(getattr(state,"bias_council",{}) or {})
+    memory=dict(current.get("direction_memory") or {})
+    side=str(getattr(pos,"side","") or "").upper()
+    frozen_side=str(frozen.get("context_side") or "ABSTAIN").upper()
+    frozen_phase=str(frozen.get("phase") or "").upper()
+    current_side=str(memory.get("context_side") or "ABSTAIN").upper()
+    current_phase=str(memory.get("phase") or "").upper()
+    current_bias=str(current.get("bias") or "ABSTAIN").upper()
+    eligible_phases={
+        "ESTABLISHED_TREND","PULLBACK_AGAINST_CONTEXT",
+        "CONTEXT_WITHOUT_CONFIRMATION",
+    }
+    active=bool(
+        side in ("LONG","SHORT") and frozen_side==side
+        and frozen_phase in eligible_phases and current_side==side
+        and current_phase!="REVERSAL_CANDIDATE"
+        and current_bias in (side,"ABSTAIN")
+    )
+    return {
+        "active":active,"side":side,"frozen_context_side":frozen_side,
+        "frozen_phase":frozen_phase,"current_context_side":current_side,
+        "current_phase":current_phase,"current_bias":current_bias,
+        "policy":"SOFT_CAUSAL_HOLD_ONLY_HARD_RISK_UNCHANGED",
+    }
+
 def assess(state,pos,now=None):
     now=time.time() if now is None else float(now)
     p,ph,oh=_sample(state,pos,now)
@@ -293,6 +322,8 @@ def assess(state,pos,now=None):
     )
     kill_fast=bool(causal_exit and profile["kill_fast"])
     runner_shield=bool(causal_exit and runner_active and not kill_fast)
+    trend_context=_trend_context_shield(state,pos)
+    trend_shield=bool(causal_exit and trend_context["active"] and not kill_fast)
     exit_profile="HOLD"
     if causal_exit:
         confirmed=[k for k in adverse if k=="S1_price_acceptance" or k in
@@ -300,8 +331,10 @@ def assess(state,pos,now=None):
         conf=sum(votes[k]["confidence"] for k in confirmed)/len(confirmed)
         base_hold=max(MIN_DETERIORATION_SECONDS,min(MAX_DETERIORATION_SECONDS,1.20-0.65*conf))
         hold=(FAST_KILL_HOLD_SECONDS if kill_fast else
-              max(RUNNER_DETERIORATION_SECONDS,base_hold) if runner_shield else base_hold)
-        exit_profile="KILL_FAST" if kill_fast else "RUNNER_SHIELD" if runner_shield else "CAUSAL_CONFIRM"
+              max(RUNNER_DETERIORATION_SECONDS,base_hold)
+              if (runner_shield or trend_shield) else base_hold)
+        exit_profile=("KILL_FAST" if kill_fast else "RUNNER_SHIELD" if runner_shield
+                      else "TREND_SHIELD" if trend_shield else "CAUSAL_CONFIRM")
         sig=tuple(sorted(confirmed))+(exit_profile,)
         if getattr(pos,"guardian_s_signature",())!=sig:
             scout_since=float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0)
@@ -349,6 +382,7 @@ def assess(state,pos,now=None):
             "exchange_independence":external_guard,
             "entry_thesis":thesis,"adverse_profile":profile,
             "exit_profile":exit_profile,"runner_shield_active":runner_shield,
+            "trend_shield_active":trend_shield,"trend_context":trend_context,
             "kill_fast":kill_fast,"scout_since":float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0) or None,
             "deterioration_since":float(getattr(pos,"guardian_s_candidate_since",0.0) or 0.0) or None,
             "deterioration_elapsed_seconds":round(max(0.0,now-float(getattr(pos,"guardian_s_candidate_since",now) or now)),4) if causal_exit else 0.0,

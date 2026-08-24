@@ -52,12 +52,13 @@ def tier_mode(g):
     sup, adv = st.count("SUPPORTIVE"), st.count("ADVERSE")
     decision = str((g or {}).get("decision") or "HOLD").upper()
     runner_shield = bool((g or {}).get("runner_shield_active"))
+    trend_shield = bool((g or {}).get("trend_shield_active"))
     kill_fast = bool((g or {}).get("kill_fast"))
     if sup == 3:
         mode = "MAX_RIDE"
     elif sup >= 2 and adv == 0:
         mode = "RIDE"
-    elif runner_shield and not kill_fast:
+    elif (runner_shield or trend_shield) and not kill_fast:
         # The one-way floor remains armed, but a normal runner pullback does
         # not tighten itself into an exit before Guardian confirmation.
         mode = "RIDE"

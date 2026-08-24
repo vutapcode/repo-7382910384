@@ -368,6 +368,31 @@ class EmpiricalEdgeTests(unittest.TestCase):
         self.assertLess(report["lower_confidence_bound_bps"], 0.0)
         self.assertFalse(report["live_empirical_ok"])
 
+    def test_empirical_cohorts_do_not_mix_proof_or_execution(self):
+        state = SimpleNamespace()
+        for _ in range(64):
+            edge_calibration_v2.record(
+                state, "IGNITION", "TREND", 5.0, "LONG", "BOOTSTRAP_UNVERIFIED",
+                "FAILED_REVERSION", "BINANCE_SPOT", "MAKER",
+            )
+        report = edge_calibration_v2.factor(
+            state, "IGNITION", "TREND", "LONG", "BOOTSTRAP_UNVERIFIED",
+            "METAORDER_CONTINUATION", "BINANCE_SPOT", "TAKER",
+        )
+        self.assertEqual(report["status"], "INSUFFICIENT_DATA")
+        self.assertFalse(report["live_empirical_ok"])
+
+    def test_legacy_calibration_rows_cannot_authorize_known_cohort(self):
+        state = SimpleNamespace(_edge_cal_v2_rows=[
+            ("LONG", "IGNITION", "TREND", "BOOTSTRAP_UNVERIFIED", 5.0)
+            for _ in range(96)
+        ])
+        report = edge_calibration_v2.factor(
+            state, "IGNITION", "TREND", "LONG", "BOOTSTRAP_UNVERIFIED",
+            "FAILED_REVERSION", "BINANCE_SPOT", "MAKER",
+        )
+        self.assertEqual(report["status"], "INSUFFICIENT_DATA")
+
 
 class GuardianDeteriorationTests(unittest.TestCase):
     def _state(self, now, price, sell=True):
@@ -509,6 +534,55 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertEqual(exited["decision"], "EXIT")
         self.assertTrue(exited["kill_fast"])
         self.assertFalse(exited["runner_shield_active"])
+
+    def test_frozen_established_trend_delays_noise_but_still_exits(self):
+        state = self._state(100.0, 100.0, sell=True)
+        state.bias_council = {
+            "bias": "LONG", "direction_memory": {
+                "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+            },
+        }
+        pos = SimpleNamespace(
+            position_cycle_id="trend", side="LONG", opened_at=90.0,
+            best_r=0.0, floor_r=None,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot", "cash_anchors": ["spot"],
+                "bias_thesis": {
+                    "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+                },
+            },
+        )
+        votes = self._causal_votes()
+        self._assess_with_votes(state, pos, 100.0, votes)
+        shielded = self._assess_with_votes(state, pos, 101.2, votes)
+        self.assertEqual(shielded["decision"], "DETERIORATING")
+        self.assertTrue(shielded["trend_shield_active"])
+        exited = self._assess_with_votes(state, pos, 101.81, votes)
+        self.assertEqual(exited["decision"], "EXIT")
+        self.assertEqual(exited["exit_profile"], "TREND_SHIELD")
+
+    def test_reversal_candidate_disables_trend_shield(self):
+        state = self._state(100.0, 100.0, sell=True)
+        state.bias_council = {
+            "bias": "ABSTAIN", "direction_memory": {
+                "context_side": "LONG", "phase": "REVERSAL_CANDIDATE",
+            },
+        }
+        pos = SimpleNamespace(
+            position_cycle_id="reversal", side="LONG", opened_at=90.0,
+            best_r=0.0, floor_r=None,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot", "cash_anchors": ["spot"],
+                "bias_thesis": {
+                    "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+                },
+            },
+        )
+        votes = self._causal_votes()
+        self._assess_with_votes(state, pos, 100.0, votes)
+        exited = self._assess_with_votes(state, pos, 100.8, votes)
+        self.assertEqual(exited["decision"], "EXIT")
+        self.assertFalse(exited["trend_shield_active"])
 
     def test_other_venue_noise_does_not_break_primary_cash_thesis(self):
         state = self._state(100.0, 100.0, sell=True)

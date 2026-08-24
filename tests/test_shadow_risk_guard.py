@@ -100,6 +100,20 @@ class ShadowRiskGuardTests(unittest.TestCase):
         self.assertEqual(report["decision"], "HOLD")
         self.assertEqual(report["tier_mode"], "RIDE")
 
+    def test_trend_shield_does_not_tighten_profit_floor_early(self):
+        p = self.position()
+        report = risk.assess(
+            p, 102.20,
+            guardian(
+                "ADVERSE", "ADVERSE", "NEUTRAL",
+                decision="DETERIORATING", trend_shield_active=True,
+                kill_fast=False,
+            ),
+            now=1.0,
+        )
+        self.assertEqual(report["decision"], "HOLD")
+        self.assertEqual(report["tier_mode"], "RIDE")
+
 
 if __name__ == "__main__":
     unittest.main()

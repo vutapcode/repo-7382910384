@@ -377,19 +377,27 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         failed.append("PRICE_QUORUM_FAIL")
     if s2 and str(s2.get("status", "MISSING")) != "PASS":
         failed.append("FLOW_QUORUM_FAIL")
+    # Bootstrap shadow is intentionally allowed to trade so outcomes can make
+    # the empirical gate measurable.  It is not a miss merely because the old
+    # structural residual proxy is zero.  Only a final rejected GO is tagged.
     if (
-        would_enter
-        and not bool((edge_report or {}).get("cost_ok"))
+        would_enter and not quorum_ok
         and not impact.get("absorbed") and not basis.get("perp_expansion")
     ):
-        failed.append("EDGE_COST_FAIL")
+        bootstrap = bool((edge_report or {}).get("bootstrap_shadow_allowed"))
+        empirical = bool((edge_report or {}).get("live_empirical_ok"))
+        if not bootstrap and not empirical:
+            failed.append("EMPIRICAL_ALPHA_NOT_READY")
+        elif not bool((edge_report or {}).get("cost_ok")) and not bootstrap:
+            failed.append("EDGE_COST_FAIL")
     if would_enter and not quorum_ok and not failed:
         failed.append("FLOW_QUORUM_FAIL")
     priority = (
         "WAIT_STALE_DATA", "WAIT_EXTERNAL_CORROBORATION", "WAIT_CHASE",
         "WAIT_CASH_RESPONSE", "WAIT_LEADER_UNCERTAIN", "WAIT_LATE_IMPULSE",
         "WAIT_IGNITION_PROOF", "WAIT_CAUSAL_PERSISTENCE", "WAIT_OI_CLOSING_CONTEXT",
-        "ABSORPTION_VETO", "PERP_LED_VETO", "EDGE_COST_FAIL",
+        "ABSORPTION_VETO", "PERP_LED_VETO", "EMPIRICAL_ALPHA_NOT_READY",
+        "EDGE_COST_FAIL",
         "BIAS_NOT_READY", "PRICE_QUORUM_FAIL", "FLOW_QUORUM_FAIL",
     )
     unique = list(dict.fromkeys(failed))
@@ -422,7 +430,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "strategy_authority": "IGNITION_CORE_V1",
         "strategy_code_version": getattr(state, "code_version", None),
         "strategy_config_version": getattr(state, "strategy_config_version", None),
-        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V2_GO_GATED_HARD_VETO",
+        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V3_BOOTSTRAP_IS_NOT_MISS",
         "causal_episode_id": (opportunity or {}).get("causal_episode_id"),
         "inputs": {
             "bias": {
@@ -456,6 +464,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "post_chase_retest": causal.get("post_chase_retest"),
             "price_acceptance": causal.get("acceptance"),
             "ignition": dict((result or {}).get("ignition") or {}),
+            "persistent_metaorder_shadow": dict(
+                (result or {}).get("persistent_metaorder_shadow") or {}
+            ),
         },
         "output": {
             "decision": (result or {}).get("decision", "WAIT"),
@@ -656,6 +667,7 @@ def _open_shadow(side, result, now):
         entry_edge_class=(result.get("edge_tier") or {}).get("edge_class"),
         entry_causal_thesis=live_execution._entry_causal_thesis(result),
         shadow_cost_plan=shadow_cost_plan,
+        execution_cost_plan=shadow_cost_plan,
         decision_cycle_id=result.get("decision_cycle_id"),
         canonical_opportunity_id=int(
             result.get("canonical_opportunity_id", 0) or 0
@@ -1271,6 +1283,11 @@ async def _entry_loop():
                 continue
             last_revision, last_eval_at = revision, now
             result = entry_council.evaluate(s, now=now)
+            persistent_shadow = dict(
+                getattr(s, "persistent_metaorder_shadow", {}) or {}
+            )
+            result = dict(result)
+            result["persistent_metaorder_shadow"] = persistent_shadow
             urgent_oi_phase = str(result.get("phase", "")).upper() in {
                 "PRESSURE_BUILDING", "ACCEPTANCE", "RELEASE",
             }
@@ -1326,6 +1343,8 @@ async def _entry_loop():
                 bool(quorum_ok),
                 str(edge_report.get("edge_class", "UNCLASSIFIED")),
                 blocking_stage,
+                str(persistent_shadow.get("status", "OBSERVING")),
+                str(persistent_shadow.get("candidate_side", "ABSTAIN")),
             )
             decision_changed = decision_identity != last_decision_identity
             # A qualified GO can exist for less than the telemetry debounce.
@@ -1334,6 +1353,7 @@ async def _entry_loop():
             force_transition = bool(
                 opportunity.get("new")
                 or opportunity.get("qualification_transition")
+                or persistent_shadow.get("transition")
             )
             decision_event_emitted = False
             recorder_snapshot = None
@@ -1388,6 +1408,7 @@ async def _entry_loop():
                         "post_chase_retest"
                     ),
                     "ignition": dict(result.get("ignition") or {}),
+                    "persistent_metaorder_shadow": persistent_shadow,
                     "ignition_state": (result.get("ignition") or {}).get("state"),
                     "ignition_proposer": (result.get("ignition") or {}).get("proposer"),
                     "ignition_leader": (result.get("ignition") or {}).get("leader"),

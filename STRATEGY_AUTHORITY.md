@@ -33,13 +33,15 @@
    - Coinbase older than five seconds fails closed. Static walls/cancels and
      BBO quantity without executed flow never authorize Entry.
 5. Residual Edge
-   - Only the observed cash lead over Futures is treated as structural residual;
-     ATR headroom and candle ranges never predict the remaining wave.
-     Verified executable costs replace the 13/20/35 bps prior. Those values
-     remain historical metadata only.
+   - The observed cash lead over Futures is handoff timing metadata, not
+     remaining alpha. Better Futures confirmation must not reduce Edge.
+     Completed net Guardian outcomes plus verified executable costs replace
+     the 13/20/35 bps prior. Those values remain historical metadata only.
    - Shadow bootstrap may collect structurally valid trades. Real money needs
      at least 30 persisted outcomes, positive expectancy, non-negative LCB,
      non-negative 25 bps stress and verified commission.
+   - A bounded 1-6 second persistent-metaorder lane is recorder telemetry only.
+     It cannot open, block or promote a trade until empirical review.
 7. Execution and active position
    - Shadow sizing uses balance; exchange filters are enforced only when live
      filters are verified. Unknown filters remain `UNVERIFIED_FILTERS`.
@@ -49,6 +51,9 @@
    - A runner with an active one-way profit floor gets a longer confirmation
      window during an ordinary pullback. Extreme cross-venue price plus strong
      adverse flow bypasses that shield through the fast-kill path.
+   - A frozen established 180/60/15 second trend gets the same soft confirmation
+     window while current context still agrees. Reversal candidates and fast
+     causal danger disable that shield; Hard Risk remains final authority.
    - Hard SL is final risk authority; profit ratchet and fee-aware floor remain
      subordinate risk protection. Support widens the trailing gap, while the
      floor only ratchets forward and can never loosen afterward.

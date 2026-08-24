@@ -14,6 +14,7 @@ import time
 
 from loi_he_thong import mainnet_safety
 from loi_he_thong import private_user_stream
+from loi_he_thong import verified_cost_model
 
 
 VERSION = "WSTRADE_LIVE_EXECUTION_V1"
@@ -382,6 +383,8 @@ def _entry_causal_thesis(result):
     else:
         primary=None
     if ignition:
+        frozen=dict(ignition.get("bias_snapshot") or {})
+        context=dict(frozen.get("direction_context") or {})
         cash_names=set(ignition.get("cash_venues") or ())
         cash_aliases={"spot" if x=="binance_spot" else "coinbase" for x in cash_names}
         if ignition.get("proposer")=="binance_spot": primary="spot"
@@ -398,6 +401,17 @@ def _entry_causal_thesis(result):
             "proposer":ignition.get("proposer"),
             "impulse_phase":ignition.get("impulse_phase"),
             "residual_edge_proxy_bps":ignition.get("residual_edge_proxy_bps"),
+            "bias_thesis":{
+                "direction":frozen.get("bias"),
+                "confidence":frozen.get("confidence"),
+                "context_side":context.get("context_side"),
+                "phase":context.get("phase"),
+                "candidate_side":context.get("candidate_side"),
+                "hysteresis":frozen.get("hysteresis"),
+                "price_vote":context.get("price_vote"),
+                "flow_vote":context.get("flow_vote"),
+                "oi_regime":context.get("oi_regime"),
+            },
         }
     return {
         "version":"ENTRY_CAUSAL_THESIS_V1_LEGACY_READ_ONLY",
@@ -509,6 +523,13 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
             })
         return None
     position = _position(side, qty, fill, hard_sl, risk_plan, now, client_id, result)
+    fill_style = (
+        "MARKET" if str(result.get("execution_policy", "MAKER")).upper() == "TAKER"
+        else "MAKER_TRADE_THROUGH"
+    )
+    position.execution_cost_plan = verified_cost_model.shadow_execution_plan(
+        result, state, fill_style
+    )
     protected, stop_result = await _place_stop(api, state, position)
     if not protected:
         await _emergency_flatten(api, state, side, qty)

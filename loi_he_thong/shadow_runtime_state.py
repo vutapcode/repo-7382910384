@@ -32,7 +32,7 @@ PERSIST_FIELDS = (
     "causal_episode_id",
     "decision_cycle_id", "entry_regime", "entry_edge_class",
     "entry_causal_thesis",
-    "shadow_cost_plan",
+    "shadow_cost_plan", "execution_cost_plan",
 )
 
 # Short-lived evidence must never bridge a process/network outage.

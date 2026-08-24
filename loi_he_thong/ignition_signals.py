@@ -12,6 +12,7 @@ import os
 
 VERSION = "IGNITION_SIGNALS_V1"
 BUCKET_MS = 100
+HISTORY_BUCKETS = 64  # Fixed 6.4 s research window; bounded/O(1) memory.
 WARMUP_BUCKETS = max(5, int(os.getenv("WSTRADE_IGNITION_WARMUP_BUCKETS", "20")))
 VENUES = ("binance_spot", "coinbase_spot", "futures")
 MIN_QTY = {
@@ -41,7 +42,7 @@ class _Venue:
     def __init__(self, name):
         self.name = name
         self.epoch = 0
-        self.history = deque(maxlen=16)
+        self.history = deque(maxlen=HISTORY_BUCKETS)
         self.samples = 0
         self.mean_abs_quote = 0.0
         self.mean_dev = 0.0
