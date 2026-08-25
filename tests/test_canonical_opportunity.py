@@ -30,6 +30,37 @@ class CanonicalOpportunityTests(unittest.TestCase):
         self.assertEqual(continued["opportunity_id"], first["opportunity_id"])
         self.assertFalse(opportunity.claim(state, continued["opportunity_id"]))
 
+    def test_transient_execution_failure_releases_and_retries_same_opportunity(self):
+        state = SimpleNamespace(execution_best_bid=0.0, execution_best_ask=0.0)
+        row = opportunity.observe(state, go(), qualified=True, now=100.0)
+        oid = row["opportunity_id"]
+
+        # Canonical identity must not interpret BBO health. Execution may
+        # release a non-fill and retry while the causal episode is still live.
+        self.assertTrue(opportunity.reserve(state, oid, now=100.1))
+        self.assertTrue(opportunity.release(state, oid, "BBO_UNAVAILABLE"))
+        self.assertTrue(opportunity.reserve(state, oid, now=100.2))
+        self.assertTrue(opportunity.mark_captured(state, oid))
+        self.assertEqual(state.canonical_last_consumed_opportunity_id, oid)
+        self.assertEqual(state.canonical_opportunity_captured, 1)
+
+    def test_reservation_reject_reason_distinguishes_reserved_from_consumed(self):
+        state = SimpleNamespace()
+        row = opportunity.observe(state, go(), qualified=True, now=100.0)
+        oid = row["opportunity_id"]
+        self.assertTrue(opportunity.reserve(state, oid, now=100.1))
+        self.assertFalse(opportunity.reserve(state, oid, now=100.2))
+        self.assertEqual(
+            state.canonical_last_reserve_reject,
+            "OPPORTUNITY_ALREADY_RESERVED",
+        )
+        self.assertTrue(opportunity.mark_captured(state, oid))
+        self.assertFalse(opportunity.reserve(state, oid, now=100.3))
+        self.assertEqual(
+            state.canonical_last_reserve_reject,
+            "OPPORTUNITY_ALREADY_CONSUMED",
+        )
+
         wait = opportunity.observe(state, {
             "decision": "WAIT", "side": "LONG", "phase": "ACCEPTANCE",
         }, qualified=False, now=102.0)

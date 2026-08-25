@@ -777,6 +777,11 @@ def _advance_shadow_pending(now):
         edge_ok = bool((result.get("edge_tier") or {}).get("cost_ok", False))
         if not (release and edge_ok):
             app.state.mainnet_shadow_pending_entry = None
+            canonical_opportunity.release(
+                app.state,
+                int(result.get("canonical_opportunity_id", 0) or 0),
+                reason="MAKER_TTL_NO_CAUSAL_RELEASE",
+            )
             _append_event("SHADOW_MAKER_CANCELED", {
                 "cycle_id": result.get("decision_cycle_id"),
                 "causal_episode_id": result.get("causal_episode_id"),
@@ -811,7 +816,19 @@ def _advance_shadow_pending(now):
     app.state.mainnet_shadow_pending_entry = None
     result = dict(pending.get("result") or {})
     result["_shadow_execution"] = execution
-    return _open_shadow(side, result, now)
+    position = _open_shadow(side, result, now)
+    if position is None:
+        canonical_opportunity.release(
+            app.state,
+            int(result.get("canonical_opportunity_id", 0) or 0),
+            reason=str(
+                getattr(
+                    app.state, "mainnet_shadow_last_skip",
+                    "MAKER_PENDING_TERMINAL_NO_FILL",
+                ) or "MAKER_PENDING_TERMINAL_NO_FILL"
+            ),
+        )
+    return position
 
 
 def _close_shadow(pos, guardian_result, now):
@@ -1490,8 +1507,14 @@ async def _entry_loop():
                 continue
             opportunity_id = int(opportunity.get("opportunity_id", 0) or 0)
             if not canonical_opportunity.claim(s, opportunity_id):
-                s.mainnet_shadow_entry_state = "WAIT_CANONICAL_OPPORTUNITY_CONSUMED"
-                s.mainnet_shadow_last_skip = "CANONICAL_OPPORTUNITY_ALREADY_CONSUMED"
+                reserve_reason = str(
+                    getattr(
+                        s, "canonical_last_reserve_reject",
+                        "CANONICAL_RESERVATION_REJECTED",
+                    ) or "CANONICAL_RESERVATION_REJECTED"
+                )
+                s.mainnet_shadow_entry_state = "WAIT_" + reserve_reason
+                s.mainnet_shadow_last_skip = reserve_reason
                 await asyncio.sleep(ENTRY_POLL)
                 continue
             result = dict(result)
@@ -1507,7 +1530,18 @@ async def _entry_loop():
                 "CANONICAL_OPPORTUNITY", opportunity_id
             )
             s.mainnet_shadow_entry_claim_at = now
-            await _open_position(side, result, now)
+            position = await _open_position(side, result, now)
+            pending = getattr(s, "mainnet_shadow_pending_entry", None)
+            if position is None and not isinstance(pending, dict):
+                canonical_opportunity.release(
+                    s, opportunity_id,
+                    reason=str(
+                        getattr(
+                            s, "mainnet_shadow_last_skip",
+                            "EXECUTION_NOT_CAPTURED",
+                        ) or "EXECUTION_NOT_CAPTURED"
+                    ),
+                )
         except asyncio.CancelledError:
             raise
         except Exception:

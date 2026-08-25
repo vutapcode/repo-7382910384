@@ -200,26 +200,25 @@ def _reservation_context(state, opportunity_id, now):
 def reserve(state, opportunity_id, now=None):
     """Reserve one GO without consuming it; duplicate attempts are rejected until release."""
     opportunity_id = int(opportunity_id or 0)
-    # If execution BBO fields exist, an invalid book is a transient pre-submit
-    # condition: do not reserve/consume the causal opportunity yet.
-    if hasattr(state, "execution_best_bid") or hasattr(state, "execution_best_ask"):
-        bid = float(getattr(state, "execution_best_bid", 0.0) or 0.0)
-        ask = float(getattr(state, "execution_best_ask", 0.0) or 0.0)
-        if bid <= 0.0 or ask <= bid:
-            state.canonical_last_reserve_reject = "BBO_UNAVAILABLE_PRE_SUBMIT"
-            return False
+    state.canonical_last_reserve_reject = None
     consumed = int(
         getattr(state, "canonical_last_consumed_opportunity_id", 0) or 0
     )
-    if opportunity_id <= 0 or opportunity_id <= consumed:
+    if opportunity_id <= 0:
+        state.canonical_last_reserve_reject = "INVALID_OPPORTUNITY_ID"
+        return False
+    if opportunity_id <= consumed:
+        state.canonical_last_reserve_reject = "OPPORTUNITY_ALREADY_CONSUMED"
         return False
 
     reserved = int(
         getattr(state, "canonical_reserved_opportunity_id", 0) or 0
     )
     if reserved == opportunity_id:
+        state.canonical_last_reserve_reject = "OPPORTUNITY_ALREADY_RESERVED"
         return False
     if reserved > opportunity_id:
+        state.canonical_last_reserve_reject = "OLDER_THAN_ACTIVE_RESERVATION"
         return False
     if reserved and opportunity_id > reserved:
         release(state, reserved, reason="SUPERSEDED_BY_NEWER_OPPORTUNITY")

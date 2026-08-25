@@ -69,6 +69,11 @@
 8. Journal/state/calibration
    - Only completed canonical shadow outcomes may update empirical calibration.
    - Calibration samples must persist across restarts and remain version-bound.
+   - Bias OI freshness hooks may adjust only the collector-aligned age bound;
+     they must not monkey-patch Ignition, Guardian or execution authority.
+   - A qualified causal opportunity follows `reserve -> fill -> commit`.
+     Terminal non-fills release the reservation so the same still-live episode
+     may retry; temporary BBO health is an execution concern, not identity.
 
 ## Explicit non-authorities
 
