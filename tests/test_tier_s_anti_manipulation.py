@@ -435,6 +435,22 @@ class GuardianDeteriorationTests(unittest.TestCase):
         state = SimpleNamespace(atr_1m=0.001)
         self.assertGreaterEqual(guardian._threshold(state, 100.0), 1.5)
 
+    def test_guardian_futures_flow_is_bounded_and_fails_neutral_on_disorder(self):
+        state = SimpleNamespace(danh_sach_khop_lenh_futures=deque([
+            {"thoi_gian_ms": 96_000, "khoi_luong": 1000, "ban_chu_dong": False},
+            {"thoi_gian_ms": 99_000, "khoi_luong": 2, "ban_chu_dong": False},
+            {"thoi_gian_ms": 99_100, "khoi_luong": 1, "ban_chu_dong": True},
+        ]))
+        imbalance, total = guardian._fut_flow(state, 100.0)
+        self.assertAlmostEqual(total, 3.0)
+        self.assertAlmostEqual(imbalance, 1.0 / 3.0)
+        state.danh_sach_khop_lenh_futures = deque([
+            {"thoi_gian_ms": 99_100, "khoi_luong": 1, "ban_chu_dong": False},
+            {"thoi_gian_ms": 99_000, "khoi_luong": 1, "ban_chu_dong": True},
+        ])
+        self.assertEqual(guardian._fut_flow(state, 100.0), (0.0, 0.0))
+        self.assertEqual(state.guardian_s_futures_flow_ordering, "DISORDERED_NEUTRAL")
+
     def test_fresh_coinbase_disagreement_blocks_binance_only_exit(self):
         pos = SimpleNamespace(position_cycle_id="p2", side="LONG", opened_at=99.0)
         state = self._state(100.0, 100.0, sell=False)

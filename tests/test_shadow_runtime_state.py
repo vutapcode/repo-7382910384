@@ -109,6 +109,30 @@ class ShadowRuntimeStateTests(unittest.TestCase):
         self.assertTrue(restored)
         self.assertEqual(target_state._edge_cal_v2_rows, [row])
 
+    def test_nine_field_cost_rows_survive_same_version_restart(self):
+        row = (
+            "LONG", "IGNITION", "NORMAL", "BOOTSTRAP_UNVERIFIED",
+            "METAORDER_CONTINUATION", "BINANCE_SPOT", "TAKER", 4.25, 12.5,
+        )
+        with tempfile.TemporaryDirectory() as temp, patch.dict(
+            'os.environ', {'SMC_JOURNAL_DIR': temp}
+        ):
+            source_state = SimpleNamespace(
+                code_version="code-v3", strategy_config_version="config-v3",
+                mainnet_shadow_position=None, _edge_cal_v2_rows=[row],
+            )
+            runtime_state.save(SimpleNamespace(
+                app=SimpleNamespace(state=source_state), QTY_BTC=0.001
+            ))
+            target_state = SimpleNamespace(
+                code_version="code-v3", strategy_config_version="config-v3",
+            )
+            restored = runtime_state.restore(SimpleNamespace(
+                app=SimpleNamespace(state=target_state), QTY_BTC=0.001
+            ))
+        self.assertTrue(restored)
+        self.assertEqual(target_state._edge_cal_v2_rows, [row])
+
     def test_live_position_and_guardian_counter_restore_in_recovery_mode(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(
             'os.environ', {'SMC_JOURNAL_DIR': temp}

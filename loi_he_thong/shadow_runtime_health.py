@@ -19,9 +19,9 @@ def exec_price(base,now=None):
 def health(base,s,now=None):
     now=time.time() if now is None else float(now); _,fts=_ft(base,now)
     bts=float(getattr(s,"execution_price_time",0) or 0); b=float(getattr(s,"execution_best_bid",0) or 0); a=float(getattr(s,"execution_best_ask",0) or 0)
-    execution_bbo_ready=bool(fresh(bts,now,5.) and b>0 and a>b)
+    execution_bbo_ready=bool(fresh(bts,now,1.) and b>0 and a>b)
     futures_observation_ready=bool(fresh(fts,now,5.))
-    fp=execution_bo_ready or futures_observation_ready
+    fp=execution_bbo_ready or futures_observation_ready
     sp=fresh(getattr(s,"thoi_gian_tick_cuoi",0),now,3.)
     cp=fresh(getattr(s,"thoi_gian_coinbase_ticker_cuoi",0) or getattr(s,"thoi_gian_coinbase_cuoi",0),now,5.)
     sf=fresh(getattr(s,"thoi_gian_dong_tien_cuoi",0),now,5.)
@@ -36,18 +36,21 @@ def health(base,s,now=None):
     if bool(getattr(s,"shadow_integrity_fault",False)):blockers.append("integrity_fault")
     live_blockers=list(blockers)
     if not bool(getattr(s,"host_cpu_entry_allowed",True)):live_blockers.append("host_cpu_budget")
-    observation_feeds_ready=sp and cp and fp and sf and ff
-    execution_feeds_ready=sp and cp and execution_bbo_ready and sf and ff
-    observation_ready=observation_feeds_ready and not blockers
-    feeds_ready=execution_feeds_ready
-    ready=feeds_ready and not blockers
+    observation_feeds_ready=bool(sp and cp and fp and sf and ff)
+    entry_feeds_ready=bool(sp and cp and execution_bbo_ready and sf and ff)
+    observation_ready=bool(observation_feeds_ready and not blockers)
+    ready=bool(entry_feeds_ready and not blockers)
     live_ready=ready and not live_blockers
-    out={"ts":now,"entry_ready":bool(ready),"observation_ready":bool(observation_ready),"execution_bbo_ready":execution_bbo_ready,"futures_observation_ready":futures_observation_ready,"live_entry_ready":bool(live_ready),"full_tier_s_ready":bool(ready and mf),"live_full_tier_s_ready":bool(live_ready and mf),"spot_price":sp,"coinbase_price":cp,"futures_price":fp,"spot_flow":sf,"coinbase_flow":cf,"futures_flow":ff,"macro_oi_funding":mf,"operational_blockers":bylockers,"live_operational_blockers":live_blockers}
+    out={"ts":now,"entry_ready":bool(ready),"observation_ready":observation_ready,
+         "execution_bbo_ready":execution_bbo_ready,
+         "futures_observation_ready":futures_observation_ready,
+         "live_entry_ready":bool(live_ready),"full_tier_s_ready":bool(ready and mf),"live_full_tier_s_ready":bool(live_ready and mf),"spot_price":sp,"coinbase_price":cp,"futures_price":fp,"spot_flow":sf,"coinbase_flow":cf,"futures_flow":ff,"macro_oi_funding":mf,"operational_blockers":blockers,"live_operational_blockers":live_blockers}
     s.mainnet_shadow_health=out; s.mainnet_shadow_ready=bool(ready); s.mainnet_live_entry_ready=bool(live_ready); s.shadow_readiness_authoritative=True; s.system_ready=bool(ready)
     bad=[k for k,v in out.items() if k not in ("ts","entry_ready","full_tier_s_ready") and v is False]
     if ready:s.last_readiness_reason="SHADOW_READY"
+    elif observation_ready:s.last_readiness_reason="SHADOW_OBSERVATION_READY_EXECUTION_BBO_BLOCKED"
     elif blockers:s.last_readiness_reason="SHADOW_OPERATIONAL_BLOCKED:"+",".join(blockers)
-    else:s.last_readiness_reason="SHADOW_FEED_DEGRADED:+",".join(bad)
+    else:s.last_readiness_reason="SHADOW_FEED_DEGRADED:"+",".join(bad)
     return out
 def safe_ref(hist,now,sec,lag):
     target=float(now)-float(sec); out=None
@@ -62,7 +65,7 @@ def safe_ref(hist,now,sec,lag):
 def install(base,risk,edge):
     orig_eval=base.entry_council.evaluate; orig_guard=base.guardian_s.update_state
     base.entry_council._ref=lambda h,n,a:safe_ref(h,n,a,ENTRY_FAST_LAG if float(a)<=.40 else ENTRY_SLOW_LAG)
-    base.guardian_s._ref=lambda h,n,a:safe_ref(h,n,a,GUARD_LAGS[min(GUARD_LAGS,key=lambda x:abs(x-float(a))])
+    base.guardian_s._ref=lambda h,n,a:safe_ref(h,n,a,GUARD_LAGS[min(GUARD_LAGS,key=lambda x:abs(x-float(a)))])
     def reset_entry(s,reason,now):
         for n in ("entry_shadow_price_history","entry_causal_flow_history"):
             h=getattr(s,n,None)
@@ -72,9 +75,9 @@ def install(base,risk,edge):
         s._entry_causal_context_side="ABSTAIN"; s.entry_causal_reset_reason=reason; s.entry_causal_reset_at=now
     def entry_eval(s,now=None,side=None):
         now=time.time() if now is None else float(now)
-        if not health(base,s,now)["entry_ready"]:
+        if not health(base,s,now)["observation_ready"]:
             reset_entry(s,"SHADOW_FEED_NOT_READY",now)
-            return {"version":getattr(base.entry_council,"VERSION","ENTRY"),"decision":"WAIT","entry_mode":"NONE","phase":"ARMED","confidence":0.,"reason":"SHADOW_FEED_NOT_READY","side":str(side or getattr(s,"bias_state","ABSTAIN")).upper(),"s_votes":{},"ts":nug}
+            return {"version":getattr(base.entry_council,"VERSION","ENTRY"),"decision":"WAIT","entry_mode":"NONE","phase":"ARMED","confidence":0.,"reason":"SHADOW_FEED_NOT_READY","side":str(side or getattr(s,"bias_state","ABSTAIN")).upper(),"s_votes":{},"ts":now}
         return orig_eval(s,now=now,side=side)
     base.entry_council.evaluate=entry_eval
     def guard_macro(s,pos,now):

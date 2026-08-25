@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import time
 
 from loi_he_thong import canonical_opportunity
+from loi_he_thong import execution_causal_revalidation
 from loi_he_thong import host_cpu_governor
 from loi_he_thong import microstructure_regime
 from loi_he_thong import shadow_daily_loss
@@ -773,25 +774,52 @@ def _advance_shadow_pending(now):
         return None
     else:
         result = dict(pending.get("result") or {})
-        release = str(result.get("phase", "")).upper() == "RELEASE"
-        edge_ok = bool((result.get("edge_tier") or {}).get("cost_ok", False))
-        if not (release and edge_ok):
+        release, release_reason, release_detail = (
+            execution_causal_revalidation.maker_ttl_release(
+                app.state, side, result, now,
+            )
+        )
+        app.state.mainnet_shadow_maker_ttl_recheck = {
+            "ok": release,
+            "reason": release_reason,
+            "detail": release_detail,
+        }
+        if not release:
             app.state.mainnet_shadow_pending_entry = None
             canonical_opportunity.release(
                 app.state,
                 int(result.get("canonical_opportunity_id", 0) or 0),
-                reason="MAKER_TTL_NO_CAUSAL_RELEASE",
+                reason=release_reason,
             )
             _append_event("SHADOW_MAKER_CANCELED", {
                 "cycle_id": result.get("decision_cycle_id"),
                 "causal_episode_id": result.get("causal_episode_id"),
-                "reason": "MAKER_TTL_NO_CAUSAL_RELEASE",
+                "reason": release_reason,
                 "miss_taxonomy": "EXECUTION_NOT_FILLED",
+                "failed_gates": [release_reason],
                 "side": side,
                 "limit_price": limit_price,
                 "trade_through_volume": volume,
                 "required_volume": required,
                 "execution_model": shadow_execution_model.VERSION,
+                "causal_recheck": release_detail,
+                "counterfactual": {
+                    "eligible": bool(limit_price > 0.0),
+                    "reference_price": limit_price or None,
+                    "side": side,
+                    "hard_sl_bps": None,
+                    "windows_seconds": [5, 15, 30, 60],
+                },
+            })
+            _append_event("ENTRY_SKIPPED", {
+                "schema_version": "TIER_S_SHADOW_EXECUTION_V1",
+                "cycle_id": result.get("decision_cycle_id"),
+                "causal_episode_id": result.get("causal_episode_id"),
+                "reason": release_reason,
+                "miss_taxonomy": "EXECUTION_NOT_CAPTURED",
+                "failed_gates": [release_reason],
+                "side": side,
+                "entry": result,
                 "counterfactual": {
                     "eligible": bool(limit_price > 0.0),
                     "reference_price": limit_price or None,
@@ -805,6 +833,29 @@ def _advance_shadow_pending(now):
         ask = float(getattr(app.state, "execution_best_ask", 0.0) or 0.0)
         fill = shadow_execution_model.market_fill(side, bid, ask)
         if fill <= 0.0:
+            app.state.mainnet_shadow_pending_entry = None
+            canonical_opportunity.release(
+                app.state,
+                int(result.get("canonical_opportunity_id", 0) or 0),
+                reason="SHADOW_MARKET_FALLBACK_BBO_MISSING",
+            )
+            _append_event("ENTRY_SKIPPED", {
+                "schema_version": "TIER_S_SHADOW_EXECUTION_V1",
+                "cycle_id": result.get("decision_cycle_id"),
+                "causal_episode_id": result.get("causal_episode_id"),
+                "reason": "SHADOW_MARKET_FALLBACK_BBO_MISSING",
+                "miss_taxonomy": "EXECUTION_NOT_CAPTURED",
+                "failed_gates": ["SHADOW_MARKET_FALLBACK_BBO_MISSING"],
+                "side": side,
+                "entry": result,
+                "counterfactual": {
+                    "eligible": bool(limit_price > 0.0),
+                    "reference_price": limit_price or None,
+                    "side": side,
+                    "hard_sl_bps": None,
+                    "windows_seconds": [5, 15, 30, 60],
+                },
+            })
             return None
         execution = {
             "style": "MARKET_FALLBACK",

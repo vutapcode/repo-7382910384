@@ -99,6 +99,9 @@ def classify(result, state):
         costs.get("execution_style"),
     )
     samples = int(calibration.get("samples", 0) or 0)
+    execution_cost_samples = int(
+        calibration.get("execution_cost_samples", 0) or 0
+    )
     empirical_mean = calibration.get("mean_net_bps")
     empirical_lcb = calibration.get("lower_confidence_bound_bps")
     promotion = getattr(state, "wstrade_promotion", None) or {}
@@ -136,6 +139,12 @@ def classify(result, state):
         "cost_ok": economic_ok, "bootstrap_shadow_allowed": bootstrap_shadow_allowed,
         "commission_verified": bool(costs.get("commission_verified")),
         "commission_source": costs.get("commission_source"),
+        "current_execution_cost_bps": round(cost_budget, 6),
+        "execution_cost_samples": execution_cost_samples,
+        "execution_cost_distribution_bps": calibration.get(
+            "execution_cost_distribution_bps"
+        ),
+        "execution_cost_authority": False,
         "cost_components": costs, "normal_contract_ok": contract_ok,
         "fast_contract_ok": False, "hard_vetoes": hard_vetoes,
         "price_impact": impact, "spot_perp_basis": basis,

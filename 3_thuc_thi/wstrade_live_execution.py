@@ -15,6 +15,7 @@ import time
 from loi_he_thong import mainnet_safety
 from loi_he_thong import private_user_stream
 from loi_he_thong import verified_cost_model
+from loi_he_thong import execution_causal_revalidation
 
 
 VERSION = "WSTRADE_LIVE_EXECUTION_V1"
@@ -25,34 +26,12 @@ BBO_SUBMIT_MAX_AGE_SECONDS = 1.0
 
 
 def _revalidate_before_submit(state, side, result, now=None):
-    """Fail closed if REST preflight outlived the recorded causal decision."""
+    """Compatibility wrapper around the single causal revalidation authority."""
     now = time.time() if now is None else float(now)
-    side = str(side or "").upper()
-    if side not in ("LONG", "SHORT"):
-        return False, "SIDE_INVALID"
-    if str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper() != side:
-        return False, "BIAS_SIDE_CHANGED"
-    if float(getattr(state, "bias_confidence", 0.0) or 0.0) < 0.55:
-        return False, "BIAS_CONFIDENCE_DROPPED"
-    decision_ts = float((result or {}).get("ts", 0.0) or 0.0)
-    decision_age = now - decision_ts
-    if (
-        decision_ts <= 0.0 or decision_age < 0.0
-        or decision_age > CAUSAL_SUBMIT_MAX_AGE_SECONDS
-    ):
-        return False, "CAUSAL_PROOF_STALE"
-    bid = float(getattr(state, "execution_best_bid", 0.0) or 0.0)
-    ask = float(getattr(state, "execution_best_ask", 0.0) or 0.0)
-    bbo_ts = float(getattr(state, "execution_price_time", 0.0) or 0.0)
-    bbo_age = now - bbo_ts
-    if bid <= 0.0 or ask <= bid:
-        return False, "BBO_INVALID"
-    if bbo_ts <= 0.0 or bbo_age < 0.0 or bbo_age > BBO_SUBMIT_MAX_AGE_SECONDS:
-        return False, "BBO_STALE"
-    ignition = (result or {}).get("ignition") or {}
-    if ignition.get("futures_follow_invalidated"):
-        return False, "FUTURES_FOLLOW_INVALIDATED"
-    return True, "PASS"
+    ok, reason, _detail = execution_causal_revalidation.validate_submit(
+        state, side, result, now,
+    )
+    return ok, reason
 
 
 def _finalize_shadow_state(state):
@@ -339,10 +318,8 @@ async def _hybrid_entry(api, state, side, result, qty, now):
         # Caller will flatten only after the remaining maker quantity is
         # proven terminal, preventing a late fill from reopening exposure.
         return final, 409, client_id
-    release = str(result.get("phase", "")).upper() == "RELEASE"
-    edge_ok = bool((result.get("edge_tier") or {}).get("cost_ok", False))
-    if release and edge_ok:
-        return await _market_entry(api, state, side, qty, time.time())
+    # A real maker timeout is not permission to chase.  A taker conversion is
+    # first evaluated in shadow against the same causal episode and Guardian.
     return final or placed, 409, client_id
 
 async def _place_stop(api, state, position):
@@ -463,7 +440,7 @@ def _position(side, qty, fill_price, hard_sl, risk_plan, now, client_id, result)
         active=True, live=True, side=side, qty=qty, initial_qty=qty,
         opened_at=now, position_cycle_id=f"live:{side}:{int(now * 1000)}",
         entry_price=fill_price, execution_entry_price=fill_price,
-        hard_sl=hard_sl, rR=r_value, best=fill_price, best_r=0.0,
+        hard_sl=hard_sl, r=r_value, best=fill_price, best_r=0.0,
         floor_r=None, floor=None, stage="INITIAL", tier_mode="PROTECT",
         # Deprecated checkpoint compatibility only. The active risk module
         # never reads these fields and cannot emit a Whale Exhaustion exit.
@@ -690,7 +667,7 @@ async def reconcile(api, state, event_callback=None, now=None):
         # flattened. This ordering prevents a late maker fill from reopening
         # exposure after the emergency market order.
         if orders:
-            _, cancel_status = await api.cancel_all_open_orders(SYMBBOL)
+            _, cancel_status = await api.cancel_all_open_orders(SYMBOL)
             if cancel_status != 200:
                 state.wstrade_reconciliation_status = "RECOVERY_CANCEL_UNVERIFIED"
                 return "RECOVERY_CANCEL_UNVERIFIED"

@@ -73,14 +73,19 @@ def _ref(hist,now,sec):
         if float(r["ts"])<=target:return r
     return None
 
-def _threshold(state,spot):
+def _threshold(state,spot,now=None):
+    now=time.time() if now is None else float(now)
     atr=float(getattr(state,"atr_1m",0) or 0)
+    atr_ts=float(getattr(state,"atr_1m_updated_at",0) or 0)
+    atr_age=now-atr_ts if atr_ts>0 else float("inf")
+    if atr_age<0 or atr_age>120.0:
+        atr=0.0
     range_proxy=atr/spot*10000 if spot>0 and atr>0 else 0
     dyn=range_proxy*0.25 if range_proxy>0 else MIN_PRICE_BPS
     return max(MIN_PRICE_BPS,min(MAX_PRICE_BPS,dyn))
 
 def _s1(state,pos,now,p,ph):
-    sign=_sign(pos.side); base=_threshold(state,p["spot"])
+    sign=_sign(pos.side); base=_threshold(state,p["spot"],now)
     adverse_hits=[]; support_hits=[]; detail={}
     for h in (0.25,1.0,3.0):
         ref=_ref(ph,now,h)
@@ -128,14 +133,23 @@ def _spot_flow(state,now):
 
 def _fut_flow(state,now):
     buy=sell=0.0; newest=0.0; cutoff=(now-3)*1000
-    for r in list(getattr(state,"danh_sach_khop_lenh_futures",()) or ()):
+    rows=getattr(state,"danh_sach_khop_lenh_futures",()) or ()
+    previous_ts=None
+    for r in reversed(rows):
         try:
             ts=float(r.get("thoi_gian_ms",0) or 0)
-            if ts<cutoff: continue
+            if previous_ts is not None and ts>previous_ts:
+                state.guardian_s_futures_flow_ordering="DISORDERED_NEUTRAL"
+                return (0.0,0.0)
+            previous_ts=ts
+            if ts<cutoff: break
             q=float(r.get("khoi_luong",0) or 0); newest=max(newest,ts/1000)
             if bool(r.get("ban_chu_dong",False)): sell+=q
             else: buy+=q
-        except Exception: pass
+        except Exception:
+            state.guardian_s_futures_flow_ordering="INVALID_NEUTRAL"
+            return (0.0,0.0)
+    state.guardian_s_futures_flow_ordering="MONOTONIC"
     return _imb(buy,sell) if newest and now-newest<=5 else (0.0,0.0)
 
 def _cb_flow(state,now):

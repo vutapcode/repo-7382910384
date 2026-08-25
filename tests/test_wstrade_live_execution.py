@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from loi_he_thong import ignition_signals
 
 
 path = Path(__file__).parents[1] / '3_thuc_thi' / 'wstrade_live_execution.py'
@@ -90,20 +91,36 @@ class LiveExecutionTests(unittest.TestCase):
         s = state()
         s.bias_state = "LONG"
         s.bias_confidence = 0.8
+        s.bias_updated_at = 10.0
         s.execution_price_time = 10.0
+        s._ignition_signal_engine = ignition_signals.SignalEngine()
+        for venue in s._ignition_signal_engine.venues.values():
+            venue.epoch = 1
+            venue.clock_valid = True
+        s.canonical_reserved_context = {
+            "opportunity_id": 7,
+            "causal_episode_id": "episode-7",
+            "epochs": {"binance_spot": 1, "futures": 1},
+        }
+        result = {
+            "ts": 9.5,
+            "canonical_opportunity_id": 7,
+            "causal_episode_id": "episode-7",
+            "ignition": {"cash_venues": ["binance_spot"]},
+        }
         ok, reason = live._revalidate_before_submit(
-            s, "LONG", {"ts": 9.5, "ignition": {}}, now=10.0,
+            s, "LONG", result, now=10.0,
         )
         self.assertTrue(ok)
         self.assertEqual(reason, "PASS")
         ok, reason = live._revalidate_before_submit(
-            s, "LONG", {"ts": 8.0, "ignition": {}}, now=10.0,
+            s, "LONG", dict(result, ts=8.0), now=10.0,
         )
         self.assertFalse(ok)
         self.assertEqual(reason, "CAUSAL_PROOF_STALE")
         s.bias_state = "SHORT"
         ok, reason = live._revalidate_before_submit(
-            s, "LONG", {"ts": 9.5, "ignition": {}}, now=10.0,
+            s, "LONG", result, now=10.0,
         )
         self.assertFalse(ok)
         self.assertEqual(reason, "BIAS_SIDE_CHANGED")

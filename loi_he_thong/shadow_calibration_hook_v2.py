@@ -29,6 +29,13 @@ def install(hardened):
                 cost_plan.get("execution_style")
                 or shadow_execution.get("style") or "UNKNOWN"
             ).upper()
+            raw_cost=cost_plan.get(
+                "decision_total_cost_bps",cost_plan.get("total_cost_bps")
+            )
+            try:
+                execution_cost_bps=None if raw_cost is None else float(raw_cost)
+            except (TypeError,ValueError):
+                execution_cost_bps=None
             if bool(getattr(pos,"calibration_tainted",False)):
                 state.edge_cal_v2_excluded_tainted = int(
                     getattr(state,"edge_cal_v2_excluded_tainted",0) or 0
@@ -55,7 +62,8 @@ def install(hardened):
             if notional>0.0:
                 edge_calibration_v2.record(
                     state,mode,regime,net/notional*10000.0,side,edge_class,
-                    proof_type,proposer,execution_style
+                    proof_type,proposer,execution_style,
+                    execution_cost_bps=execution_cost_bps,
                 )
                 # The close wrapper persists before this outer calibration hook
                 # runs.  Flush once more so a power loss immediately after EXIT
