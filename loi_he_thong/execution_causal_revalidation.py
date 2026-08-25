@@ -6,10 +6,11 @@ candidate is still executable after REST/maker latency.
 """
 
 from loi_he_thong import ignition_signals
+from loi_he_thong import ignition_core
 from loi_he_thong import verified_cost_model
 
 
-VERSION = "EXECUTION_CAUSAL_REVALIDATION_V1"
+VERSION = "EXECUTION_CAUSAL_REVALIDATION_V2_COHERENT_REVERSAL"
 PROOF_MAX_AGE_SECONDS = 1.5
 BBO_MAX_AGE_SECONDS = 1.0
 BIAS_MAX_AGE_SECONDS = 3.0
@@ -159,13 +160,23 @@ def _opposing_ok(rows, side):
         )
         for price_row in adverse_price:
             price_bucket = int(price_row.get("bucket_start_ms", 0) or 0)
-            if any(
-                int(flow_row.get("bucket_start_ms", 0) or 0) != price_bucket
-                for flow_row in opposing_flow
-            ):
+            coherent_flow = next((
+                flow_row for flow_row in opposing_flow
+                if 0 < abs(
+                    int(flow_row.get("bucket_start_ms", 0) or 0)
+                    - price_bucket
+                ) <= ignition_core.EVIDENCE_GAP_MS
+            ), None)
+            if coherent_flow is not None:
+                flow_bucket = int(
+                    coherent_flow.get("bucket_start_ms", 0) or 0
+                )
                 return False, "POST_PROOF_CASH_PRICE_FLOW_REVERSAL", {
                     "venue": venue,
                     "price_bucket": price_bucket,
+                    "flow_bucket": flow_bucket,
+                    "coherence_gap_ms": abs(flow_bucket - price_bucket),
+                    "coherence_limit_ms": ignition_core.EVIDENCE_GAP_MS,
                 }
     return True, "PASS", {}
 

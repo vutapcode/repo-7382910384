@@ -100,6 +100,39 @@ class ExecutionCausalRevalidationTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "POST_PROOF_CASH_PRICE_FLOW_REVERSAL")
 
+    def test_distant_price_and_flow_cannot_be_stitched_into_reversal(self):
+        state, result = fixture()
+        history = state._ignition_signal_engine.venues["binance_spot"].history
+        flow_row = material("binance_spot", 9600, "SHORT")
+        flow_row["price_conversion_bps"] = 0.0
+        price_row = material("binance_spot", 10_000, "LONG")
+        price_row["price_conversion_bps"] = -0.20
+        history.extend([flow_row, price_row])
+
+        ok, reason, _ = recheck.validate_submit(state, "LONG", result, 10.1)
+
+        self.assertTrue(ok)
+        self.assertEqual(reason, "PASS")
+
+    def test_coherent_reversal_reports_both_buckets_and_gap(self):
+        state, result = fixture()
+        history = state._ignition_signal_engine.venues["binance_spot"].history
+        price_row = material("binance_spot", 9600, "LONG")
+        price_row["price_conversion_bps"] = -0.20
+        flow_row = material("binance_spot", 9800, "SHORT")
+        flow_row["price_conversion_bps"] = 0.0
+        history.extend([price_row, flow_row])
+
+        ok, reason, detail = recheck.validate_submit(
+            state, "LONG", result, 10.0
+        )
+
+        self.assertFalse(ok)
+        self.assertEqual(reason, "POST_PROOF_CASH_PRICE_FLOW_REVERSAL")
+        self.assertEqual(detail["price_bucket"], 9600)
+        self.assertEqual(detail["flow_bucket"], 9800)
+        self.assertEqual(detail["coherence_gap_ms"], 200)
+
     def test_maker_release_requires_cash_persistence_and_futures_response(self):
         state, result = fixture()
         cash = state._ignition_signal_engine.venues["binance_spot"].history
