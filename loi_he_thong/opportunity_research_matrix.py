@@ -125,7 +125,9 @@ def build(state, result, edge_report=None):
         frozen.get("raw_confidence")
         if frozen_available else council.get("raw_confidence")
     )
-    side = str(result.get("side") or "ABSTAIN").upper()
+    side = str(
+        ignition.get("research_side") or result.get("side") or "ABSTAIN"
+    ).upper()
     slow = _slow_acceptance(persistent, side)
     leader = _leader_class(ignition)
     phase_measurement = dict(ignition.get("phase_measurement") or {})

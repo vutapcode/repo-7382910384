@@ -24,6 +24,11 @@ _FR_STREAMS = {
 }
 _FR_WINDOWS = (100, 250, 500, 800)
 _FR_FOLLOWUP_MS = 60_000
+_PRECURSOR_HORIZONS_SECONDS = (3, 6, 15)
+_PRECURSOR_MIN_QTY = {
+    'binance_spot': 0.015,
+    'coinbase_spot': 0.002,
+}
 _FR_LABELS = (
     'IMPACT_CONTINUATION', 'ABSORBED_BUILD', 'FLOW_FAILURE',
     'FULLY_PROPAGATED/CHASE',
@@ -38,7 +43,7 @@ def _num(value, default=None):
 
 
 class RecorderResearchTracker:
-    """Bounded recorder-only FAILED_REVERSION measurements; no live authority."""
+    """Bounded research measurements; never live trading authority."""
 
     def __init__(self, emit, outcomes):
         self.emit, self.outcomes = emit, outcomes
@@ -46,6 +51,11 @@ class RecorderResearchTracker:
         self.oi = deque(maxlen=128)
         self.pending = OrderedDict()
         self.closed = deque(maxlen=512)
+        self.precursor_closed = OrderedDict()
+        self.last_sequence = {}
+        self.sequence_gaps = {
+            venue: deque(maxlen=128) for venue in _FR_STREAMS.values()
+        }
 
     @staticmethod
     def _clock(record):
@@ -138,6 +148,174 @@ class RecorderResearchTracker:
             max(0.0, _num(payload.get('buy_qty'), 0.0)),
             max(0.0, _num(payload.get('sell_qty'), 0.0)),
         ))
+
+    def _sequence(self, record, venue):
+        end = record.get('sequence_end')
+        start = record.get('sequence_start')
+        previous = record.get('previous_sequence')
+        last = self.last_sequence.get(venue)
+        gap = bool(
+            last is not None and (
+                (previous is not None and int(previous) != int(last))
+                or (start is not None and int(start) != int(last) + 1)
+            )
+        )
+        if gap:
+            self.sequence_gaps[venue].append(self._clock(record))
+        if end is not None:
+            self.last_sequence[venue] = int(end)
+
+    @staticmethod
+    def _precursor_venue(rows, start_ms, end_ms, side, minimum_qty):
+        selected = [row for row in rows if start_ms <= row[0] < end_ms]
+        if not selected:
+            return {
+                'valid': False, 'reason': 'NO_EXECUTED_FLOW',
+                'observed_buckets': 0,
+            }
+        direction = 1.0 if side == 'LONG' else -1.0
+        buy = sum(row[6] for row in selected)
+        sell = sum(row[7] for row in selected)
+        total = buy + sell
+        imbalance = direction * (buy - sell) / total if total > 0.0 else 0.0
+        first = selected[0][2]
+        last = selected[-1][3]
+        progress = direction * (last - first) / first * 10_000.0 if first > 0.0 else 0.0
+        favorable = max(
+            direction * (price - first) / first * 10_000.0
+            for row in selected for price in (row[4], row[5])
+        ) if first > 0.0 else 0.0
+        seconds = {}
+        for row in selected:
+            cell = seconds.setdefault(row[0] // 1_000, [0.0, 0.0])
+            cell[0] += row[6]
+            cell[1] += row[7]
+        aligned = opposed = material = 0
+        for second_buy, second_sell in seconds.values():
+            volume = second_buy + second_sell
+            if volume < minimum_qty:
+                continue
+            material += 1
+            signed = direction * (second_buy - second_sell) / volume
+            aligned += int(signed >= 0.20)
+            opposed += int(signed <= -0.20)
+        return {
+            'valid': True,
+            'reason': 'MEASURED',
+            'observed_buckets': len(selected),
+            'observed_seconds': len(seconds),
+            'coverage_ms': max(0, selected[-1][0] + 100 - selected[0][0]),
+            'buy_qty': round(buy, 8),
+            'sell_qty': round(sell, 8),
+            'directional_imbalance': round(imbalance, 6),
+            'signed_price_progress_bps': round(progress, 6),
+            'favorable_excursion_bps': round(max(0.0, favorable), 6),
+            'retracement_from_favorable_bps': round(
+                max(0.0, favorable - progress), 6
+            ),
+            'material_seconds': material,
+            'aligned_material_seconds': aligned,
+            'opposed_material_seconds': opposed,
+        }
+
+    def _precursor_horizon(self, side, origin_ms, horizon_seconds):
+        start_ms = int(origin_ms) - int(horizon_seconds) * 1_000
+        venues = {
+            venue: self._precursor_venue(
+                tuple(self.rows[venue]), start_ms, int(origin_ms), side,
+                _PRECURSOR_MIN_QTY[venue],
+            )
+            for venue in ('binance_spot', 'coinbase_spot')
+        }
+        gaps = {
+            venue: [when for when in self.sequence_gaps[venue]
+                    if start_ms <= when <= int(origin_ms)]
+            for venue in venues
+        }
+        valid = [row for row in venues.values() if row.get('valid')]
+        if any(gaps.values()):
+            status = 'INVALID_SEQUENCE_GAP'
+        elif len(valid) < 2:
+            status = 'INSUFFICIENT_CROSS_CASH_COVERAGE'
+        elif all(
+            row['directional_imbalance'] > 0.0
+            and row['signed_price_progress_bps'] > 0.0
+            and row['aligned_material_seconds'] >= 2
+            and row['opposed_material_seconds'] == 0
+            for row in valid
+        ):
+            status = 'SAME_CAUSAL_WAVE_CANDIDATE'
+        elif all(row['opposed_material_seconds'] >= 2 for row in valid):
+            status = 'PREVIOUS_DISCONNECTED_WAVE_CANDIDATE'
+        else:
+            status = 'AMBIGUOUS_REQUIRES_CANONICAL_REPLAY'
+        return {
+            'horizon_seconds': int(horizon_seconds),
+            'status': status,
+            'valid_for_strategy': False,
+            'sequence_gaps': {name: len(rows) for name, rows in gaps.items()},
+            'venues': venues,
+        }
+
+    def _register_precursor(self, record):
+        if str(record.get('stream') or '') != 'bot_event':
+            return
+        payload = record.get('payload') or {}
+        if str(payload.get('event') or '') != 'DECISION_EVALUATED':
+            return
+        decision = payload.get('decision_record') or {}
+        inputs = decision.get('inputs') or {}
+        research = (
+            payload.get('opportunity_research')
+            or inputs.get('opportunity_research') or {}
+        )
+        ignition = payload.get('ignition') or inputs.get('ignition') or {}
+        candidate_id = str(
+            research.get('research_candidate_id')
+            or payload.get('causal_episode_id')
+            or decision.get('causal_episode_id') or ''
+        )
+        if not candidate_id or candidate_id in self.precursor_closed:
+            return
+        side = str(
+            ignition.get('research_side')
+            or (research.get('pre_bias') or {}).get('direction')
+            or payload.get('side') or ''
+        ).upper()
+        origin = int(
+            ignition.get('research_receive_time_ms')
+            or record.get('event_time_ms') or 0
+        )
+        if side not in ('LONG', 'SHORT') or origin <= 0:
+            return
+        horizons = {
+            str(horizon): self._precursor_horizon(side, origin, horizon)
+            for horizon in _PRECURSOR_HORIZONS_SECONDS
+        }
+        self.precursor_closed[candidate_id] = True
+        self.precursor_closed.move_to_end(candidate_id)
+        while len(self.precursor_closed) > 2048:
+            self.precursor_closed.popitem(last=False)
+        self.emit('precursor_continuity', {
+            'version': 'PRECURSOR_CONTINUITY_RESEARCH_V1',
+            'authority': False,
+            'live_gate': False,
+            'policy': 'RAW_RECEIVE_TIME_EVIDENCE_NEVER_CHANGES_CONSUMED_35PCT',
+            'research_candidate_id': candidate_id,
+            'causal_episode_id': (
+                payload.get('causal_episode_id')
+                or decision.get('causal_episode_id')
+            ),
+            'cycle_id': decision.get('cycle_id') or payload.get('cycle_id'),
+            'side': side,
+            'origin_receive_time_ms': origin,
+            'pre_bias_band': (research.get('pre_bias') or {}).get('band'),
+            'leader': research.get('leader'),
+            'first_blocking_gate': research.get('first_blocking_gate'),
+            'horizons': horizons,
+            'canonical_continuity_confirmed': False,
+            'promotion_eligible': False,
+        }, event_time_ms=origin)
 
     def _open_interest(self, record):
         payload = record.get('payload') or {}
@@ -326,10 +504,12 @@ class RecorderResearchTracker:
         stream = str(record.get('stream') or '')
         venue = _FR_STREAMS.get(stream)
         if venue:
+            self._sequence(record, venue)
             self._trade(record, venue)
         elif stream == 'open_interest':
             self._open_interest(record)
         elif stream == 'bot_event':
+            self._register_precursor(record)
             self._register(record)
         now = self._clock(record)
         if now > 0 and self.pending:

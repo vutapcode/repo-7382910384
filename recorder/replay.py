@@ -34,6 +34,7 @@ DEFAULT_STREAMS = {
     'coinbase_spot_trade_100ms', 'coinbase_spot_ticker',
     'wavefront_candidate', 'wavefront_virtual_entry',
     'wavefront_virtual_exit', 'residual_edge_report', 'liquidity_response',
+    'precursor_continuity',
 }
 
 

@@ -13,6 +13,7 @@ from loi_he_thong import ignition_signals
 
 VERSION = "IGNITION_CORE_V1"
 BIAS_MIN_CONF = 0.55
+BORDERLINE_BIAS_MIN_CONF = 0.50
 BIAS_MAX_AGE = 3.0
 BIAS_MIN_PRE_IMPULSE_AGE = 1.0
 EVAL_THROTTLE = 0.10
@@ -403,6 +404,8 @@ def _research_reject_context(state, signal, bias, reason):
         "authority": False,
         "policy": "TELEMETRY_ONLY_NEVER_CREATES_CANONICAL_OPPORTUNITY",
         "bias_snapshot": dict(bias or {}),
+        "research_side": side,
+        "research_receive_time_ms": receive_ms,
         "proposer": signal.get("venue"),
         "leader": "UNKNOWN",
         "observed_venues": sorted(venues),
@@ -410,6 +413,34 @@ def _research_reject_context(state, signal, bias, reason):
     }
     state._ignition_last_reject_payload = payload
     return payload
+
+
+def _tee_borderline_pre_bias(state, rows):
+    """Preserve strong onsets before Bias early-return consumes their buckets.
+
+    ``_new_signals`` advances the venue cursors before the live Bias guards are
+    evaluated.  Without this tee, a 0.50-0.55 frozen Bias onset was neither an
+    Entry nor a research sample.  This path records it only; it never starts an
+    Ignition episode and never changes the live decision reason.
+    """
+    for row in rows:
+        if not bool(row.get("strong")) or not bool(row.get("clock_valid")):
+            continue
+        frozen = _bias_snapshot(state, row)
+        side = str(row.get("side") or "ABSTAIN").upper()
+        confidence = _f(frozen.get("confidence"))
+        if (
+            side in ("LONG", "SHORT")
+            and side == str(frozen.get("direction") or "ABSTAIN").upper()
+            and BORDERLINE_BIAS_MIN_CONF <= confidence < BIAS_MIN_CONF
+        ):
+            _research_reject_context(
+                state, row, frozen, "BORDERLINE_PRE_BIAS_RESEARCH"
+            )
+
+
+def _research_payload(state):
+    return dict(getattr(state, "_ignition_last_reject_payload", {}) or {})
 
 
 def _start_episode(state, signal):
@@ -1227,6 +1258,7 @@ def evaluate(state, now=None, side=None):
     # This payload describes only a proposer observed in this evaluator cycle;
     # never let an old research reject masquerade as fresh evidence.
     state._ignition_last_reject_payload = {}
+    _tee_borderline_pre_bias(state, rows)
     episode = getattr(state, "_ignition_episode", None)
 
     if episode is not None:
@@ -1243,15 +1275,24 @@ def evaluate(state, now=None, side=None):
     if side not in ("LONG", "SHORT"):
         state._ignition_episode = None
         _remember_bias(state, now)
-        return _wait(now, side, "BIAS_ABSTAIN", freshness=freshness)
+        return _wait(
+            now, side, "BIAS_ABSTAIN",
+            episode=_research_payload(state) or None, freshness=freshness,
+        )
     if _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF:
         state._ignition_episode = None
         _remember_bias(state, now)
-        return _wait(now, side, "BIAS_CONFIDENCE_LOW", freshness=freshness)
+        return _wait(
+            now, side, "BIAS_CONFIDENCE_LOW",
+            episode=_research_payload(state) or None, freshness=freshness,
+        )
     bias_ts = _f(getattr(state, "bias_updated_at", 0.0))
     if bias_ts <= 0.0 or now - bias_ts > BIAS_MAX_AGE:
         state._ignition_episode = None
-        return _wait(now, side, "BIAS_STALE", freshness=freshness)
+        return _wait(
+            now, side, "BIAS_STALE",
+            episode=_research_payload(state) or None, freshness=freshness,
+        )
 
     if episode is not None:
         age = now_ms - int(episode.get("started_receive_ms", 0))
@@ -1312,7 +1353,7 @@ def evaluate(state, now=None, side=None):
     if episode is None:
         _remember_bias(state, now)
         reason = str(getattr(state, "_ignition_last_reject", "WAIT_IGNITION") or "WAIT_IGNITION")
-        research = dict(getattr(state, "_ignition_last_reject_payload", {}) or {})
+        research = _research_payload(state)
         return _wait(
             now, side, reason, episode=research or None, freshness=freshness
         )

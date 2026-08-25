@@ -147,6 +147,51 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(payload["authority"])
         self.assertTrue(payload["research_candidate_transition"])
 
+    def test_borderline_onset_is_teed_before_low_bias_early_return(self):
+        s = state(now=3.2)
+        s.bias_confidence = 0.52
+        s._ignition_bias_snapshots = __import__("collections").deque([
+            {
+                "direction": "LONG", "confidence": 0.5238,
+                "raw_direction": "LONG", "raw_confidence": 0.51,
+                "captured_at": 2.0, "updated_at": 2.0,
+                "direction_context": {}, "s_votes": {},
+            }
+        ], maxlen=40)
+        signal = evidence_row(3_200, "LONG", 100.01)
+        with patch.object(ignition_signals, "snapshot", return_value={
+            "binance_spot": (), "coinbase_spot": (), "futures": (),
+        }), patch.object(ignition_core, "_new_signals", return_value=[signal]):
+            result = ignition_core.evaluate(s, now=3.2)
+        self.assertEqual(result["reason"], "BIAS_CONFIDENCE_LOW")
+        self.assertEqual(
+            result["ignition"]["research_reject_reason"],
+            "BORDERLINE_PRE_BIAS_RESEARCH",
+        )
+        self.assertEqual(result["ignition"]["research_side"], "LONG")
+        self.assertFalse(result["ignition"]["authority"])
+
+    def test_borderline_onset_is_teed_before_abstain_early_return(self):
+        s = state(now=3.2)
+        s.bias_state = "ABSTAIN"
+        s.bias_confidence = 0.0
+        s._ignition_bias_snapshots = __import__("collections").deque([
+            {
+                "direction": "SHORT", "confidence": 0.51,
+                "raw_direction": "SHORT", "raw_confidence": 0.50,
+                "captured_at": 2.0, "updated_at": 2.0,
+                "direction_context": {}, "s_votes": {},
+            }
+        ], maxlen=40)
+        signal = evidence_row(3_200, "SHORT", 99.99)
+        with patch.object(ignition_signals, "snapshot", return_value={
+            "binance_spot": (), "coinbase_spot": (), "futures": (),
+        }), patch.object(ignition_core, "_new_signals", return_value=[signal]):
+            result = ignition_core.evaluate(s, now=3.2)
+        self.assertEqual(result["reason"], "BIAS_ABSTAIN")
+        self.assertEqual(result["ignition"]["research_side"], "SHORT")
+        self.assertFalse(result["ignition"]["authority"])
+
     def test_persistent_metaorder_is_shadow_telemetry_only(self):
         histories = {}
         for venue in ("binance_spot", "futures"):
