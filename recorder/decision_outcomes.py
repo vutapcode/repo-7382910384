@@ -39,9 +39,8 @@ class DecisionOutcomeTracker:
         # for research before Ignition exists, but never count as economic
         # misses or independent opportunities.
         self.diagnostic_waves = {}
-        # Recorder-only causal-wave identities prevent origin/GO/execution
-        # anchors (and tightly clustered episode ids) from being counted as
-        # independent economic misses.
+        # Recorder-only proximity clusters are diagnostics only. Economic miss
+        # identity follows canonical episode identity; proximity never dedupes.
         self.economic_waves = {}
         self.episode_wave_ids = OrderedDict()
         self.adjudicated_waves = OrderedDict()
@@ -164,11 +163,8 @@ class DecisionOutcomeTracker:
         }
         return wave_id
 
-    def _economic_wave_id(self, episode_id, side, start_ms, reference):
-        if episode_id and episode_id in self.episode_wave_ids:
-            return self.episode_wave_ids[episode_id]
+    def _economic_cluster_id(self, side, start_ms, reference):
         previous = self.economic_waves.get(side)
-        wave_id = None
         if previous is not None:
             gap = int(start_ms) - int(previous["last_ms"])
             anchor = float(previous["anchor_price"])
@@ -178,15 +174,24 @@ class DecisionOutcomeTracker:
                 and distance_bps <= DIAGNOSTIC_WAVE_PRICE_BPS
             ):
                 previous["last_ms"] = int(start_ms)
-                wave_id = str(previous["wave_id"])
-        if wave_id is None:
-            wave_id = "economic:%s:%d" % (side, int(start_ms))
-            self.economic_waves[side] = {
-                "wave_id": wave_id,
-                "anchor_price": float(reference),
-                "started_at_ms": int(start_ms),
-                "last_ms": int(start_ms),
-            }
+                return str(previous["cluster_id"])
+        cluster_id = "cluster:%s:%d" % (side, int(start_ms))
+        self.economic_waves[side] = {
+            "cluster_id": cluster_id,
+            "anchor_price": float(reference),
+            "started_at_ms": int(start_ms),
+            "last_ms": int(start_ms),
+        }
+        return cluster_id
+
+    def _economic_wave_id(self, episode_id, side, start_ms, reference):
+        if episode_id and episode_id in self.episode_wave_ids:
+            return self.episode_wave_ids[episode_id]
+        wave_id = (
+            "economic:%s:%s" % (side, episode_id)
+            if episode_id
+            else "economic:%s:%d" % (side, int(start_ms))
+        )
         if episode_id:
             self.episode_wave_ids[episode_id] = wave_id
             self.episode_wave_ids.move_to_end(episode_id)
@@ -252,6 +257,7 @@ class DecisionOutcomeTracker:
                 "cycle_id": tracker.get("cycle_id"),
                 "causal_episode_id": tracker.get("causal_episode_id"),
                 "economic_wave_id": wave_id or None,
+                "economic_cluster_id": tracker.get("economic_cluster_id"),
                 "sample_scope": tracker.get("sample_scope"),
                 "anchor_role": tracker.get("anchor_role"),
                 "classification": classification,
@@ -387,6 +393,10 @@ class DecisionOutcomeTracker:
             self._economic_wave_id(episode_id, side, start_ms, reference)
             if economic_miss_eligible else None
         )
+        economic_cluster_id = (
+            self._economic_cluster_id(side, start_ms, reference)
+            if economic_miss_eligible else None
+        )
         self.pending[tracking_key] = {
             **candidate,
             "tracking_key": tracking_key,
@@ -394,6 +404,7 @@ class DecisionOutcomeTracker:
             "diagnostic_wave_id": diagnostic_wave_id,
             "economic_miss_eligible": economic_miss_eligible,
             "economic_wave_id": economic_wave_id,
+            "economic_cluster_id": economic_cluster_id,
             "economic_screen_ever": False,
             "start_ms": start_ms,
             "side": side,
@@ -446,6 +457,7 @@ class DecisionOutcomeTracker:
                 "version": VERSION,
                 "cycle_id": tracker.get("cycle_id"),
                 "causal_episode_id": tracker.get("causal_episode_id"),
+                "economic_cluster_id": tracker.get("economic_cluster_id"),
                 "diagnostic_wave_id": tracker.get("diagnostic_wave_id"),
                 "persistent_metaorder_candidate_id": tracker.get(
                     "persistent_metaorder_candidate_id"
@@ -551,6 +563,7 @@ class DecisionOutcomeTracker:
                         "cycle_id": tracker.get("cycle_id"),
                         "causal_episode_id": tracker.get("causal_episode_id"),
                         "economic_wave_id": tracker.get("economic_wave_id"),
+                        "economic_cluster_id": tracker.get("economic_cluster_id"),
                         "diagnostic_wave_id": tracker.get("diagnostic_wave_id"),
                         "persistent_metaorder_candidate_id": tracker.get(
                             "persistent_metaorder_candidate_id"
