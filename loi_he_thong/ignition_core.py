@@ -549,9 +549,20 @@ def _proof(episode, histories):
                     (second_bucket - first_bucket)
                     // ignition_signals.BUCKET_MS - 1,
                 )
+                observed_between = len(intervening)
+                missing_between = max(0, expected_between - observed_between)
+                # Episode continuity on another venue cannot turn two
+                # disconnected cash impulses into one persistent metaorder.
+                # Reuse the existing causal evidence-decay contract.
+                if (
+                    second_bucket <= first_bucket
+                    or second_bucket - first_bucket > EVIDENCE_GAP_MS
+                    or missing_between > 0
+                ):
+                    continue
                 proof = dict(rows[-1])
                 proof["_metaorder_evidence"] = {
-                    "version": "METAORDER_PROOF_QUALITY_V1",
+                    "version": "METAORDER_PROOF_QUALITY_V2_GAP_AUTHORITY",
                     "proof_buckets": [first_bucket, second_bucket],
                     "proof_bucket_gap_ms": second_bucket - first_bucket,
                     "proof_buckets_adjacent": bool(
@@ -562,11 +573,9 @@ def _proof(episode, histories):
                     "intervening_nonmaterial_buckets": sum(
                         not _material_flow(row) for row in intervening
                     ),
-                    "intervening_missing_buckets": max(
-                        0, expected_between - len(intervening)
-                    ),
-                    "metadata_authority": False,
-                    "proof_policy": "BRIEF_NONMATERIAL_PAUSE_ALLOWED",
+                    "intervening_missing_buckets": missing_between,
+                    "metadata_authority": True,
+                    "proof_policy": "OBSERVED_BRIEF_PAUSE_ONLY_MAX_CAUSAL_DECAY",
                 }
                 candidates.append(("METAORDER_CONTINUATION", proof, venue))
         failed = _failed_reversion(venue_history, side, episode["started_receive_ms"])

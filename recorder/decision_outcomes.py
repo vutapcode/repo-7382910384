@@ -13,7 +13,8 @@ MAX_PENDING = 512
 MAX_CLOSED = 2_048
 DIAGNOSTIC_WAVE_GAP_MS = 5_000
 DIAGNOSTIC_WAVE_PRICE_BPS = 3.0
-VERSION = "DECISION_COUNTERFACTUAL_V5_SCOPE_SAFE_WAVES"
+VERSION = "DECISION_COUNTERFACTUAL_V6_FINAL_ADJUDICATION"
+ADJUDICATION_VERSION = "ECONOMIC_MISS_ADJUDICATION_V1"
 
 
 def _f(value, default=0.0):
@@ -38,6 +39,12 @@ class DecisionOutcomeTracker:
         # for research before Ignition exists, but never count as economic
         # misses or independent opportunities.
         self.diagnostic_waves = {}
+        # Recorder-only causal-wave identities prevent origin/GO/execution
+        # anchors (and tightly clustered episode ids) from being counted as
+        # independent economic misses.
+        self.economic_waves = {}
+        self.episode_wave_ids = OrderedDict()
+        self.adjudicated_waves = OrderedDict()
 
     @staticmethod
     def _candidate(record):
@@ -157,6 +164,112 @@ class DecisionOutcomeTracker:
         }
         return wave_id
 
+    def _economic_wave_id(self, episode_id, side, start_ms, reference):
+        if episode_id and episode_id in self.episode_wave_ids:
+            return self.episode_wave_ids[episode_id]
+        previous = self.economic_waves.get(side)
+        wave_id = None
+        if previous is not None:
+            gap = int(start_ms) - int(previous["last_ms"])
+            anchor = float(previous["anchor_price"])
+            distance_bps = abs(float(reference) - anchor) / anchor * 10_000.0
+            if (
+                0 <= gap <= DIAGNOSTIC_WAVE_GAP_MS
+                and distance_bps <= DIAGNOSTIC_WAVE_PRICE_BPS
+            ):
+                previous["last_ms"] = int(start_ms)
+                wave_id = str(previous["wave_id"])
+        if wave_id is None:
+            wave_id = "economic:%s:%d" % (side, int(start_ms))
+            self.economic_waves[side] = {
+                "wave_id": wave_id,
+                "anchor_price": float(reference),
+                "started_at_ms": int(start_ms),
+                "last_ms": int(start_ms),
+            }
+        if episode_id:
+            self.episode_wave_ids[episode_id] = wave_id
+            self.episode_wave_ids.move_to_end(episode_id)
+            while len(self.episode_wave_ids) > MAX_CLOSED:
+                self.episode_wave_ids.popitem(last=False)
+        return wave_id
+
+    @staticmethod
+    def _guardian_counterfactual_net(candidate):
+        counterfactual = candidate.get("counterfactual") or {}
+        guardian = counterfactual.get("guardian_counterfactual") or {}
+        return _f(
+            guardian.get("net_pnl_bps_after_frozen_cost"), None
+        )
+
+    def _emit_final_adjudication(self, tracker, event_ms):
+        if not tracker.get("economic_miss_eligible"):
+            return
+        wave_id = str(tracker.get("economic_wave_id") or "")
+        primary = self.adjudicated_waves.get(wave_id)
+        if primary is not None:
+            classification = "DUPLICATE_EPISODE"
+            missing = []
+        else:
+            counterfactual = tracker.get("counterfactual") or {}
+            screen = bool(tracker.get("economic_screen_ever", False))
+            causal = counterfactual.get("causal_continuity_confirmed")
+            fill = counterfactual.get("fill_feasible")
+            feed_clean = counterfactual.get("feed_clean")
+            guardian_net = self._guardian_counterfactual_net(tracker)
+            missing = []
+            if causal is not True:
+                missing.append("CAUSAL_CONTINUITY")
+            if fill is not True:
+                missing.append("EXECUTABLE_FILL")
+            if feed_clean is not True:
+                missing.append("CLEAN_FEED")
+            if guardian_net is None:
+                missing.append("GUARDIAN_COUNTERFACTUAL")
+            elif guardian_net <= 0.0:
+                missing.append("POSITIVE_NET_AFTER_FROZEN_COST")
+            if not screen:
+                classification = "GOOD_REJECT"
+            elif causal is False:
+                classification = "DELAYED_UNRELATED_MOVE"
+            elif not missing:
+                classification = "ECONOMIC_MISS_CONFIRMED"
+            else:
+                classification = "MISS_SCREEN_ONLY"
+            self.adjudicated_waves[wave_id] = {
+                "tracking_key": tracker.get("tracking_key"),
+                "causal_episode_id": tracker.get("causal_episode_id"),
+                "classification": classification,
+            }
+            self.adjudicated_waves.move_to_end(wave_id)
+            while len(self.adjudicated_waves) > MAX_CLOSED:
+                self.adjudicated_waves.popitem(last=False)
+        self.emit(
+            "decision_miss_adjudication",
+            {
+                "version": ADJUDICATION_VERSION,
+                "authority": False,
+                "cycle_id": tracker.get("cycle_id"),
+                "causal_episode_id": tracker.get("causal_episode_id"),
+                "economic_wave_id": wave_id or None,
+                "sample_scope": tracker.get("sample_scope"),
+                "anchor_role": tracker.get("anchor_role"),
+                "classification": classification,
+                "economic_miss_confirmed": (
+                    classification == "ECONOMIC_MISS_CONFIRMED"
+                ),
+                "raw_screen_passed": bool(
+                    tracker.get("economic_screen_ever", False)
+                ),
+                "missing_confirmation": missing,
+                "primary_wave_tracker": primary,
+                "strategy_code_version": tracker.get("strategy_code_version"),
+                "strategy_config_version": tracker.get("strategy_config_version"),
+                "adjudicated_at_seconds": 60,
+            },
+            event_time_ms=int(event_ms),
+        )
+
     @staticmethod
     def _persistent_candidate(record):
         if str(record.get("stream", "")) != "bot_event":
@@ -270,12 +383,18 @@ class DecisionOutcomeTracker:
         economic_miss_eligible = bool(
             episode_id or sample_scope == "EXECUTION_EVENT"
         ) and sample_scope != "PERSISTENT_METAORDER_SHADOW"
+        economic_wave_id = (
+            self._economic_wave_id(episode_id, side, start_ms, reference)
+            if economic_miss_eligible else None
+        )
         self.pending[tracking_key] = {
             **candidate,
             "tracking_key": tracking_key,
             "sample_scope": sample_scope,
             "diagnostic_wave_id": diagnostic_wave_id,
             "economic_miss_eligible": economic_miss_eligible,
+            "economic_wave_id": economic_wave_id,
+            "economic_screen_ever": False,
             "start_ms": start_ms,
             "side": side,
             "reference_price": reference,
@@ -417,12 +536,21 @@ class DecisionOutcomeTracker:
                     if cost_budget is not None and minimum_net is not None
                     else None
                 )
+                screen_passed = bool(
+                    tracker.get("economic_miss_eligible", False)
+                    and economic_threshold is not None
+                    and favorable > economic_threshold
+                )
+                tracker["economic_screen_ever"] = bool(
+                    tracker.get("economic_screen_ever", False) or screen_passed
+                )
                 self.emit(
                     "decision_counterfactual",
                     {
                         "version": VERSION,
                         "cycle_id": tracker.get("cycle_id"),
                         "causal_episode_id": tracker.get("causal_episode_id"),
+                        "economic_wave_id": tracker.get("economic_wave_id"),
                         "diagnostic_wave_id": tracker.get("diagnostic_wave_id"),
                         "persistent_metaorder_candidate_id": tracker.get(
                             "persistent_metaorder_candidate_id"
@@ -460,11 +588,7 @@ class DecisionOutcomeTracker:
                             round(economic_threshold, 6)
                             if economic_threshold is not None else None
                         ),
-                        "economic_miss_screen_passed": bool(
-                            tracker.get("economic_miss_eligible", False)
-                            and economic_threshold is not None
-                            and favorable > economic_threshold
-                        ),
+                        "economic_miss_screen_passed": screen_passed,
                         "diagnostic_move_screen_passed": bool(
                             not tracker.get("economic_miss_eligible", False)
                             and economic_threshold is not None
@@ -479,6 +603,8 @@ class DecisionOutcomeTracker:
                     event_time_ms=event_ms,
                 )
                 tracker["completed"].add(window)
+                if window == WINDOWS_MS[-1]:
+                    self._emit_final_adjudication(tracker, event_ms)
             if len(tracker["completed"]) == len(WINDOWS_MS):
                 remove.append(tracking_key)
         for tracking_key in remove:

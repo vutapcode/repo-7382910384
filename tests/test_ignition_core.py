@@ -430,7 +430,21 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(evidence["proof_bucket_gap_ms"], 200)
         self.assertFalse(evidence["proof_buckets_adjacent"])
         self.assertEqual(evidence["intervening_nonmaterial_buckets"], 1)
-        self.assertFalse(evidence["metadata_authority"])
+        self.assertTrue(evidence["metadata_authority"])
+
+    def test_metaorder_proof_does_not_stitch_disconnected_cash_impulses(self):
+        first = evidence_row(3_100, "LONG", 100.001)
+        second = evidence_row(3_600, "LONG", 100.006)
+        episode = {
+            "side": "LONG", "started_receive_ms": 3_000,
+            "signals": [first, second],
+        }
+        proof_type, _, _ = ignition_core._proof(
+            episode,
+            {"binance_spot": (first, second)},
+        )
+
+        self.assertIsNone(proof_type)
 
     def test_futures_alert_never_self_opens(self):
         s = state()

@@ -324,6 +324,81 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
             self.tracker.pending["tier-s:9::GO"]["anchor_role"], "GO_CANDIDATE"
         )
 
+    def test_raw_screen_is_not_called_confirmed_miss_without_full_evidence(self):
+        event = decision_event(episode_id="episode-screen-only")
+        event["payload"]["decision_record"]["counterfactual"][
+            "frozen_economics"
+        ] = {"cost_budget_bps": 8.0, "minimum_net_edge_bps": 2.0}
+        self.tracker.observe(event)
+        for event_ms, sequence in ((6_000, 10), (16_000, 11),
+                                   (31_000, 12), (61_000, 13)):
+            self.tracker.observe(trade(
+                event_ms, sequence, 100.20, high=100.20, low=100.0,
+                previous=None if sequence == 10 else sequence - 1,
+            ))
+        final = [
+            payload for stream, payload, _ in self.rows
+            if stream == "decision_miss_adjudication"
+        ]
+        self.assertEqual(len(final), 1)
+        self.assertEqual(final[0]["classification"], "MISS_SCREEN_ONLY")
+        self.assertFalse(final[0]["economic_miss_confirmed"])
+        self.assertIn("EXECUTABLE_FILL", final[0]["missing_confirmation"])
+        self.assertIn("GUARDIAN_COUNTERFACTUAL", final[0]["missing_confirmation"])
+
+    def test_full_counterfactual_can_confirm_one_economic_miss(self):
+        event = decision_event(episode_id="episode-confirmed")
+        cf = event["payload"]["decision_record"]["counterfactual"]
+        cf["frozen_economics"] = {
+            "cost_budget_bps": 8.0, "minimum_net_edge_bps": 2.0,
+        }
+        cf.update({
+            "causal_continuity_confirmed": True,
+            "fill_feasible": True,
+            "feed_clean": True,
+            "guardian_counterfactual": {
+                "net_pnl_bps_after_frozen_cost": 3.0,
+            },
+        })
+        self.tracker.observe(event)
+        for event_ms, sequence in ((6_000, 10), (16_000, 11),
+                                   (31_000, 12), (61_000, 13)):
+            self.tracker.observe(trade(
+                event_ms, sequence, 100.20, high=100.20, low=100.0,
+                previous=None if sequence == 10 else sequence - 1,
+            ))
+        final = next(
+            payload for stream, payload, _ in self.rows
+            if stream == "decision_miss_adjudication"
+        )
+        self.assertEqual(final["classification"], "ECONOMIC_MISS_CONFIRMED")
+        self.assertTrue(final["economic_miss_confirmed"])
+
+    def test_multiple_anchors_in_one_episode_are_finally_deduplicated(self):
+        first = decision_event(
+            "origin", start_ms=1_000, episode_id="episode-one-wave",
+        )
+        second = decision_event(
+            "go", start_ms=1_100, episode_id="episode-one-wave",
+            qualified_now=True, council_ready=True, decision="GO",
+        )
+        for event in (first, second):
+            event["payload"]["decision_record"]["counterfactual"][
+                "frozen_economics"
+            ] = {"cost_budget_bps": 8.0, "minimum_net_edge_bps": 2.0}
+            self.tracker.observe(event)
+        for event_ms, sequence in ((6_100, 10), (16_100, 11),
+                                   (31_100, 12), (61_100, 13)):
+            self.tracker.observe(trade(
+                event_ms, sequence, 100.20, high=100.20, low=100.0,
+                previous=None if sequence == 10 else sequence - 1,
+            ))
+        classes = [
+            payload["classification"] for stream, payload, _ in self.rows
+            if stream == "decision_miss_adjudication"
+        ]
+        self.assertEqual(sorted(classes), ["DUPLICATE_EPISODE", "MISS_SCREEN_ONLY"])
+
 
 if __name__ == "__main__":
     unittest.main()
