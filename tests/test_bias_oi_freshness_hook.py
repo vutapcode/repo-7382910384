@@ -1,4 +1,5 @@
 import inspect
+from pathlib import Path
 import unittest
 
 from loi_he_thong import bias_oi_freshness_hook as hook
@@ -26,6 +27,10 @@ class BiasOiFreshnessHookTests(unittest.TestCase):
         self.assertIn("episode", inspect.signature(
             ignition_core._phase_measurement
         ).parameters)
+
+    def test_canonical_launcher_does_not_install_post_hoc_entry_monkeypatch(self):
+        launcher = (Path(__file__).resolve().parents[1] / "mainnet_tier_s_lean_launcher.py").read_text()
+        self.assertNotIn("entry_causal_hardening_hook", launcher)
 
 
 if __name__ == "__main__":
