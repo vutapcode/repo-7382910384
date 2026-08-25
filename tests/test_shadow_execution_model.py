@@ -26,6 +26,20 @@ class ShadowExecutionModelTests(unittest.TestCase):
     def test_default_queue_proxy_is_five_times_order_quantity(self):
         self.assertEqual(model.maker_fill_required_volume(0.001), 0.005)
 
+    def test_disordered_trade_buffer_uses_correct_full_fallback(self):
+        trades = [
+            {'thoi_gian_ms': 1_100, 'gia': 99.9, 'khoi_luong': 0.003,
+             'ban_chu_dong': True},
+            {'thoi_gian_ms': 1_050, 'gia': 99.9, 'khoi_luong': 0.002,
+             'ban_chu_dong': True},
+        ]
+        self.assertEqual(
+            model.maker_trade_through_volume(
+                'LONG', 99.9, 1.0, trades, now=1.2
+            ),
+            0.005,
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

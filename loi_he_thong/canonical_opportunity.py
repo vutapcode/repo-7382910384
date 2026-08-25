@@ -45,11 +45,9 @@ def _candidate(result):
 
 
 def _reset_active(state):
-    reserved = int(
-        getattr(state, "canonical_reserved_opportunity_id", 0) or 0
-    )
-    if reserved:
-        release(state, reserved, reason="CANONICAL_EPISODE_RESET")
+    # Strategy identity may reset on a gap, but an execution reservation is an
+    # order-lifecycle fact. Only the execution/reconciliation boundary may
+    # release or commit it after proving whether a fill exists.
     state.canonical_opportunity_active = False
     state.canonical_opportunity_signature = None
     state.canonical_opportunity_active_qualified = False
@@ -221,7 +219,8 @@ def reserve(state, opportunity_id, now=None):
         state.canonical_last_reserve_reject = "OLDER_THAN_ACTIVE_RESERVATION"
         return False
     if reserved and opportunity_id > reserved:
-        release(state, reserved, reason="SUPERSEDED_BY_NEWER_OPPORTUNITY")
+        state.canonical_last_reserve_reject = "ACTIVE_RESERVATION_HELD"
+        return False
 
     now = time.time() if now is None else float(now)
     state.canonical_reserved_opportunity_id = opportunity_id

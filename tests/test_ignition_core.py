@@ -350,7 +350,14 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertTrue(proved["ignition"]["futures_follow_ok"])
         self.assertLessEqual(proved["ignition"]["consumed_fraction"], 0.35)
         repeated = ignition_core.evaluate(s, now=3.402)
-        self.assertNotEqual(repeated["decision"], "GO")
+        self.assertEqual(repeated["decision"], "GO")
+        self.assertEqual(repeated["causal_episode_id"], proved["causal_episode_id"])
+        self.assertTrue(ignition_core.capture_episode(
+            s, proved["causal_episode_id"], side="LONG",
+            last_evidence_ms=proved["ignition"]["last_evidence_ms"],
+        ))
+        captured = ignition_core.evaluate(s, now=3.403)
+        self.assertNotEqual(captured["decision"], "GO")
 
     def test_futures_alert_never_self_opens(self):
         s = state()
@@ -407,6 +414,37 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(report["ignition"]["futures_follow_ok"])
         self.assertTrue(report["ignition"]["futures_follow_invalidated"])
 
+    def test_non_adjacent_futures_reversals_do_not_invalidate_follow(self):
+        s = state(now=3.7)
+        cash1 = evidence_row(3_100, "LONG", 100.003)
+        cash2 = evidence_row(3_200, "LONG", 100.006)
+        follow = evidence_row(3_300, "LONG", 100.004, strong=False)
+        reverse1 = evidence_row(3_400, "SHORT", 100.001, strong=False)
+        aligned = evidence_row(3_500, "LONG", 100.003, strong=False)
+        reverse2 = evidence_row(3_600, "SHORT", 99.998, strong=False)
+        for row in (follow, reverse1, aligned, reverse2):
+            row["venue"] = "futures"
+            row["total_qty"] = 0.20
+        episode = {
+            "causal_episode_id": "ign:binance_spot:LONG:3100",
+            "side": "LONG", "proposer": "binance_spot",
+            "started_receive_ms": 3_100, "last_evidence_ms": 3_600,
+            "bias_snapshot": {"direction": "LONG", "confidence": 0.8},
+            "signals": [cash1, cash2, follow, reverse1, aligned, reverse2],
+            "epochs": {"binance_spot": 1, "futures": 1},
+        }
+        report = ignition_core._result_from_episode(
+            s, episode,
+            {"binance_spot": (cash1, cash2), "coinbase_spot": (),
+             "futures": (follow, reverse1, aligned, reverse2)},
+            {"coinbase_mode": "FRESH", "binance_spot_ready": True,
+             "futures_ready": True},
+            3.7,
+        )
+        self.assertEqual(report["decision"], "GO")
+        self.assertTrue(report["ignition"]["futures_follow_ok"])
+        self.assertFalse(report["ignition"]["futures_follow_invalidated"])
+
     def test_bbo_without_executed_flow_cannot_start_episode(self):
         s = state()
         ignition_signals.observe_bbo(
@@ -447,6 +485,10 @@ class IgnitionCoreTests(unittest.TestCase):
         proved = ignition_core.evaluate(s, now=3.401)
         self.assertEqual(proved["decision"], "GO")
         episode_id = proved["causal_episode_id"]
+        ignition_core.capture_episode(
+            s, episode_id, side="LONG",
+            last_evidence_ms=proved["ignition"]["last_evidence_ms"],
+        )
 
         for name in (
             "thoi_gian_tick_cuoi", "thoi_gian_dong_tien_cuoi",

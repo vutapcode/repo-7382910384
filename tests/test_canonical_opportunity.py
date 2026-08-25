@@ -67,6 +67,23 @@ class CanonicalOpportunityTests(unittest.TestCase):
         self.assertFalse(wait["qualified_now"])
         self.assertTrue(wait["qualified_ever"])
 
+    def test_new_episode_cannot_supersede_held_execution_reservation(self):
+        state = SimpleNamespace()
+        first = opportunity.observe(state, {
+            **go(), "causal_episode_id": "episode-1",
+        }, qualified=True, now=100.0)
+        self.assertTrue(opportunity.reserve(state, first["opportunity_id"], now=100.1))
+        opportunity.observe(state, {"decision": "WAIT", "reason": "DATA_GAP"},
+                            qualified=False, now=100.2)
+        second = opportunity.observe(state, {
+            **go(), "causal_episode_id": "episode-2",
+        }, qualified=True, now=100.3)
+        self.assertFalse(opportunity.reserve(state, second["opportunity_id"], now=100.4))
+        self.assertEqual(state.canonical_last_reserve_reject,
+                         "ACTIVE_RESERVATION_HELD")
+        self.assertEqual(state.canonical_reserved_opportunity_id,
+                         first["opportunity_id"])
+
     def test_short_wait_flicker_stays_in_same_causal_episode(self):
         state = SimpleNamespace()
         first = opportunity.observe(state, go(), qualified=False, now=100.0)

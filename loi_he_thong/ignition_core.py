@@ -845,18 +845,28 @@ def _result_from_episode(state, episode, histories, freshness, now):
         not proposer_is_futures
         or (cash_response_ms and cash_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
     )
-    futures_reversals = [
-        row for row in episode["signals"]
-        if row.get("venue") == "futures"
-        and row.get("side") != side
-        and int(row.get("receive_time_ms", 0)) > futures_response_ms
-        and _material_flow(row)
-    ]
-    futures_reversal_confirmed = bool(
-        len(futures_reversals) >= 2
-        and int(futures_reversals[-1].get("receive_time_ms", 0))
-            - int(futures_reversals[-2].get("receive_time_ms", 0)) <= EVIDENCE_GAP_MS
-    )
+    futures_reversals = []
+    previous_reversal_bucket = None
+    for row in episode["signals"]:
+        if row.get("venue") != "futures" or int(
+            row.get("receive_time_ms", 0) or 0
+        ) <= futures_response_ms:
+            continue
+        bucket = int(row.get("bucket_start_ms", 0) or 0)
+        opposing = bool(row.get("side") != side and _material_flow(row))
+        if not opposing:
+            futures_reversals = []
+            previous_reversal_bucket = None
+            continue
+        if (
+            previous_reversal_bucket is None
+            or bucket - previous_reversal_bucket != ignition_signals.BUCKET_MS
+        ):
+            futures_reversals = [row]
+        else:
+            futures_reversals.append(row)
+        previous_reversal_bucket = bucket
+    futures_reversal_confirmed = len(futures_reversals) >= 2
     futures_follow_ok = bool(
         proposer_is_futures
         or (futures_response_ms and futures_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
@@ -906,6 +916,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "futures_follow_ok": futures_follow_ok,
         "futures_follow_invalidated": futures_reversal_confirmed,
         "futures_reversal_buckets": len(futures_reversals),
+        "last_evidence_ms": int(episode.get("last_evidence_ms", 0) or 0),
         "futures_cash_response_ok": futures_cash_ok,
         "flow_by_venue": {row["venue"]: {
             "signed_imbalance": round(_sign(side) * _f(row.get("imbalance")), 6),
@@ -1002,11 +1013,36 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "s_votes": _compat_votes(True, payload), "freshness": freshness, "ts": now,
         "causal_episode_id": episode["causal_episode_id"],
     }
-    _tombstone(state, episode["causal_episode_id"])
-    state._ignition_cooldown_side = side
-    state._ignition_cooldown_until_ms = int(episode["last_evidence_ms"]) + 5_000
-    state._ignition_episode = None
+    # GO is a proposal, not an execution capture. Keep the episode retryable
+    # across verified pre-order failures (for example a transient BBO outage).
+    # The launcher calls capture_episode only after a real/virtual fill exists.
+    state._ignition_pending_capture_id = episode["causal_episode_id"]
     return result
+
+
+def capture_episode(state, causal_episode_id, side=None, last_evidence_ms=None):
+    """Irreversibly close an Ignition episode only after execution capture."""
+    episode_id = str(causal_episode_id or "")
+    if not episode_id:
+        return False
+    episode = getattr(state, "_ignition_episode", None)
+    pending = str(getattr(state, "_ignition_pending_capture_id", "") or "")
+    _tombstone(state, episode_id)
+    resolved_side = str(
+        side or (episode or {}).get("side") or getattr(state, "bias_state", "")
+    ).upper()
+    evidence_ms = int(
+        last_evidence_ms
+        or (episode or {}).get("last_evidence_ms", 0)
+        or time.time() * 1000.0
+    )
+    state._ignition_cooldown_side = resolved_side
+    state._ignition_cooldown_until_ms = evidence_ms + 5_000
+    if isinstance(episode, dict) and str(episode.get("causal_episode_id") or "") == episode_id:
+        state._ignition_episode = None
+    if not pending or pending == episode_id:
+        state._ignition_pending_capture_id = None
+    return True
 
 
 def evaluate(state, now=None, side=None):

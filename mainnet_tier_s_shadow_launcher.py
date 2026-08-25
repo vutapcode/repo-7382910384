@@ -200,6 +200,50 @@ def _spot_mid():
     return (bid + ask) / 2.0 if bid > 0 and ask > bid else max(bid, ask)
 
 
+def _execution_recovery_active(state):
+    return bool(
+        getattr(state, "execution_unknown", False)
+        or getattr(state, "wstrade_execution_recovery_required", False)
+    )
+
+
+def _release_execution_reservation_if_safe(
+    state, opportunity_id, reason, *, position=None, pending=None
+):
+    """Never make an uncertain live order eligible for a duplicate retry."""
+    if position is not None or isinstance(pending, dict):
+        return False
+    if _execution_recovery_active(state):
+        return False
+    return canonical_opportunity.release(state, opportunity_id, reason=reason)
+
+
+def _settle_reconciled_reservation(state, reconciliation):
+    """Resolve a held reservation only from an authoritative REST outcome."""
+    reserved_id = int(
+        getattr(state, "canonical_reserved_opportunity_id", 0) or 0
+    )
+    if not reserved_id:
+        return False
+    reserved_context = dict(
+        getattr(state, "canonical_reserved_context", {}) or {}
+    )
+    if reconciliation == "FLAT":
+        return canonical_opportunity.release(
+            state, reserved_id, reason="RECOVERY_VERIFIED_FLAT_NO_FILL"
+        )
+    if reconciliation == "UNOWNED_POSITION_FLATTENED":
+        captured = canonical_opportunity.mark_captured(state, reserved_id)
+        if captured:
+            entry_council.capture_episode(
+                state,
+                reserved_context.get("causal_episode_id"),
+                side=reserved_context.get("side"),
+            )
+        return captured
+    return False
+
+
 def _latest_futures_price(now=None):
     now = time.time() if now is None else float(now)
     rows = getattr(app.state, "danh_sach_khop_lenh_futures", None) or ()
@@ -559,7 +603,31 @@ def _record_position_state(pos, guardian, risk, price, now, force=False):
 
 def _open_shadow(side, result, now):
     if not bool(getattr(app.state, "mainnet_shadow_ready", False)):
-        app.state.mainnet_shadow_last_skip = "STALE_ENTRY_RUNTIME_HEALTH"
+        result = dict(result or {})
+        reason = "SHADOW_EXECUTION_BBO_NOT_READY"
+        app.state.mainnet_shadow_last_skip = reason
+        bid = float(getattr(app.state, "execution_best_bid", 0.0) or 0.0)
+        ask = float(getattr(app.state, "execution_best_ask", 0.0) or 0.0)
+        reference = (
+            ask if side == "LONG" else bid if side == "SHORT" else 0.0
+        )
+        _append_event("ENTRY_SKIPPED", {
+            "schema_version": "TIER_S_SHADOW_EXECUTION_V1",
+            "cycle_id": result.get("decision_cycle_id"),
+            "causal_episode_id": result.get("causal_episode_id"),
+            "reason": reason,
+            "miss_taxonomy": "EXECUTION_NOT_CAPTURED",
+            "failed_gates": [reason],
+            "side": side,
+            "entry": result,
+            "counterfactual": {
+                "eligible": bool(reference > 0.0),
+                "reference_price": reference or None,
+                "side": side,
+                "hard_sl_bps": None,
+                "windows_seconds": [5, 15, 30, 60],
+            },
+        })
         return None
     result = dict(result or {})
     execution = dict(result.pop("_shadow_execution", {}) or {})
@@ -688,6 +756,12 @@ def _open_shadow(side, result, now):
     canonical_opportunity.mark_captured(
         app.state, pos.canonical_opportunity_id
     )
+    entry_council.capture_episode(
+        app.state,
+        pos.causal_episode_id,
+        side=side,
+        last_evidence_ms=(result.get("ignition") or {}).get("last_evidence_ms"),
+    )
     app.state.mainnet_shadow_position_status = "OPEN"
     app.state.mainnet_shadow_last_entry = result
     _append_event(
@@ -777,6 +851,7 @@ def _advance_shadow_pending(now):
         release, release_reason, release_detail = (
             execution_causal_revalidation.maker_ttl_release(
                 app.state, side, result, now,
+                float(pending.get("placed_at", 0.0) or 0.0),
             )
         )
         app.state.mainnet_shadow_maker_ttl_recheck = {
@@ -1005,6 +1080,14 @@ async def _open_position(side, result, now):
             canonical_opportunity.mark_captured(
                 app.state, result.get("canonical_opportunity_id", 0)
             )
+            entry_council.capture_episode(
+                app.state,
+                result.get("causal_episode_id"),
+                side=side,
+                last_evidence_ms=(result.get("ignition") or {}).get(
+                    "last_evidence_ms"
+                ),
+            )
         return pos
     return _open_shadow(side, result, now)
 
@@ -1144,9 +1227,10 @@ async def _reconciliation_loop():
                 or live_position
                 or bool(getattr(app.state, "wstrade_execution_recovery_required", False))
             ):
-                await live_execution.reconcile(
+                reconciliation = await live_execution.reconcile(
                     app.api, app.state, event_callback=_append_event
                 )
+                _settle_reconciled_reservation(app.state, reconciliation)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1584,26 +1668,28 @@ async def _entry_loop():
             try:
                 position = await _open_position(side, result, now)
             except asyncio.CancelledError:
-                canonical_opportunity.release(
-                    s, opportunity_id, reason="EXECUTION_TASK_CANCELLED",
+                _release_execution_reservation_if_safe(
+                    s, opportunity_id, "EXECUTION_TASK_CANCELLED"
                 )
                 raise
             except Exception:
-                canonical_opportunity.release(
-                    s, opportunity_id, reason="EXECUTION_EXCEPTION",
+                _release_execution_reservation_if_safe(
+                    s, opportunity_id, "EXECUTION_EXCEPTION"
                 )
                 raise
             pending = getattr(s, "mainnet_shadow_pending_entry", None)
-            if position is None and not isinstance(pending, dict):
-                canonical_opportunity.release(
-                    s, opportunity_id,
-                    reason=str(
-                        getattr(
-                            s, "mainnet_shadow_last_skip",
-                            "EXECUTION_NOT_CAPTURED",
-                        ) or "EXECUTION_NOT_CAPTURED"
-                    ),
-                )
+            _release_execution_reservation_if_safe(
+                s,
+                opportunity_id,
+                str(
+                    getattr(
+                        s, "mainnet_shadow_last_skip",
+                        "EXECUTION_NOT_CAPTURED",
+                    ) or "EXECUTION_NOT_CAPTURED"
+                ),
+                position=position,
+                pending=pending,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:

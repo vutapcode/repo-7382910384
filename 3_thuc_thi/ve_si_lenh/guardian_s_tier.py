@@ -123,12 +123,23 @@ def _imb(buy,sell):
     return ((buy-sell)/total if total>0 else 0.0,total)
 
 def _spot_flow(state,now):
-    buy=sell=0.0; cutoff=now-3
-    for r in list(getattr(state,"flow_1s_buffer",()) or ()):
+    rows=getattr(state,"flow_1s_buffer",()) or ()
+    buy=sell=0.0; cutoff=now-3; previous_ts=None
+    for r in reversed(rows):
         try:
-            if float(r.get("ts",0) or 0)>=cutoff:
-                buy+=float(r.get("buy",0) or 0); sell+=float(r.get("sell",0) or 0)
-        except Exception: pass
+            ts=float(r.get("ts",0) or 0)
+            if previous_ts is not None and ts>previous_ts:
+                # Keep Guardian fail-neutral on malformed ordering. It must not
+                # manufacture an adverse/supportive vote from an ambiguous tail.
+                state.guardian_s_spot_flow_ordering="DISORDERED_NEUTRAL"
+                return (0.0,0.0)
+            previous_ts=ts
+            if ts<cutoff: break
+            buy+=float(r.get("buy",0) or 0); sell+=float(r.get("sell",0) or 0)
+        except Exception:
+            state.guardian_s_spot_flow_ordering="INVALID_NEUTRAL"
+            return (0.0,0.0)
+    state.guardian_s_spot_flow_ordering="MONOTONIC"
     return _imb(buy,sell)
 
 def _fut_flow(state,now):

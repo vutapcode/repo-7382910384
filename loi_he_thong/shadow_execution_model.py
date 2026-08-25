@@ -26,8 +26,45 @@ def maker_trade_through_volume(side, limit_price, placed_at, trades, now=None):
     limit_price = float(limit_price or 0.0)
     placed_ms = float(placed_at or 0.0) * 1000.0
     now_ms = float(now) * 1000.0 if now is not None else float("inf")
+    rows = trades or ()
+
+    def accumulate(iterable, stop_at_cutoff):
+        volume = 0.0
+        previous_ts = None
+        for row in iterable:
+            try:
+                ts = float(row.get("thoi_gian_ms", 0.0) or 0.0)
+                if stop_at_cutoff and previous_ts is not None and ts > previous_ts:
+                    return None
+                previous_ts = ts
+                if ts > now_ms:
+                    continue
+                if ts < placed_ms:
+                    if stop_at_cutoff:
+                        break
+                    continue
+                price = float(row.get("gia", 0.0) or 0.0)
+                qty = max(0.0, float(row.get("khoi_luong", 0.0) or 0.0))
+                seller_aggressor = bool(row.get("ban_chu_dong", False))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if side == "LONG" and seller_aggressor and price <= limit_price:
+                volume += qty
+            elif side == "SHORT" and not seller_aggressor and price >= limit_price:
+                volume += qty
+        return volume
+
+    # The live buffers are chronological. Walk only their recent tail; if a
+    # malformed/disordered buffer is observed, retain numerical correctness via
+    # a rare full forward fallback rather than silently dropping fill evidence.
+    try:
+        volume = accumulate(reversed(rows), True)
+    except TypeError:
+        volume = None
+    if volume is not None:
+        return volume
     volume = 0.0
-    for row in list(trades or ()):
+    for row in rows:
         try:
             ts = float(row.get("thoi_gian_ms", 0.0) or 0.0)
             if ts < placed_ms or ts > now_ms:
