@@ -18,6 +18,7 @@ from loi_he_thong import ws_idle_recovery_hook
 from loi_he_thong import shadow_dynamic_sizing_hook
 from loi_he_thong import risk_ratchet_price_quality_hook
 from loi_he_thong import risk_fee_alignment_hook
+from loi_he_thong import entry_causal_hardening_hook
 
 # Recover public feed half-open stalls before the lean task plan starts.
 ws_idle_recovery_hook.install(shadow.app)
@@ -54,6 +55,8 @@ shadow_entry_metadata_persistence_hook.install(hardened.runtime.runtime_state)
 # Learn only from completed outcomes; proof/proposer/execution cohorts must not
 # subsidize one another.
 shadow_calibration_hook_v2.install(hardened)
+# Install last: validate the final active execution wrappers and causal state immediately before submit.
+entry_causal_hardening_hook.install(shadow, hardened)
 
 if __name__ == "__main__":
     hardened.runtime.base.main()
