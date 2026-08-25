@@ -1,13 +1,13 @@
 """Canonical causal-episode identity for the active Tier-S Entry Council.
 
-This module does not create signals, confidence, edge or vetoes.  It only
-groups PRESSURE/ACCEPTANCE/RELEASE observations, deduplicates an already
-authorized GO, and records empirical funnel counters. Short-lived evidence is
-intentionally not persisted across a process/data gap.
+This module does not create signals, confidence, edge or vetoes. It groups
+causal observations, deduplicates qualified GO episodes, and owns the
+reserve -> execute -> commit handoff. A reservation is not consumption:
+temporary execution failures may retry the same opportunity.
 """
 import time
 
-VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V4_QUALIFICATION_TRANSITIONS"
+VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V5_RESERVE_COMMIT"
 WAIT_GRACE_SECONDS = 5.0
 CAUSAL_PHASES = {
     "PROBE", "EARLY", "MATURE", "ACCEPTANCE", "RELEASE",
@@ -20,8 +20,6 @@ def _signature(result):
     episode_id = str(result.get("causal_episode_id") or "")
     if episode_id:
         return (episode_id,)
-    # Mode/phase may evolve inside one impulse. Side is the stable causal identity;
-    # claim() still guarantees only one execution attempt for the whole episode.
     return (str(result.get("side", "ABSTAIN") or "ABSTAIN").upper(),)
 
 
@@ -47,6 +45,11 @@ def _candidate(result):
 
 
 def _reset_active(state):
+    reserved = int(
+        getattr(state, "canonical_reserved_opportunity_id", 0) or 0
+    )
+    if reserved:
+        release(state, reserved, reason="CANONICAL_EPISODE_RESET")
     state.canonical_opportunity_active = False
     state.canonical_opportunity_signature = None
     state.canonical_opportunity_active_qualified = False
@@ -57,14 +60,12 @@ def _reset_active(state):
 
 def _snapshot(state, *, active, new, qualified_now, transition,
               causal_episode_id, grace_active, signature=None):
-    """Expose current-vs-latched qualification without changing authority."""
     qualified_ever = bool(
         getattr(state, "canonical_opportunity_active_qualified", False)
     )
     row = {
         "active": bool(active),
         "new": bool(new),
-        # Backward-compatible funnel field: one qualification per episode.
         "qualified": qualified_ever,
         "qualified_now": bool(qualified_now),
         "qualified_ever": qualified_ever,
@@ -82,7 +83,7 @@ def _snapshot(state, *, active, new, qualified_now, transition,
 
 
 def observe(state, result, qualified=False, now=None):
-    """Observe the canonical council result without changing its behavior."""
+    """Observe the canonical council result without changing its authority."""
     now = time.time() if now is None else float(now)
     go = bool((result or {}).get("decision") == "GO")
     candidate = _candidate(result)
@@ -92,7 +93,6 @@ def observe(state, result, qualified=False, now=None):
             state, active=False, new=False, qualified_now=False,
             transition=False, causal_episode_id=None, grace_active=False,
         )
-
     if not candidate:
         active = bool(getattr(state, "canonical_opportunity_active", False))
         last_evidence = float(
@@ -153,31 +153,135 @@ def observe(state, result, qualified=False, now=None):
     return _snapshot(
         state, active=True, new=is_new, qualified_now=qualified_now,
         transition=qualification_transition,
-        causal_episode_id=(
-            getattr(state, "canonical_opportunity_active_episode_id", None)
+        causal_episode_id=getattr(
+            state, "canonical_opportunity_active_episode_id", None
         ),
         grace_active=False, signature=signature,
     )
 
 
-def claim(state, opportunity_id):
-    """Allow at most one execution attempt for one canonical GO episode."""
+def _clear_reservation(state):
+    state.canonical_reserved_opportunity_id = 0
+    state.canonical_reserved_at = 0.0
+    state.canonical_reserved_context = {}
+
+
+def _reservation_context(state, opportunity_id, now):
+    result = dict(getattr(state, "entry_shadow_council", {}) or {})
+    ignition = dict(result.get("ignition") or {})
+    episode_id = (
+        result.get("causal_episode_id")
+        or ignition.get("causal_episode_id")
+        or getattr(state, "canonical_opportunity_active_episode_id", None)
+    )
+    return {
+        "opportunity_id": int(opportunity_id),
+        "causal_episode_id": episode_id,
+        "side": str(
+            result.get("side") or getattr(state, "bias_state", "ABSTAIN")
+        ).upper(),
+        "proof_type": str(ignition.get("proof_type") or ""),
+        "proof_venue": str(ignition.get("proof_venue") or ""),
+        "execution_policy": str(result.get("execution_policy") or "").upper(),
+        "phase": str(result.get("phase") or "").upper(),
+        "result_ts": float(result.get("ts", 0.0) or 0.0),
+        "reserved_at": float(now),
+        "active_opportunity_id": int(
+            getattr(state, "canonical_opportunity_count", 0) or 0
+        ),
+        "epochs": {
+            str(name): int((row or {}).get("epoch", 0) or 0)
+            for name, row in (ignition.get("clock_quality") or {}).items()
+            if isinstance(row, dict) and int((row or {}).get("epoch", 0) or 0) > 0
+        },
+    }
+
+
+def reserve(state, opportunity_id, now=None):
+    """Reserve one GO without consuming it; duplicate attempts are rejected until release."""
     opportunity_id = int(opportunity_id or 0)
     consumed = int(
         getattr(state, "canonical_last_consumed_opportunity_id", 0) or 0
     )
     if opportunity_id <= 0 or opportunity_id <= consumed:
         return False
-    state.canonical_last_consumed_opportunity_id = opportunity_id
+
+    reserved = int(
+        getattr(state, "canonical_reserved_opportunity_id", 0) or 0
+    )
+    if reserved == opportunity_id:
+        return False
+    if reserved > opportunity_id:
+        return False
+    if reserved and opportunity_id > reserved:
+        release(state, reserved, reason="SUPERSEDED_BY_NEWER_OPPORTUNITY")
+
+    now = time.time() if now is None else float(now)
+    state.canonical_reserved_opportunity_id = opportunity_id
+    state.canonical_reserved_at = now
+    state.canonical_reserved_context = _reservation_context(
+        state, opportunity_id, now
+    )
+    state.canonical_opportunity_reserved = int(
+        getattr(state, "canonical_opportunity_reserved", 0) or 0
+    ) + 1
     return True
 
 
+def release(state, opportunity_id, reason="EXECUTION_NOT_CAPTURED"):
+    """Release a reservation after a transient/non-fill execution outcome."""
+    opportunity_id = int(opportunity_id or 0)
+    reserved = int(
+        getattr(state, "canonical_reserved_opportunity_id", 0) or 0
+    )
+    if opportunity_id <= 0 or reserved != opportunity_id:
+        return False
+    state.canonical_last_release_reason = str(reason or "EXECUTION_NOT_CAPTURED")
+    state.canonical_last_released_opportunity_id = opportunity_id
+    state.canonical_opportunity_released = int(
+        getattr(state, "canonical_opportunity_released", 0) or 0
+    ) + 1
+    _clear_reservation(state)
+    return True
+
+
+def commit(state, opportunity_id):
+    """Consume an opportunity only after execution has produced a captured fill."""
+    opportunity_id = int(opportunity_id or 0)
+    consumed = int(
+        getattr(state, "canonical_last_consumed_opportunity_id", 0) or 0
+    )
+    reserved = int(
+        getattr(state, "canonical_reserved_opportunity_id", 0) or 0
+    )
+    if opportunity_id <= 0 or opportunity_id <= consumed:
+        return False
+    if reserved and reserved != opportunity_id:
+        return False
+    state.canonical_last_consumed_opportunity_id = opportunity_id
+    state.canonical_last_committed_opportunity_id = opportunity_id
+    state.canonical_opportunity_committed = int(
+        getattr(state, "canonical_opportunity_committed", 0) or 0
+    ) + 1
+    if reserved == opportunity_id:
+        _clear_reservation(state)
+    return True
+
+
+def claim(state, opportunity_id):
+    """Backward-compatible launcher API: claim now means reserve, not consume."""
+    return reserve(state, opportunity_id)
+
+
 def mark_captured(state, opportunity_id):
+    """Record one captured execution and atomically commit its reservation."""
     opportunity_id = int(opportunity_id or 0)
     last = int(
         getattr(state, "canonical_last_captured_opportunity_id", 0) or 0
     )
     if opportunity_id <= 0 or opportunity_id <= last:
+        return False
+    if not commit(state, opportunity_id):
         return False
     state.canonical_last_captured_opportunity_id = opportunity_id
     state.canonical_opportunity_captured = int(
