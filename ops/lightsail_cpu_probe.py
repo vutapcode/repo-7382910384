@@ -85,6 +85,9 @@ def refresh(now=None):
         "cpu_1h_pct": cpu1h,
         "datapoints_15m": count15,
         "datapoints_1h": count1h,
+        "window_15m_start_ms": int((now - timedelta(minutes=15)).timestamp() * 1000),
+        "window_1h_start_ms": int((now - timedelta(hours=1)).timestamp() * 1000),
+        "window_semantics": "ROLLING_HOST_METRIC_NOT_BOT_RESTART_SCOPED",
     }
     _atomic(payload)
     return payload

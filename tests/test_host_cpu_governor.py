@@ -72,6 +72,15 @@ class HostCpuGovernorTests(unittest.TestCase):
                 )
                 self.assertEqual(snap['coverage_15m_seconds'], 20.0)
                 self.assertAlmostEqual(snap['host_cpu_15m_pct'], 20.0)
+                self.assertTrue(snap['cpu_history_restored'])
+                self.assertEqual(snap['cpu_history_window_start_ms'], 1_000_000)
+                self.assertEqual(snap['cpu_governor_started_at_ms'], 1_010_000)
+                self.assertAlmostEqual(
+                    snap['post_start_coverage_15m_seconds'], 10.0
+                )
+                self.assertAlmostEqual(
+                    snap['post_start_coverage_1h_seconds'], 10.0
+                )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import time
 
 from loi_he_thong import ignition_signals
 
-VERSION = "FLOW_LEAD_ENGINE_V3_ACTIVE_IGNITION"
+VERSION = "FLOW_LEAD_ENGINE_V4_SIDE_NORMALIZED_FLOW"
 MAX_SKEW_S = 0.30
 ACTIVE_GAP_MS = 300
 
@@ -36,7 +36,10 @@ def _signed_bps(cur, ref, side):
     cur, ref = _f(cur), _f(ref)
     if cur <= 0.0 or ref <= 0.0:
         return None
-    direction = 1.0 if str(side).upper() == "LONG" else -1.0
+    normalized = str(side).upper()
+    if normalized not in ("LONG", "SHORT"):
+        return None
+    direction = 1.0 if normalized == "LONG" else -1.0
     return (cur - ref) / ref * 10000.0 * direction
 
 def _freshness(state):
@@ -137,6 +140,7 @@ def _active_histories(state):
 
 def analyze(state, side):
     """Return context only; never creates a trade signal."""
+    normalized_side = str(side).upper()
     flow_rows, price_rows = _active_histories(state)
     flow_rows, price_rows = list(flow_rows)[-24:], list(price_rows)[-32:]
     fresh = _freshness(state)
@@ -151,8 +155,22 @@ def analyze(state, side):
             "history_source": "ACTIVE_IGNITION_100MS",
         }
 
+    if normalized_side not in ("LONG", "SHORT"):
+        return {
+            "version": VERSION, "status": "DIRECTION_UNAVAILABLE",
+            "persistence": 0.0, "oppose_ratio": 0.0,
+            "lead": "UNKNOWN", "lead_gap_bps": 0.0,
+            "lead_accel_bps": 0.0, "freshness": fresh,
+            "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+            "spot_price_discovery": "NOT_MEASURED_HERE",
+            "history_source": "ACTIVE_IGNITION_100MS",
+            "policy": "NO_SIDE_NO_TRADE_RELATIVE_INFERENCE",
+        }
+
     recent = flow_rows[-12:]
-    means = [_flow_mean(r) for r in recent]
+    raw_means = [_flow_mean(r) for r in recent]
+    direction = 1.0 if normalized_side == "LONG" else -1.0
+    means = [direction * value for value in raw_means]
     persistence = sum(v >= 0.08 for v in means) / len(means) if means else 0.0
     oppose_ratio = sum(v <= -0.08 for v in means) / len(means) if means else 0.0
 
@@ -162,6 +180,7 @@ def analyze(state, side):
             "persistence": round(persistence, 4),
             "oppose_ratio": round(oppose_ratio, 4),
             "flow_mean": round(sum(means) / len(means), 4) if means else 0.0,
+            "flow_mean_raw": round(sum(raw_means) / len(raw_means), 4) if raw_means else 0.0,
             "lead": "UNKNOWN", "lead_gap_bps": 0.0, "lead_accel_bps": 0.0,
             "freshness": fresh,
             "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
@@ -204,6 +223,7 @@ def analyze(state, side):
         "persistence": round(persistence, 4),
         "oppose_ratio": round(oppose_ratio, 4),
         "flow_mean": round(sum(means) / len(means), 4) if means else 0.0,
+        "flow_mean_raw": round(sum(raw_means) / len(raw_means), 4) if raw_means else 0.0,
         "lead": lead,
         "lead_gap_bps": round(fast_gap, 4),
         "lead_accel_bps": round(accel, 4),

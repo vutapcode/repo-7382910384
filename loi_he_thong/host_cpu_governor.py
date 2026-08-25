@@ -168,6 +168,8 @@ class HostCpuGovernor:
                 "/home/ubuntu/smc2026_data/health/cpu_history.json",
             )
         )
+        self.process_started_mono = time.monotonic()
+        self.process_started_wall = time.time()
         self.history_restored = False
         self._restore_history()
 
@@ -245,6 +247,15 @@ class HostCpuGovernor:
             "coverage_complete": observed >= float(seconds) * 0.98,
         }
 
+    def _post_start_coverage(self, now, seconds):
+        cutoff = max(float(now) - float(seconds), self.process_started_mono)
+        coverage = 0.0
+        for stamp, _, _, observed in self.samples:
+            interval_end = min(float(stamp), float(now))
+            interval_start = float(stamp) - float(observed)
+            coverage += max(0.0, interval_end - max(interval_start, cutoff))
+        return min(float(seconds), coverage)
+
     def _external(self, now_wall):
         payload = _read_json(self.external_path)
         updated_ms = int(payload.get("updated_at_ms", 0) or 0)
@@ -255,11 +266,18 @@ class HostCpuGovernor:
                 values.append(float(payload.get(key)))
             except (TypeError, ValueError):
                 pass
+        def optional_int(key):
+            try:
+                return int(payload.get(key))
+            except (TypeError, ValueError):
+                return None
         return {
             "lightsail_cpu_last_seen": updated_ms or None,
             "metric_age_seconds": age,
             "metric_fresh": bool(age is not None and age <= 900.0 and values),
             "max_window_pct": max(values) if values else None,
+            "lightsail_window_15m_start_ms": optional_int("window_15m_start_ms"),
+            "lightsail_window_1h_start_ms": optional_int("window_1h_start_ms"),
         }
 
     def _choose_mode(self, peak):
@@ -294,6 +312,13 @@ class HostCpuGovernor:
             self.last_process_scan_mono = now_mono
 
         windows = {seconds: self._window(now_mono, seconds) for seconds in self.windows}
+        history_start_mono = (
+            float(self.samples[0][0]) - float(self.samples[0][3])
+            if self.samples else now_mono
+        )
+        history_start_wall_ms = int(
+            (now_wall - max(0.0, now_mono - history_start_mono)) * 1000
+        )
         actual_peak = max((item["pct"] for item in windows.values()), default=0.0)
         ordered = sorted(self.instant_pct)
         p95 = ordered[min(len(ordered) - 1, int(0.95 * (len(ordered) - 1)))] if ordered else 0.0
@@ -333,6 +358,16 @@ class HostCpuGovernor:
             "coverage_1h_seconds": round(windows[3600]["coverage_seconds"], 3),
             "coverage_15m_complete": windows[900]["coverage_complete"],
             "coverage_1h_complete": windows[3600]["coverage_complete"],
+            "local_window_15m_start_ms": int((now_wall - 900.0) * 1000),
+            "local_window_1h_start_ms": int((now_wall - 3600.0) * 1000),
+            "cpu_history_window_start_ms": history_start_wall_ms,
+            "cpu_governor_started_at_ms": int(self.process_started_wall * 1000),
+            "post_start_coverage_15m_seconds": round(
+                self._post_start_coverage(now_mono, 900), 3
+            ),
+            "post_start_coverage_1h_seconds": round(
+                self._post_start_coverage(now_mono, 3600), 3
+            ),
             "governor_mode": self.mode,
             "host_cpu_p95_pct": round(p95, 4),
             "host_cpu_projected_peak_pct": round(projected_peak, 4),
@@ -358,6 +393,15 @@ class HostCpuGovernor:
         state.host_cpu_hard_limit_respected = payload["hard_limit_respected"]
         state.host_cpu_top_processes = payload["top_cpu_processes"]
         state.production_workload_blockers = payload["production_blockers"]
+        state.cpu_history_restored = payload.get("cpu_history_restored", False)
+        state.cpu_history_window_start_ms = payload.get("cpu_history_window_start_ms")
+        state.cpu_governor_started_at_ms = payload.get("cpu_governor_started_at_ms")
+        state.cpu_post_start_coverage_15m_seconds = payload.get(
+            "post_start_coverage_15m_seconds", 0.0
+        )
+        state.cpu_post_start_coverage_1h_seconds = payload.get(
+            "post_start_coverage_1h_seconds", 0.0
+        )
         state.lightsail_cpu_last_seen = payload["lightsail_cpu_last_seen"]
         state.lightsail_metric_age_seconds = payload["metric_age_seconds"]
         state.lightsail_metric_fresh = payload["metric_fresh"]

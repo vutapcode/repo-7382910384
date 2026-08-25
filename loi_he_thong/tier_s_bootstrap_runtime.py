@@ -113,6 +113,21 @@ async def vong_lap_runtime_heartbeat():
                 getattr(state, "cpu_budget_1h_remaining", 0.0) or 0.0
             ),
             "governor_mode": getattr(state, "governor_mode", "WARMUP"),
+            "cpu_history_restored": bool(
+                getattr(state, "cpu_history_restored", False)
+            ),
+            "cpu_history_window_start_ms": getattr(
+                state, "cpu_history_window_start_ms", None
+            ),
+            "cpu_governor_started_at_ms": getattr(
+                state, "cpu_governor_started_at_ms", None
+            ),
+            "cpu_post_start_coverage_15m_seconds": float(
+                getattr(state, "cpu_post_start_coverage_15m_seconds", 0.0) or 0.0
+            ),
+            "cpu_post_start_coverage_1h_seconds": float(
+                getattr(state, "cpu_post_start_coverage_1h_seconds", 0.0) or 0.0
+            ),
             "top_cpu_processes": getattr(state, "host_cpu_top_processes", []),
             "production_blockers": getattr(state, "production_workload_blockers", []),
             "lightsail_cpu_last_seen": getattr(state, "lightsail_cpu_last_seen", None),

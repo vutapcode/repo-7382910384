@@ -1,6 +1,8 @@
 from types import SimpleNamespace
+from collections import deque
 import time
 import unittest
+from unittest.mock import patch
 
 from loi_he_thong import flow_lead_engine, ignition_signals
 
@@ -38,6 +40,51 @@ class FlowLeadScopeTests(unittest.TestCase):
         self.assertEqual(report["history_source"], "ACTIVE_IGNITION_100MS")
         self.assertFalse(hasattr(state, "entry_causal_flow_history"))
         self.assertFalse(hasattr(state, "entry_shadow_price_history"))
+
+    def test_short_sell_flow_is_persistence_not_opposition(self):
+        state = SimpleNamespace(
+            thoi_gian_tick_cuoi=2.0,
+            thoi_gian_coinbase_ticker_cuoi=2.0,
+            execution_price_time=2.0,
+        )
+        flow = deque(({
+            "ts": 1.0 + index * 0.1,
+            "venues": {
+                "spot": {"signed_imbalance": -0.70, "volume_btc": 1.0},
+                "coinbase": {"signed_imbalance": -0.55, "volume_btc": 1.0},
+                "futures": {"signed_imbalance": -0.65, "volume_btc": 1.0},
+            },
+        } for index in range(12)), maxlen=64)
+        prices = deque((
+            {"ts": 1.0, "spot": 100.0, "coinbase": 100.0, "futures": 100.0},
+            {"ts": 1.4, "spot": 99.8, "coinbase": 99.8, "futures": 99.9},
+            {"ts": 1.9, "spot": 99.6, "coinbase": 99.6, "futures": 99.8},
+        ), maxlen=96)
+        with patch.object(
+            flow_lead_engine, "_active_histories", return_value=(flow, prices)
+        ):
+            report = flow_lead_engine.analyze(state, "SHORT")
+        self.assertEqual(report["status"], "OK")
+        self.assertEqual(report["persistence"], 1.0)
+        self.assertEqual(report["oppose_ratio"], 0.0)
+        self.assertLess(report["flow_mean_raw"], 0.0)
+        self.assertGreater(report["flow_mean"], 0.0)
+
+    def test_missing_side_cannot_be_treated_as_short(self):
+        state = SimpleNamespace(
+            thoi_gian_tick_cuoi=2.0,
+            thoi_gian_coinbase_ticker_cuoi=2.0,
+            execution_price_time=2.0,
+        )
+        with patch.object(
+            flow_lead_engine, "_active_histories",
+            return_value=(({"ts": 1.0, "venues": {}},), (
+                {"ts": 1.0, "spot": 100.0, "coinbase": 100.0, "futures": 100.0},
+            )),
+        ):
+            report = flow_lead_engine.analyze(state, "ABSTAIN")
+        self.assertEqual(report["status"], "DIRECTION_UNAVAILABLE")
+        self.assertEqual(report["lead"], "UNKNOWN")
 
 
 if __name__ == "__main__":
