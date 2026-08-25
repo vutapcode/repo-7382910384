@@ -19,6 +19,7 @@ def state(now=3.0):
         mainnet_commission_verified=True, mainnet_maker_fee_bps=2.0,
         mainnet_taker_fee_bps=5.0, mainnet_shadow_trades=0,
         mainnet_shadow_stress_25bps_pnl=0.0, atr_1m=0.1,
+        atr_1m_updated_at=now,
     )
 
 
@@ -188,7 +189,7 @@ class IgnitionCoreTests(unittest.TestCase):
         s = state()
         measured = ignition_core._phase_measurement(
             s, "LONG", ["binance_spot"], {"binance_spot": 2.0},
-            {"price_conversion_bps": 0.5},
+            {"price_conversion_bps": 0.5, "receive_time_ms": 3_000},
         )
         self.assertTrue(measured["valid"])
         self.assertEqual(
@@ -197,6 +198,16 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertAlmostEqual(measured["phase_scale_bps"], 10.0, places=3)
         self.assertAlmostEqual(measured["consumed_fraction"], 0.2, places=3)
+
+    def test_phase_rejects_stale_atr(self):
+        s = state(now=200.0)
+        s.atr_1m_updated_at = 1.0
+        measured = ignition_core._phase_measurement(
+            s, "LONG", ["binance_spot"], {"binance_spot": 2.0},
+            {"price_conversion_bps": 0.5, "receive_time_ms": 200_000},
+        )
+        self.assertFalse(measured["valid"])
+        self.assertEqual(measured["source"], "ATR_1M_STALE")
 
     def test_precursor_progress_prevents_late_episode_phase_reset(self):
         s = state(now=20.0)
@@ -226,12 +237,24 @@ class IgnitionCoreTests(unittest.TestCase):
         s.bias_council = {"s_votes": {"S2_price_x_oi": {
             "metrics": {"regime": "NEW_SHORT_BUILD"}
         }}}
-        frozen = {"direction_context": {"oi_regime": "SHORT_COVERING"}}
+        frozen = {"direction_context": {
+            "oi_regime": "SHORT_COVERING", "oi_updated_at": 3.0,
+        }}
         intent = ignition_core._oi_intent(s, "SHORT", 3.0, frozen)
         self.assertTrue(intent["fresh"])
         self.assertFalse(intent["aligned_with_entry"])
         self.assertEqual(intent["causal_class"], "OI_DIRECTION_CONFLICT")
         self.assertEqual(intent["raw_regime"], "SHORT_COVERING")
+
+    def test_frozen_oi_regime_cannot_borrow_new_live_timestamp(self):
+        s = state(now=10.0)
+        frozen = {"direction_context": {
+            "oi_regime": "NEW_LONG_BUILD", "oi_updated_at": 1.0,
+        }}
+        intent = ignition_core._oi_intent(s, "LONG", 10.0, frozen)
+        self.assertFalse(intent["fresh"])
+        self.assertEqual(intent["intent_source"], "FROZEN_BIAS_OI_REGIME")
+        self.assertEqual(intent["causal_class"], "OI_STALE_CONTEXT")
 
     def test_fresh_oi_delta_classifies_build_or_unwind_without_direction_vote(self):
         s = state(now=10.0)
@@ -354,6 +377,36 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(proved["ignition"]["leader"], "futures")
         self.assertTrue(proved["ignition"]["futures_cash_response_ok"])
 
+    def test_two_bucket_futures_reversal_invalidates_latched_follow(self):
+        s = state(now=3.6)
+        cash1 = evidence_row(3_100, "LONG", 100.003)
+        cash2 = evidence_row(3_200, "LONG", 100.006)
+        follow = evidence_row(3_300, "LONG", 100.004, strong=False)
+        reverse1 = evidence_row(3_400, "SHORT", 100.001, strong=False)
+        reverse2 = evidence_row(3_500, "SHORT", 99.998, strong=False)
+        for row in (follow, reverse1, reverse2):
+            row["venue"] = "futures"
+            row["total_qty"] = 0.20
+        episode = {
+            "causal_episode_id": "ign:binance_spot:LONG:3100",
+            "side": "LONG", "proposer": "binance_spot",
+            "started_receive_ms": 3_100, "last_evidence_ms": 3_500,
+            "bias_snapshot": {"direction": "LONG", "confidence": 0.8},
+            "signals": [cash1, cash2, follow, reverse1, reverse2],
+            "epochs": {"binance_spot": 1, "futures": 1},
+        }
+        report = ignition_core._result_from_episode(
+            s, episode,
+            {"binance_spot": (cash1, cash2), "coinbase_spot": (),
+             "futures": (follow, reverse1, reverse2)},
+            {"coinbase_mode": "FRESH", "binance_spot_ready": True,
+             "futures_ready": True},
+            3.6,
+        )
+        self.assertEqual(report["decision"], "WAIT")
+        self.assertFalse(report["ignition"]["futures_follow_ok"])
+        self.assertTrue(report["ignition"]["futures_follow_invalidated"])
+
     def test_bbo_without_executed_flow_cannot_start_episode(self):
         s = state()
         ignition_signals.observe_bbo(
@@ -462,7 +515,7 @@ class IgnitionCoreTests(unittest.TestCase):
         empirical = {
             "samples": 30, "live_empirical_ok": True,
             "mean_net_bps": 4.0, "lower_confidence_bound_bps": 1.0,
-            "status": "ACTIVE",
+            "status": "ACTIVE", "level": "EXACT",
         }
         costs = {
             "total_cost_bps": 10.0, "minimum_net_edge_bps": 2.0,
@@ -476,6 +529,14 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(report["cost_ok"])
         self.assertTrue(report["live_empirical_ok"])
         self.assertTrue(allowed)
+
+        pooled = dict(empirical, level="PROOF_EXEC")
+        with patch.object(entry_edge_tier.edge_calibration_v2, "factor", return_value=pooled), patch.object(
+            entry_edge_tier.verified_cost_model, "estimate", return_value=costs
+        ):
+            allowed, report = entry_edge_tier.authorize(result, s)
+        self.assertFalse(report["live_empirical_ok"])
+        self.assertFalse(allowed)
 
     def test_edge_contract_rejects_cash_go_without_futures_follower(self):
         result = {

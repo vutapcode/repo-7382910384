@@ -22,6 +22,7 @@ EPISODE_MAX_MS = 5_000
 LEAD_FLOOR_MS = 100.0
 MAX_CONSUMED_FRACTION = 0.35
 MIN_ACCEPTANCE_MS = 400
+ATR_MAX_AGE_SECONDS = 120.0
 FAILED_REVERSION_MAX_MS = 700
 MATERIAL_PRICE_BPS = 0.15
 OI_BUILD_MIN_PCT = 0.02
@@ -206,6 +207,12 @@ def _remember_bias(state, now=None):
             "price_vote": str(price_seat.get("vote") or "ABSTAIN"),
             "flow_vote": str(flow_seat.get("vote") or "ABSTAIN"),
             "oi_regime": str((oi_seat.get("metrics") or {}).get("regime") or "UNKNOWN"),
+            "oi_updated_at": _f(getattr(state, "open_interest_updated_at", 0.0)),
+            "oi_value": _f(getattr(state, "open_interest", 0.0)),
+            "oi_change_pct": _f(getattr(state, "open_interest_change_pct", 0.0)),
+            "oi_change_window_seconds": _f(
+                getattr(state, "open_interest_change_window_seconds", 0.0)
+            ),
             "flow_price_trap": bool(
                 str(story.get("name") or council.get("reason") or "")
                 == "FLOW_NOT_CONVERTED_TO_PRICE"
@@ -698,8 +705,10 @@ def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
 def _oi_intent(state, side, now, bias_snapshot=None):
     frozen = (bias_snapshot or {}).get("direction_context") or {}
     regime = str(frozen.get("oi_regime") or "UNKNOWN").upper()
-    oi_updated_at = _f(getattr(state, "open_interest_updated_at", 0.0))
-    age = now - oi_updated_at
+    frozen_updated_at = _f(frozen.get("oi_updated_at"))
+    frozen_age = now - frozen_updated_at
+    live_updated_at = _f(getattr(state, "open_interest_updated_at", 0.0))
+    live_age = now - live_updated_at
     frozen_intent = (
         "UNWIND" if regime in ("SHORT_COVERING", "LONG_LIQUIDATION_CLOSING") else
         "POSITION_BUILD" if regime in ("NEW_LONG_BUILD", "NEW_SHORT_BUILD") else "NEUTRAL"
@@ -708,11 +717,16 @@ def _oi_intent(state, side, now, bias_snapshot=None):
         "SHORT_COVERING": "LONG", "LONG_LIQUIDATION_CLOSING": "SHORT",
         "NEW_LONG_BUILD": "LONG", "NEW_SHORT_BUILD": "SHORT",
     }.get(regime)
-    fresh = bool(oi_updated_at > 0.0 and 0.0 <= age <= 6.0)
+    frozen_fresh = bool(
+        frozen_updated_at > 0.0 and 0.0 <= frozen_age <= 6.0
+    )
+    live_fresh = bool(
+        live_updated_at > 0.0 and 0.0 <= live_age <= 6.0
+    )
     delta = _f(getattr(state, "open_interest_change_pct", 0.0))
     sample_window = _f(getattr(state, "open_interest_change_window_seconds", 0.0))
     delta_valid = bool(
-        fresh and 0.0 < sample_window <= OI_SAMPLE_MAX_SECONDS
+        live_fresh and 0.0 < sample_window <= OI_SAMPLE_MAX_SECONDS
         and _f(getattr(state, "prev_open_interest", 0.0)) > 0.0
     )
     # A freshly observed material delta is closer to the ignition than the
@@ -726,10 +740,16 @@ def _oi_intent(state, side, now, bias_snapshot=None):
         expected_side = str(side).upper()
     else:
         intent, intent_source = frozen_intent, "FROZEN_BIAS_OI_REGIME"
+    fresh = live_fresh if intent_source == "REFRESHED_OI_DELTA" else frozen_fresh
     aligned = expected_side in (None, str(side).upper())
     return {
         "intent": intent,
-        "raw_regime": regime, "fresh": fresh, "age_seconds": round(max(0.0, age), 4),
+        "raw_regime": regime, "fresh": fresh,
+        "age_seconds": round(max(0.0, live_age if intent_source == "REFRESHED_OI_DELTA" else frozen_age), 4),
+        "frozen_oi_updated_at": frozen_updated_at or None,
+        "frozen_oi_age_seconds": round(max(0.0, frozen_age), 4) if frozen_updated_at > 0.0 else None,
+        "live_oi_updated_at": live_updated_at or None,
+        "live_oi_age_seconds": round(max(0.0, live_age), 4) if live_updated_at > 0.0 else None,
         "intent_source": intent_source,
         "change_pct": round(delta, 6) if delta_valid else None,
         "sample_window_seconds": round(sample_window, 4) if delta_valid else None,
@@ -751,6 +771,9 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
     """
     spot = (_f(getattr(state, "best_bid", 0.0)) + _f(getattr(state, "best_ask", 0.0))) / 2.0
     atr = _f(getattr(state, "atr_1m", 0.0))
+    event_now = _f((latest or {}).get("receive_time_ms")) / 1000.0
+    atr_updated_at = _f(getattr(state, "atr_1m_updated_at", 0.0))
+    atr_age = event_now - atr_updated_at
     atr_bps = atr / spot * 10_000.0 if spot > 0.0 and atr > 0.0 else 0.0
     episode_progress = max(
         (max(0.0, _f(venue_moves.get(name))) for name in cash_venues),
@@ -759,9 +782,21 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
     precursor = dict((episode or {}).get("precursor_measurement") or {})
     precursor_progress = max(0.0, _f(precursor.get("progress_bps"))) if precursor.get("valid") else 0.0
     progress = max(episode_progress, precursor_progress)
-    if atr_bps <= 0.0:
+    if (
+        atr_bps <= 0.0 or atr_updated_at <= 0.0
+        # The latest completed 100ms bucket can precede the ATR assignment by
+        # one scheduler turn. Treat only a material future timestamp as bad.
+        or atr_age < -1.0 or atr_age > ATR_MAX_AGE_SECONDS
+    ):
         return {
-            "valid": False, "source": "ATR_1M_UNAVAILABLE",
+            "valid": False,
+            "source": (
+                "ATR_1M_UNAVAILABLE" if atr_bps <= 0.0 else
+                "ATR_1M_TIMESTAMP_UNAVAILABLE" if atr_updated_at <= 0.0 else
+                "ATR_1M_STALE"
+            ),
+            "atr_updated_at": atr_updated_at or None,
+            "atr_age_seconds": round(max(0.0, atr_age), 4) if atr_updated_at > 0.0 else None,
             "cash_displacement_bps": round(progress, 6),
             "episode_cash_displacement_bps": round(episode_progress, 6),
             "precursor_cash_displacement_bps": round(precursor_progress, 6),
@@ -777,6 +812,8 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
         "precursor_cash_displacement_bps": round(precursor_progress, 6),
         "precursor_measurement": precursor,
         "phase_scale_bps": round(atr_bps, 6),
+        "atr_updated_at": atr_updated_at,
+        "atr_age_seconds": round(max(0.0, atr_age), 4),
         "consumed_fraction": round(consumed, 6),
         "latest_conversion_bps": round(
             max(0.0, _sign(side) * _f(latest.get("price_conversion_bps"))), 6
@@ -808,10 +845,22 @@ def _result_from_episode(state, episode, histories, freshness, now):
         not proposer_is_futures
         or (cash_response_ms and cash_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
     )
+    futures_reversals = [
+        row for row in episode["signals"]
+        if row.get("venue") == "futures"
+        and row.get("side") != side
+        and int(row.get("receive_time_ms", 0)) > futures_response_ms
+        and _material_flow(row)
+    ]
+    futures_reversal_confirmed = bool(
+        len(futures_reversals) >= 2
+        and int(futures_reversals[-1].get("receive_time_ms", 0))
+            - int(futures_reversals[-2].get("receive_time_ms", 0)) <= EVIDENCE_GAP_MS
+    )
     futures_follow_ok = bool(
         proposer_is_futures
         or (futures_response_ms and futures_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
-    )
+    ) and not futures_reversal_confirmed
     latest = proof_signal or episode["signals"][-1]
     venue_moves = {}
     venue_anchors = {}
@@ -855,6 +904,8 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "futures_response": futures_response,
         "futures_response_ms": futures_response_ms or None,
         "futures_follow_ok": futures_follow_ok,
+        "futures_follow_invalidated": futures_reversal_confirmed,
+        "futures_reversal_buckets": len(futures_reversals),
         "futures_cash_response_ok": futures_cash_ok,
         "flow_by_venue": {row["venue"]: {
             "signed_imbalance": round(_sign(side) * _f(row.get("imbalance")), 6),
@@ -1011,7 +1062,7 @@ def evaluate(state, now=None, side=None):
             episode = None
             state._ignition_last_reject = "CLOCK_OR_EVENT_TIME_INVALID"
             continue
-        if episode is not None and row.get("venue") in CASH:
+        if episode is not None and row.get("venue") in CASH | {"futures"}:
             if str(row.get("side")) != str(episode.get("side")) and _material_flow(row):
                 episode["signals"].append(dict(row))
                 episode["last_evidence_ms"] = int(row.get("receive_time_ms", now_ms))

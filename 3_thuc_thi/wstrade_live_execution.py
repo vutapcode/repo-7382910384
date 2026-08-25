@@ -20,6 +20,39 @@ from loi_he_thong import verified_cost_model
 VERSION = "WSTRADE_LIVE_EXECUTION_V1"
 SYMBOL = "BTCUSDT"
 MAKER_TTL_SECONDS = 0.75
+CAUSAL_SUBMIT_MAX_AGE_SECONDS = 1.5
+BBO_SUBMIT_MAX_AGE_SECONDS = 1.0
+
+
+def _revalidate_before_submit(state, side, result, now=None):
+    """Fail closed if REST preflight outlived the recorded causal decision."""
+    now = time.time() if now is None else float(now)
+    side = str(side or "").upper()
+    if side not in ("LONG", "SHORT"):
+        return False, "SIDE_INVALID"
+    if str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper() != side:
+        return False, "BIAS_SIDE_CHANGED"
+    if float(getattr(state, "bias_confidence", 0.0) or 0.0) < 0.55:
+        return False, "BIAS_CONFIDENCE_DROPPED"
+    decision_ts = float((result or {}).get("ts", 0.0) or 0.0)
+    decision_age = now - decision_ts
+    if (
+        decision_ts <= 0.0 or decision_age < 0.0
+        or decision_age > CAUSAL_SUBMIT_MAX_AGE_SECONDS
+    ):
+        return False, "CAUSAL_PROOF_STALE"
+    bid = float(getattr(state, "execution_best_bid", 0.0) or 0.0)
+    ask = float(getattr(state, "execution_best_ask", 0.0) or 0.0)
+    bbo_ts = float(getattr(state, "execution_price_time", 0.0) or 0.0)
+    bbo_age = now - bbo_ts
+    if bid <= 0.0 or ask <= bid:
+        return False, "BBO_INVALID"
+    if bbo_ts <= 0.0 or bbo_age < 0.0 or bbo_age > BBO_SUBMIT_MAX_AGE_SECONDS:
+        return False, "BBO_STALE"
+    ignition = (result or {}).get("ignition") or {}
+    if ignition.get("futures_follow_invalidated"):
+        return False, "FUTURES_FOLLOW_INVALIDATED"
+    return True, "PASS"
 
 
 def _finalize_shadow_state(state):
@@ -402,12 +435,12 @@ def _entry_causal_thesis(result):
             "impulse_phase":ignition.get("impulse_phase"),
             "residual_edge_proxy_bps":ignition.get("residual_edge_proxy_bps"),
             "bias_thesis":{
-                "direction":frozen.get("bias"),
+                "direction":frozen.get("direction"),
                 "confidence":frozen.get("confidence"),
                 "context_side":context.get("context_side"),
                 "phase":context.get("phase"),
                 "candidate_side":context.get("candidate_side"),
-                "hysteresis":frozen.get("hysteresis"),
+                "hysteresis":context.get("hysteresis"),
                 "price_vote":context.get("price_vote"),
                 "flow_vote":context.get("flow_vote"),
                 "oi_regime":context.get("oi_regime"),
@@ -481,6 +514,18 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
     }
     if not gate_ok:
         return None
+    if (
+        bool(getattr(state, "wstrade_live_armed", False))
+        and int((result or {}).get("canonical_opportunity_id", 0) or 0) > 0
+    ):
+        causal_ok, causal_reason = _revalidate_before_submit(
+            state, side, result, now=time.time(),
+        )
+        state.wstrade_live_last_causal_revalidation = {
+            "ok": causal_ok, "reason": causal_reason, "checked_at": time.time(),
+        }
+        if not causal_ok:
+            return None
     qty = mainnet_safety.fixed_quantity()
     result = dict(result or {})
     if "edge_tier" not in result:

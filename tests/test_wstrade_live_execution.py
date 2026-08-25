@@ -86,6 +86,28 @@ def state():
 
 
 class LiveExecutionTests(unittest.TestCase):
+    def test_pre_submit_revalidation_rejects_stale_or_changed_causal_state(self):
+        s = state()
+        s.bias_state = "LONG"
+        s.bias_confidence = 0.8
+        s.execution_price_time = 10.0
+        ok, reason = live._revalidate_before_submit(
+            s, "LONG", {"ts": 9.5, "ignition": {}}, now=10.0,
+        )
+        self.assertTrue(ok)
+        self.assertEqual(reason, "PASS")
+        ok, reason = live._revalidate_before_submit(
+            s, "LONG", {"ts": 8.0, "ignition": {}}, now=10.0,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "CAUSAL_PROOF_STALE")
+        s.bias_state = "SHORT"
+        ok, reason = live._revalidate_before_submit(
+            s, "LONG", {"ts": 9.5, "ignition": {}}, now=10.0,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "BIAS_SIDE_CHANGED")
+
     def test_entry_thesis_preserves_cash_authority_for_guardian(self):
         thesis = live._entry_causal_thesis({
             'causal': {
@@ -105,10 +127,11 @@ class LiveExecutionTests(unittest.TestCase):
         thesis = live._entry_causal_thesis({'ignition': {
             'cash_venues': ['binance_spot'], 'proposer': 'binance_spot',
             'bias_snapshot': {
-                'bias': 'LONG', 'confidence': 0.8, 'hysteresis': 'STABLE',
+                'direction': 'LONG', 'confidence': 0.8,
                 'direction_context': {
                     'context_side': 'LONG', 'phase': 'ESTABLISHED_TREND',
-                    'candidate_side': 'ABSTAIN', 'price_vote': 'LONG',
+                    'candidate_side': 'ABSTAIN', 'hysteresis': 'STABLE',
+                    'price_vote': 'LONG',
                     'flow_vote': 'LONG', 'oi_regime': 'NEW_LONG_BUILD',
                 },
             },
@@ -116,6 +139,8 @@ class LiveExecutionTests(unittest.TestCase):
         self.assertEqual(thesis['bias_thesis']['context_side'], 'LONG')
         self.assertEqual(thesis['bias_thesis']['phase'], 'ESTABLISHED_TREND')
         self.assertEqual(thesis['bias_thesis']['flow_vote'], 'LONG')
+        self.assertEqual(thesis['bias_thesis']['direction'], 'LONG')
+        self.assertEqual(thesis['bias_thesis']['hysteresis'], 'STABLE')
 
     def test_promotion_requires_private_user_stream(self):
         async def run():

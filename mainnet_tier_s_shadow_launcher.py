@@ -1530,7 +1530,18 @@ async def _entry_loop():
                 "CANONICAL_OPPORTUNITY", opportunity_id
             )
             s.mainnet_shadow_entry_claim_at = now
-            position = await _open_position(side, result, now)
+            try:
+                position = await _open_position(side, result, now)
+            except asyncio.CancelledError:
+                canonical_opportunity.release(
+                    s, opportunity_id, reason="EXECUTION_TASK_CANCELLED",
+                )
+                raise
+            except Exception:
+                canonical_opportunity.release(
+                    s, opportunity_id, reason="EXECUTION_EXCEPTION",
+                )
+                raise
             pending = getattr(s, "mainnet_shadow_pending_entry", None)
             if position is None and not isinstance(pending, dict):
                 canonical_opportunity.release(

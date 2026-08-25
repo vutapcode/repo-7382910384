@@ -110,6 +110,7 @@ def classify(result, state):
     stress_ok = bool(promotion_trades >= 30 and stress_total >= 0.0)
     live_empirical_ok = bool(
         samples >= 30
+        and str(calibration.get("level") or "").upper() == "EXACT"
         and calibration.get("live_empirical_ok")
         and empirical_mean is not None and _f(empirical_mean) > 0.0
         and empirical_lcb is not None and _f(empirical_lcb) >= 0.0
