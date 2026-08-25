@@ -361,6 +361,10 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         failed.append("WAIT_CASH_RESPONSE")
     if "CAUSAL_LEADER_UNCERTAIN" in reason:
         failed.append("WAIT_LEADER_UNCERTAIN")
+    if "OI_REFRESH" in reason:
+        failed.append("WAIT_OI_REFRESH")
+    if "OI_UNWIND" in reason or "OI_CLOSING" in reason:
+        failed.append("WAIT_OI_CLOSING_CONTEXT")
     if "IMPULSE_ALREADY_CONSUMED" in reason:
         failed.append("WAIT_LATE_IMPULSE")
     if "OI_CLOSING" in reason:
@@ -395,7 +399,8 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
     priority = (
         "WAIT_STALE_DATA", "WAIT_EXTERNAL_CORROBORATION", "WAIT_CHASE",
         "WAIT_CASH_RESPONSE", "WAIT_LEADER_UNCERTAIN", "WAIT_LATE_IMPULSE",
-        "WAIT_IGNITION_PROOF", "WAIT_CAUSAL_PERSISTENCE", "WAIT_OI_CLOSING_CONTEXT",
+        "WAIT_IGNITION_PROOF", "WAIT_CAUSAL_PERSISTENCE", "WAIT_OI_REFRESH",
+        "WAIT_OI_CLOSING_CONTEXT",
         "ABSORPTION_VETO", "PERP_LED_VETO", "EMPIRICAL_ALPHA_NOT_READY",
         "EDGE_COST_FAIL",
         "BIAS_NOT_READY", "PRICE_QUORUM_FAIL", "FLOW_QUORUM_FAIL",

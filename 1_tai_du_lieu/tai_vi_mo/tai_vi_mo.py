@@ -61,6 +61,24 @@ async def tai_du_lieu_vi_mo(symbol: str, bo_nho_ram, chu_ky_giay: float = 15.0):
                     oi_now = float(data_oi["openInterest"])
 
                 now = time.time()
+                previous_oi = float(getattr(bo_nho_ram, "open_interest", 0.0) or 0.0)
+                previous_ts = float(
+                    getattr(bo_nho_ram, "open_interest_updated_at", 0.0) or 0.0
+                )
+                if previous_oi > 0.0 and previous_ts > 0.0:
+                    bo_nho_ram.prev_open_interest = previous_oi
+                    bo_nho_ram.prev_open_interest_updated_at = previous_ts
+                    bo_nho_ram.open_interest_change_pct = (
+                        (oi_now - previous_oi) / previous_oi * 100.0
+                    )
+                    bo_nho_ram.open_interest_change_window_seconds = max(
+                        0.0, now - previous_ts
+                    )
+                else:
+                    bo_nho_ram.prev_open_interest = 0.0
+                    bo_nho_ram.prev_open_interest_updated_at = 0.0
+                    bo_nho_ram.open_interest_change_pct = 0.0
+                    bo_nho_ram.open_interest_change_window_seconds = 0.0
                 bo_nho_ram.open_interest = oi_now
                 bo_nho_ram.open_interest_updated_at = now
                 bo_nho_ram.thoi_gian_vi_mo_cuoi = now

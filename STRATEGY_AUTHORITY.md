@@ -27,9 +27,14 @@
      the old direction to authorize Entry.
    - PROVE is failed reversion or two accelerating 100 ms metaorder buckets.
      Failed reversion requires material opposition, adverse excursion, material
-     reclaim and at least 100 ms of material same-side acceptance.
-   - Consumed fraction is observed cash displacement divided by live 1m ATR;
+     reclaim and material same-side acceptance persisting for at least 400 ms.
+   - Consumed fraction uses the greater of venue-local episode displacement and
+     bounded 3/6/15-second pre-ignition cash displacement, divided by live 1m
+     ATR. This prevents a late proposer from resetting a mature wave to zero;
      missing ATR fails closed. Only IGNITION/EARLY at most 0.35 may enter.
+   - A Futures proposer must obtain fresh OI before Entry. A material fresh OI
+     decrease classifies the move as unwind and cannot authorize a Futures-led
+     entry; cash-led unwind remains a distinct cash-authority path.
    - Coinbase older than five seconds fails closed. Static walls/cancels and
      BBO quantity without executed flow never authorize Entry.
 5. Residual Edge

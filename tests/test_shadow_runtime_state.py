@@ -85,6 +85,30 @@ class ShadowRuntimeStateTests(unittest.TestCase):
             "CODE_OR_CONFIG_VERSION_MISMATCH",
         )
 
+    def test_current_eight_field_calibration_rows_survive_same_version_restart(self):
+        row = (
+            "SHORT", "IGNITION", "NORMAL", "BOOTSTRAP_UNVERIFIED",
+            "FAILED_REVERSION", "FUTURES", "MAKER", -3.5,
+        )
+        with tempfile.TemporaryDirectory() as temp, patch.dict(
+            'os.environ', {'SMC_JOURNAL_DIR': temp}
+        ):
+            source_state = SimpleNamespace(
+                code_version="code-v2", strategy_config_version="config-v2",
+                mainnet_shadow_position=None, _edge_cal_v2_rows=[row],
+            )
+            runtime_state.save(SimpleNamespace(
+                app=SimpleNamespace(state=source_state), QTY_BTC=0.001
+            ))
+            target_state = SimpleNamespace(
+                code_version="code-v2", strategy_config_version="config-v2",
+            )
+            restored = runtime_state.restore(SimpleNamespace(
+                app=SimpleNamespace(state=target_state), QTY_BTC=0.001
+            ))
+        self.assertTrue(restored)
+        self.assertEqual(target_state._edge_cal_v2_rows, [row])
+
     def test_live_position_and_guardian_counter_restore_in_recovery_mode(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(
             'os.environ', {'SMC_JOURNAL_DIR': temp}

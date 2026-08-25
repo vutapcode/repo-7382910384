@@ -21,8 +21,11 @@ EVIDENCE_GAP_MS = 300
 EPISODE_MAX_MS = 5_000
 LEAD_FLOOR_MS = 100.0
 MAX_CONSUMED_FRACTION = 0.35
-MIN_ACCEPTANCE_MS = 100
+MIN_ACCEPTANCE_MS = 400
+FAILED_REVERSION_MAX_MS = 700
 MATERIAL_PRICE_BPS = 0.15
+OI_BUILD_MIN_PCT = 0.02
+OI_SAMPLE_MAX_SECONDS = 20.0
 MIN_VOL_BTC_BY_VENUE = {
     "spot": ignition_signals.MIN_QTY["binance_spot"],
     "coinbase": ignition_signals.MIN_QTY["coinbase_spot"],
@@ -243,6 +246,71 @@ def _episode_id(signal):
     )
 
 
+def _bias_bucket_at(buckets, target, max_age=2.0):
+    """Return one receive-time snapshot with a bounded direct lookup."""
+    if not isinstance(buckets, dict):
+        return None
+    second = int(target)
+    for offset in range(int(max_age) + 2):
+        row = buckets.get(second - offset)
+        if not isinstance(row, dict):
+            continue
+        age = target - _f(row.get("ts"))
+        if 0.0 <= age <= max_age:
+            return row
+    return None
+
+
+def _precursor_cash_progress(state, signal):
+    """Measure cash displacement that happened before the proposer bucket.
+
+    Ignition's venue-local anchor intentionally measures only the active
+    episode.  This second, bounded view prevents a late proposer from resetting
+    a wave that was already running for 3-15 seconds back to phase zero.
+    """
+    signal_s = _f(signal.get("receive_time_ms")) / 1000.0
+    buckets = getattr(state, "bias_price_buckets", None)
+    current = _bias_bucket_at(buckets, signal_s, 2.0)
+    if current is None:
+        return {
+            "valid": False, "source": "BIAS_PRICE_BUCKETS_UNAVAILABLE",
+            "progress_bps": 0.0, "horizon_seconds": None,
+            "venue_moves_bps": {}, "cash_coverage": 0,
+        }
+    sign = _sign(signal.get("side"))
+    best = None
+    for horizon in (3, 6, 15):
+        reference = _bias_bucket_at(buckets, signal_s - horizon, 2.0)
+        if reference is None:
+            continue
+        moves = {}
+        for source, venue in (("spot", "binance_spot"), ("coinbase", "coinbase_spot")):
+            current_price = _f(current.get(source))
+            reference_price = _f(reference.get(source))
+            if current_price > 0.0 and reference_price > 0.0:
+                moves[venue] = sign * _bps(current_price, reference_price)
+        if not moves:
+            continue
+        # Both cash venues have equal authority.  With one venue missing we
+        # retain measurement coverage metadata instead of inventing agreement.
+        progress = max(0.0, sum(moves.values()) / len(moves))
+        candidate = {
+            "valid": True,
+            "source": "PRE_IGNITION_CASH_PROGRESS",
+            "progress_bps": round(progress, 6),
+            "horizon_seconds": horizon,
+            "venue_moves_bps": {name: round(value, 6) for name, value in moves.items()},
+            "cash_coverage": len(moves),
+        }
+        if best is None or progress > _f(best.get("progress_bps")):
+            best = candidate
+    return best or {
+        "valid": False, "source": "PRECURSOR_REFERENCE_UNAVAILABLE",
+        "progress_bps": 0.0, "horizon_seconds": None,
+        "venue_moves_bps": {}, "cash_coverage": 0,
+    }
+
+
 def _start_episode(state, signal):
     bias = _bias_snapshot(state, signal)
     side = str(signal.get("side") or "NEUTRAL").upper()
@@ -268,6 +336,7 @@ def _start_episode(state, signal):
         "last_evidence_ms": int(signal.get("receive_time_ms", 0)),
         "bias_snapshot": bias, "signals": [dict(signal)],
         "epochs": {signal.get("venue"): int(signal.get("epoch", 0))},
+        "precursor_measurement": _precursor_cash_progress(state, signal),
     }
     state._ignition_episode = episode
     return episode
@@ -337,7 +406,7 @@ def _failed_reversion(history, side, proposer_ms):
     for shock_index in range(len(rows) - 2, -1, -1):
         shock = rows[shock_index]
         shock_ms = int(shock.get("receive_time_ms", 0))
-        if latest_ms - shock_ms > EVIDENCE_GAP_MS:
+        if latest_ms - shock_ms > FAILED_REVERSION_MAX_MS:
             break
         if str(shock.get("side")) == str(side):
             continue
@@ -356,7 +425,7 @@ def _failed_reversion(history, side, proposer_ms):
         reclaim_index = None
         for index in range(shock_index + 1, len(rows) - 1):
             reclaim = rows[index]
-            if int(reclaim.get("receive_time_ms", 0)) - shock_ms > EVIDENCE_GAP_MS:
+            if int(reclaim.get("receive_time_ms", 0)) - shock_ms > FAILED_REVERSION_MAX_MS:
                 break
             if str(reclaim.get("side")) != str(side) or not _material_flow(reclaim):
                 continue
@@ -367,7 +436,14 @@ def _failed_reversion(history, side, proposer_ms):
             continue
 
         acceptance_rows = rows[reclaim_index + 1:]
-        if not acceptance_rows or latest_ms - shock_ms > EVIDENCE_GAP_MS:
+        if not acceptance_rows or latest_ms - shock_ms > FAILED_REVERSION_MAX_MS:
+            continue
+        causal_path = rows[shock_index:]
+        if any(
+            int(later.get("receive_time_ms", 0))
+            - int(earlier.get("receive_time_ms", 0)) > EVIDENCE_GAP_MS
+            for earlier, later in zip(causal_path, causal_path[1:])
+        ):
             continue
         reclaim_ms = int(rows[reclaim_index].get("receive_time_ms", 0))
         acceptance_ms = latest_ms - reclaim_ms
@@ -390,11 +466,16 @@ def _failed_reversion(history, side, proposer_ms):
         ]
         if not material_acceptance:
             continue
+        material_acceptance_ms = (
+            int(material_acceptance[-1].get("receive_time_ms", 0)) - reclaim_ms
+        )
+        if material_acceptance_ms < MIN_ACCEPTANCE_MS:
+            continue
 
         reclaim = rows[reclaim_index]
         proof = dict(latest)
         proof["_failed_reversion_evidence"] = {
-            "version": "FAILED_REVERSION_V3",
+            "version": "FAILED_REVERSION_V4",
             "venue": str(shock.get("venue") or latest.get("venue") or ""),
             "anchor_price": round(anchor, 10),
             "anchor_method": anchor_method,
@@ -410,6 +491,7 @@ def _failed_reversion(history, side, proposer_ms):
             "acceptance_buckets": len(acceptance_rows),
             "acceptance_material_buckets": len(material_acceptance),
             "acceptance_duration_ms": acceptance_ms,
+            "material_acceptance_duration_ms": material_acceptance_ms,
         }
         return proof
     return None
@@ -616,8 +698,9 @@ def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
 def _oi_intent(state, side, now, bias_snapshot=None):
     frozen = (bias_snapshot or {}).get("direction_context") or {}
     regime = str(frozen.get("oi_regime") or "UNKNOWN").upper()
-    age = now - _f(getattr(state, "open_interest_updated_at", 0.0))
-    intent = (
+    oi_updated_at = _f(getattr(state, "open_interest_updated_at", 0.0))
+    age = now - oi_updated_at
+    frozen_intent = (
         "UNWIND" if regime in ("SHORT_COVERING", "LONG_LIQUIDATION_CLOSING") else
         "POSITION_BUILD" if regime in ("NEW_LONG_BUILD", "NEW_SHORT_BUILD") else "NEUTRAL"
     )
@@ -625,11 +708,31 @@ def _oi_intent(state, side, now, bias_snapshot=None):
         "SHORT_COVERING": "LONG", "LONG_LIQUIDATION_CLOSING": "SHORT",
         "NEW_LONG_BUILD": "LONG", "NEW_SHORT_BUILD": "SHORT",
     }.get(regime)
+    fresh = bool(oi_updated_at > 0.0 and 0.0 <= age <= 6.0)
+    delta = _f(getattr(state, "open_interest_change_pct", 0.0))
+    sample_window = _f(getattr(state, "open_interest_change_window_seconds", 0.0))
+    delta_valid = bool(
+        fresh and 0.0 < sample_window <= OI_SAMPLE_MAX_SECONDS
+        and _f(getattr(state, "prev_open_interest", 0.0)) > 0.0
+    )
+    # A freshly observed material delta is closer to the ignition than the
+    # frozen 60-second context.  It classifies build versus unwind, but never
+    # invents LONG/SHORT direction; Bias remains direction authority.
+    if delta_valid and delta >= OI_BUILD_MIN_PCT:
+        intent, intent_source = "POSITION_BUILD", "REFRESHED_OI_DELTA"
+        expected_side = str(side).upper()
+    elif delta_valid and delta <= -OI_BUILD_MIN_PCT:
+        intent, intent_source = "UNWIND", "REFRESHED_OI_DELTA"
+        expected_side = str(side).upper()
+    else:
+        intent, intent_source = frozen_intent, "FROZEN_BIAS_OI_REGIME"
     aligned = expected_side in (None, str(side).upper())
-    fresh = age <= 6.0
     return {
         "intent": intent,
         "raw_regime": regime, "fresh": fresh, "age_seconds": round(max(0.0, age), 4),
+        "intent_source": intent_source,
+        "change_pct": round(delta, 6) if delta_valid else None,
+        "sample_window_seconds": round(sample_window, 4) if delta_valid else None,
         "side": side, "expected_side": expected_side, "aligned_with_entry": aligned,
         "causal_class": ("OI_STALE_CONTEXT" if not fresh else
             "ALIGNED_BUILD" if intent == "POSITION_BUILD" and aligned else
@@ -639,7 +742,7 @@ def _oi_intent(state, side, now, bias_snapshot=None):
     }
 
 
-def _phase_measurement(state, side, cash_venues, venue_moves, latest):
+def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=None):
     """Volatility-normalized displacement observed before proof.
 
     This is not a forecast of the final wave.  ATR supplies only a local scale;
@@ -649,20 +752,30 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest):
     spot = (_f(getattr(state, "best_bid", 0.0)) + _f(getattr(state, "best_ask", 0.0))) / 2.0
     atr = _f(getattr(state, "atr_1m", 0.0))
     atr_bps = atr / spot * 10_000.0 if spot > 0.0 and atr > 0.0 else 0.0
-    progress = max(
+    episode_progress = max(
         (max(0.0, _f(venue_moves.get(name))) for name in cash_venues),
         default=0.0,
     )
+    precursor = dict((episode or {}).get("precursor_measurement") or {})
+    precursor_progress = max(0.0, _f(precursor.get("progress_bps"))) if precursor.get("valid") else 0.0
+    progress = max(episode_progress, precursor_progress)
     if atr_bps <= 0.0:
         return {
             "valid": False, "source": "ATR_1M_UNAVAILABLE",
             "cash_displacement_bps": round(progress, 6),
+            "episode_cash_displacement_bps": round(episode_progress, 6),
+            "precursor_cash_displacement_bps": round(precursor_progress, 6),
+            "precursor_measurement": precursor,
             "phase_scale_bps": None, "consumed_fraction": 1.0,
         }
     consumed = max(0.0, min(1.5, progress / atr_bps))
     return {
-        "valid": True, "source": "CASH_DISPLACEMENT_OVER_ATR_1M",
+        "valid": True,
+        "source": "HYBRID_PRECURSOR_AND_EPISODE_CASH_DISPLACEMENT_OVER_ATR_1M",
         "cash_displacement_bps": round(progress, 6),
+        "episode_cash_displacement_bps": round(episode_progress, 6),
+        "precursor_cash_displacement_bps": round(precursor_progress, 6),
+        "precursor_measurement": precursor,
         "phase_scale_bps": round(atr_bps, 6),
         "consumed_fraction": round(consumed, 6),
         "latest_conversion_bps": round(
@@ -720,7 +833,9 @@ def _result_from_episode(state, episode, histories, freshness, now):
         max(0.0, cash_move - futures_move)
         if futures_move is not None else 0.0
     )
-    phase_measurement = _phase_measurement(state, side, cash_venues, venue_moves, latest)
+    phase_measurement = _phase_measurement(
+        state, side, cash_venues, venue_moves, latest, episode,
+    )
     consumed = _f(phase_measurement.get("consumed_fraction"), 1.0)
     # The cash/Futures gap measures handoff timing, not remaining alpha.  Using
     # it as edge inverted confirmation: better Futures follow meant less edge.
@@ -786,6 +901,17 @@ def _result_from_episode(state, episode, histories, freshness, now):
         return _wait(now, side, "WAIT_STALE_COINBASE", "PROBE", payload, freshness)
     if not freshness["binance_spot_ready"] or not freshness["futures_ready"]:
         return _wait(now, side, "WAIT_FEED_GROUP_NOT_READY", "PROBE", payload, freshness)
+    if proposer_is_futures and not oi.get("fresh"):
+        return _wait(
+            now, side, "WAIT_FUTURES_PROPOSER_OI_REFRESH",
+            "PRESSURE_BUILDING", payload, freshness,
+        )
+    if proposer_is_futures and oi.get("intent") == "UNWIND":
+        state._ignition_episode = None
+        return _wait(
+            now, side, "WAIT_FUTURES_PROPOSER_OI_UNWIND",
+            "INVALID", payload, freshness,
+        )
     if proposer_is_futures and not futures_cash_ok:
         return _wait(now, side, "WAIT_FUTURES_ALERT_CASH_RESPONSE", "PROBE", payload, freshness)
     if not proposer_is_futures and not futures_follow_ok:

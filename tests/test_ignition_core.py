@@ -162,19 +162,25 @@ class IgnitionCoreTests(unittest.TestCase):
         shock = evidence_row(1_100, "SHORT", 99.995)
         shock["low"] = 99.995
         reclaim = evidence_row(1_200, "LONG", 100.001)
-        acceptance = evidence_row(1_300, "LONG", 100.003)
+        acceptance_1 = evidence_row(1_300, "LONG", 100.003)
+        acceptance_2 = evidence_row(1_600, "LONG", 100.005)
         proof = ignition_core._failed_reversion(
-            [pre, initial, shock, reclaim, acceptance], "LONG", 1_000
+            [pre, initial, shock, reclaim, acceptance_1, acceptance_2], "LONG", 1_000
         )
         self.assertIsNotNone(proof)
         detail = proof["_failed_reversion_evidence"]
-        self.assertEqual(detail["version"], "FAILED_REVERSION_V3")
-        self.assertGreaterEqual(detail["acceptance_duration_ms"], 100)
+        self.assertEqual(detail["version"], "FAILED_REVERSION_V4")
+        self.assertGreaterEqual(detail["acceptance_duration_ms"], 400)
         self.assertGreaterEqual(detail["acceptance_material_buckets"], 1)
 
-        weak_acceptance = evidence_row(1_300, "LONG", 100.003, material=False)
+        too_brief = ignition_core._failed_reversion(
+            [pre, initial, shock, reclaim, acceptance_1], "LONG", 1_000
+        )
+        self.assertIsNone(too_brief)
+
+        weak_acceptance = evidence_row(1_600, "LONG", 100.003, material=False)
         rejected = ignition_core._failed_reversion(
-            [pre, initial, shock, reclaim, weak_acceptance], "LONG", 1_000
+            [pre, initial, shock, reclaim, acceptance_1, weak_acceptance], "LONG", 1_000
         )
         self.assertIsNone(rejected)
 
@@ -185,9 +191,33 @@ class IgnitionCoreTests(unittest.TestCase):
             {"price_conversion_bps": 0.5},
         )
         self.assertTrue(measured["valid"])
-        self.assertEqual(measured["source"], "CASH_DISPLACEMENT_OVER_ATR_1M")
+        self.assertEqual(
+            measured["source"],
+            "HYBRID_PRECURSOR_AND_EPISODE_CASH_DISPLACEMENT_OVER_ATR_1M",
+        )
         self.assertAlmostEqual(measured["phase_scale_bps"], 10.0, places=3)
         self.assertAlmostEqual(measured["consumed_fraction"], 0.2, places=3)
+
+    def test_precursor_progress_prevents_late_episode_phase_reset(self):
+        s = state(now=20.0)
+        s.bias_price_buckets = {
+            5: {"ts": 5.0, "spot": 100.0, "coinbase": 100.0},
+            17: {"ts": 17.0, "spot": 100.0, "coinbase": 100.0},
+            20: {"ts": 20.0, "spot": 100.08, "coinbase": 100.08},
+        }
+        precursor = ignition_core._precursor_cash_progress(
+            s, evidence_row(20_000, "LONG", 100.08),
+        )
+        self.assertTrue(precursor["valid"])
+        self.assertAlmostEqual(precursor["progress_bps"], 8.0, places=3)
+        episode = {"precursor_measurement": precursor}
+        measured = ignition_core._phase_measurement(
+            s, "LONG", ["binance_spot"], {"binance_spot": 2.0},
+            {"price_conversion_bps": 0.5}, episode,
+        )
+        self.assertAlmostEqual(measured["episode_cash_displacement_bps"], 2.0)
+        self.assertAlmostEqual(measured["precursor_cash_displacement_bps"], 8.0)
+        self.assertGreater(measured["consumed_fraction"], ignition_core.MAX_CONSUMED_FRACTION)
 
     def test_oi_intent_direction_conflict_is_explicit(self):
         s = state(now=3.0)
@@ -202,6 +232,65 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(intent["aligned_with_entry"])
         self.assertEqual(intent["causal_class"], "OI_DIRECTION_CONFLICT")
         self.assertEqual(intent["raw_regime"], "SHORT_COVERING")
+
+    def test_fresh_oi_delta_classifies_build_or_unwind_without_direction_vote(self):
+        s = state(now=10.0)
+        s.prev_open_interest = 100_000.0
+        s.open_interest_change_window_seconds = 5.0
+        s.open_interest_change_pct = -0.03
+        frozen = {"direction_context": {"oi_regime": "NEW_SHORT_BUILD"}}
+        unwind = ignition_core._oi_intent(s, "SHORT", 10.0, frozen)
+        self.assertEqual(unwind["intent"], "UNWIND")
+        self.assertEqual(unwind["intent_source"], "REFRESHED_OI_DELTA")
+        self.assertTrue(unwind["aligned_with_entry"])
+
+        s.open_interest_change_pct = 0.03
+        build = ignition_core._oi_intent(s, "SHORT", 10.0, frozen)
+        self.assertEqual(build["intent"], "POSITION_BUILD")
+        self.assertEqual(build["intent_source"], "REFRESHED_OI_DELTA")
+
+    def test_futures_proposer_waits_for_fresh_oi_and_rejects_unwind(self):
+        s = state(now=10.0)
+        futures = evidence_row(9_600, "SHORT", 100.0)
+        futures["venue"] = "futures"
+        cash_1 = evidence_row(9_700, "SHORT", 99.997)
+        cash_2 = evidence_row(9_800, "SHORT", 99.994)
+        episode = {
+            "causal_episode_id": "ign:futures:SHORT:9500",
+            "side": "SHORT", "proposer": "futures",
+            "started_receive_ms": 9_600, "last_evidence_ms": 9_800,
+            "bias_snapshot": {
+                "direction": "SHORT", "confidence": 0.8,
+                "direction_context": {"oi_regime": "NEW_SHORT_BUILD"},
+            },
+            "signals": [futures, cash_1, cash_2],
+            "epochs": {"futures": 1, "binance_spot": 1},
+            "precursor_measurement": {"valid": False},
+        }
+        histories = {
+            "binance_spot": (cash_1, cash_2),
+            "coinbase_spot": (), "futures": (futures,),
+        }
+        freshness = {
+            "coinbase_mode": "FRESH", "binance_spot_ready": True,
+            "futures_ready": True,
+        }
+        s.open_interest_updated_at = 1.0
+        stale = ignition_core._result_from_episode(
+            s, dict(episode), histories, freshness, 10.0,
+        )
+        self.assertEqual(stale["reason"], "WAIT_FUTURES_PROPOSER_OI_REFRESH")
+        self.assertEqual(stale["phase"], "PRESSURE_BUILDING")
+
+        s.open_interest_updated_at = 10.0
+        s.prev_open_interest = 100_000.0
+        s.open_interest_change_window_seconds = 5.0
+        s.open_interest_change_pct = -0.03
+        unwind = ignition_core._result_from_episode(
+            s, dict(episode), histories, freshness, 10.0,
+        )
+        self.assertEqual(unwind["reason"], "WAIT_FUTURES_PROPOSER_OI_UNWIND")
+        self.assertEqual(unwind["phase"], "INVALID")
 
     def test_stale_oi_is_labeled_context_not_position_build(self):
         s = state(now=10.0)

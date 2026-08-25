@@ -115,12 +115,14 @@ if version in {V3, V4, V5}:
     if not isinstance(calibration_rows, list) or len(calibration_rows) > 768:
         fail("edge_calibration_rows:invalid")
     for index, row in enumerate(calibration_rows):
-        if not isinstance(row, list) or len(row) != 5:
+        # Five fields are the persisted legacy cohort; eight fields are the
+        # current causal cohort (side/mode/regime/edge/proof/proposer/execution/net).
+        if not isinstance(row, list) or len(row) not in (5, 8):
             fail(f"edge_calibration_rows.{index}:invalid")
-        for field in row[:4]:
+        for field in row[:-1]:
             if not isinstance(field, str) or not field:
                 fail(f"edge_calibration_rows.{index}:invalid_bucket")
-        num(row[4], f"edge_calibration_rows.{index}.net_bps")
+        num(row[-1], f"edge_calibration_rows.{index}.net_bps")
     if version in {V4, V5}:
         for name in (
             "edge_calibration_code_version",

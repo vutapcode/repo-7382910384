@@ -441,7 +441,9 @@ class SharedState:
 
         # Vĩ mô: lưu baseline để đánh giá OI tăng/giảm và freshness.
         self.prev_open_interest = 0.0
+        self.prev_open_interest_updated_at = 0.0
         self.open_interest_change_pct = 0.0
+        self.open_interest_change_window_seconds = 0.0
         self.macro_bias = 'NEUTRAL'
         self.last_mapped_macro_ts = 0.0
         self.macro_history = deque(maxlen=181)  # 15 phút @ 5 giây/mẫu

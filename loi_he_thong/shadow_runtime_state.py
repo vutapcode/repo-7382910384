@@ -275,7 +275,7 @@ def restore(base):
     if isinstance(calibration_rows, list) and calibration_version_match:
         state._edge_cal_v2_rows = [
             tuple(row) for row in calibration_rows[-768:]
-            if isinstance(row, (list, tuple)) and len(row) == 5
+            if isinstance(row, (list, tuple)) and len(row) in (5, 8)
         ]
     else:
         state._edge_cal_v2_rows = []

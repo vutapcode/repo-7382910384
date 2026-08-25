@@ -78,6 +78,23 @@ class ShadowStateGuardV3Tests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OK version=SHADOW_RUNTIME_STATE_V5", result.stdout)
 
+    def test_v5_current_eight_field_calibration_row_is_accepted(self):
+        result = self.run_guard({
+            "version": "SHADOW_RUNTIME_STATE_V5_VERIFIED_COST_PLAN",
+            "balance": 5.4, "realized_pnl": -0.1,
+            "trades": 1, "wins": 0, "losses": 1, "breakevens": 0,
+            "event_seq": 1, "decision_evaluations": 1,
+            "near_misses": 0, "decision_funnel": {"READY": 1},
+            "edge_calibration_rows": [[
+                "SHORT", "IGNITION", "NORMAL", "BOOTSTRAP_UNVERIFIED",
+                "FAILED_REVERSION", "FUTURES", "MAKER", -3.5,
+            ]],
+            "edge_calibration_code_version": "code-v2",
+            "edge_calibration_config_version": "config-v2",
+            "position": None,
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
