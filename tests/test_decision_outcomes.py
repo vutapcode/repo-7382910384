@@ -147,6 +147,27 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertEqual(payload["miss_taxonomy"], "RISK_DAILY_LOCK")
         self.assertEqual(payload["signed_close_bps"], 100.0)
 
+    def test_filled_then_flattened_is_one_execution_outcome(self):
+        event = daily_lock_skip(cycle_id="abort-1", start_ms=1_000)
+        payload = event["payload"]
+        payload.update({
+            "event": "ENTRY_FILLED_THEN_FLATTENED",
+            "causal_episode_id": "episode-abort",
+            "miss_taxonomy": "LIVE_FILLED_THEN_FLATTENED",
+            "failed_gates": ["POST_FILL_RISK_REJECTED"],
+        })
+        self.tracker.observe(event)
+        self.tracker.observe(event)
+        self.assertEqual(list(self.tracker.pending), [
+            "episode-abort::EXECUTION"
+        ])
+        self.tracker.observe(trade(6_000, 10, 101.0))
+        self.assertEqual(len(self.rows), 1)
+        self.assertEqual(
+            self.rows[0][1]["miss_taxonomy"],
+            "LIVE_FILLED_THEN_FLATTENED",
+        )
+
     def test_episode_keeps_origin_and_exact_qualified_anchor(self):
         self.tracker.observe(decision_event(
             "early", start_ms=1_000, episode_id="tier-s:7",

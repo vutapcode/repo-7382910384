@@ -53,6 +53,31 @@ class LauncherReservationSafetyTests(unittest.TestCase):
         self.assertEqual(flattened.canonical_reserved_opportunity_id, 0)
         self.assertEqual(flattened.canonical_last_consumed_opportunity_id, 7)
 
+        recovered = reserved_state(recovery=True)
+        self.assertTrue(launcher._settle_reconciled_reservation(
+            recovered, "RECOVERY_VERIFIED_FLAT_AFTER_FILL"
+        ))
+        self.assertEqual(recovered.canonical_last_consumed_opportunity_id, 7)
+
+    def test_verified_fill_then_flatten_commits_without_position(self):
+        state = reserved_state()
+        state.wstrade_live_last_entry_outcome = {
+            "canonical_opportunity_id": 7,
+            "causal_episode_id": "episode-7",
+            "capture_required": True,
+        }
+        result = {
+            "canonical_opportunity_id": 7,
+            "causal_episode_id": "episode-7",
+            "side": "LONG",
+            "ignition": {"last_evidence_ms": 1_000},
+        }
+        self.assertTrue(launcher._commit_live_execution_capture(
+            state, result, position=None
+        ))
+        self.assertEqual(state.canonical_last_consumed_opportunity_id, 7)
+        self.assertIn("episode-7", state._ignition_tombstones)
+
 
 if __name__ == "__main__":
     unittest.main()

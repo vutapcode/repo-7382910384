@@ -78,6 +78,9 @@ def classify(result, state):
 
     regime = regime_engine.classify(state, side)
     costs = verified_cost_model.estimate(result, state)
+    cost_contract = verified_cost_model.freeze_execution_cost_contract(
+        result, state
+    )
     residual = max(0.0, _f(ignition.get("residual_edge_proxy_bps")))
     cost_budget = max(0.0, _f(costs.get("total_cost_bps")))
     reserve = max(0.0, _f(costs.get("minimum_net_edge_bps")))
@@ -145,6 +148,7 @@ def classify(result, state):
             "execution_cost_distribution_bps"
         ),
         "execution_cost_authority": False,
+        "execution_cost_contract": cost_contract,
         "cost_components": costs, "normal_contract_ok": contract_ok,
         "fast_contract_ok": False, "hard_vetoes": hard_vetoes,
         "price_impact": impact, "spot_perp_basis": basis,

@@ -79,6 +79,47 @@ class VerifiedCostModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(plan["total_cost_bps"], 12.5)
         self.assertTrue(plan["entry_execution_cost_embedded_in_fill"])
 
+    async def test_cost_contract_compares_the_same_execution_style(self):
+        state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)
+        await verified_cost_model.refresh_account_commission(FakeAPI(), state)
+        result = {"phase": "ACCEPTANCE"}
+        contract = verified_cost_model.freeze_execution_cost_contract(result, state)
+        result["execution_cost_contract"] = contract
+
+        # Taker is naturally dearer than maker, but must pass its own frozen
+        # budget rather than being compared with the maker budget.
+        ok, reason, detail = verified_cost_model.validate_execution_cost_contract(
+            result, state, "TAKER"
+        )
+        self.assertTrue(ok)
+        self.assertEqual(reason, "EXECUTION_COST_CONTRACT_PASS")
+        self.assertGreater(
+            detail["current_cost_bps"], contract["budgets_bps"]["MAKER"]
+        )
+
+        state.execution_best_bid = 99.95
+        state.execution_best_ask = 100.05
+        original_contract = contract
+        result.update({
+            "canonical_opportunity_id": 7,
+            "causal_episode_id": "episode-7",
+        })
+        state.canonical_reserved_context = {
+            "opportunity_id": 7,
+            "causal_episode_id": "episode-7",
+            "execution_cost_contract": original_contract,
+        }
+        # A downstream mutation cannot relax the immutable reservation budget.
+        result["execution_cost_contract"] = (
+            verified_cost_model.freeze_execution_cost_contract(result, state)
+        )
+        ok, reason, detail = verified_cost_model.validate_execution_cost_contract(
+            result, state, "TAKER"
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "EXECUTION_COST_WORSE_THAN_DECISION")
+        self.assertGreater(detail["current_cost_bps"], detail["budget_bps"])
+
 
 if __name__ == "__main__":
     unittest.main()

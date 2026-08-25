@@ -369,6 +369,124 @@ async def _emergency_flatten(api, state, side, qty):
     return result, status
 
 
+def _fill_price(order, fallback=0.0):
+    try:
+        return float((order or {}).get("avgPrice", 0.0) or fallback or 0.0)
+    except (AttributeError, TypeError, ValueError):
+        return float(fallback or 0.0)
+
+
+def _record_aborted_fill(
+    state, result, side, executed_qty, entry_order, flatten_order,
+    flatten_status, reason, event_callback=None,
+):
+    """Publish an explicit fill lifecycle even when no position is adopted."""
+    result = dict(result or {})
+    qty = max(0.0, float(executed_qty or 0.0))
+    entry_price = _fill_price(entry_order)
+    flatten_price = _fill_price(flatten_order)
+    flatten_verified = bool(flatten_status == 200)
+    recovery = bool(
+        getattr(state, "execution_unknown", False)
+        or getattr(state, "wstrade_execution_recovery_required", False)
+        or not flatten_verified
+    )
+    side_sign = 1.0 if str(side).upper() == "LONG" else -1.0
+    gross_bps = (
+        side_sign * (flatten_price - entry_price) / entry_price * 10_000.0
+        if entry_price > 0.0 and flatten_price > 0.0 else None
+    )
+    entry_style = (
+        "TAKER"
+        if str(result.get("execution_policy") or "MAKER").upper() == "TAKER"
+        else "MAKER"
+    )
+    modeled = verified_cost_model.estimate(
+        dict(result, phase="RELEASE" if entry_style == "TAKER" else "ACCEPTANCE"),
+        state,
+    )
+    fee_bps = float(modeled.get("entry_fee_bps", 0.0) or 0.0) + float(
+        modeled.get("exit_fee_bps", 0.0) or 0.0
+    )
+    outcome = {
+        "version": "LIVE_ENTRY_OUTCOME_V1",
+        "status": (
+            "FILLED_THEN_FLATTENED"
+            if flatten_verified and not recovery else "FILL_RECOVERY_PENDING"
+        ),
+        "capture_required": bool(flatten_verified and not recovery),
+        "reservation_hold_required": bool(recovery),
+        "canonical_opportunity_id": int(
+            result.get("canonical_opportunity_id", 0) or 0
+        ),
+        "causal_episode_id": result.get("causal_episode_id"),
+        "decision_cycle_id": result.get("decision_cycle_id"),
+        "side": str(side).upper(),
+        "executed_qty": qty,
+        "entry_fill_price": entry_price or None,
+        "flatten_fill_price": flatten_price or None,
+        "flatten_verified": flatten_verified,
+        "reason": str(reason),
+        "gross_pnl_bps": round(gross_bps, 6) if gross_bps is not None else None,
+        "fee_bps": round(fee_bps, 6),
+        "net_pnl_bps": (
+            round(gross_bps - fee_bps, 6) if gross_bps is not None else None
+        ),
+        "commission_verified": bool(modeled.get("commission_verified")),
+        "final_event_emitted": False,
+    }
+    state.wstrade_live_last_entry_outcome = outcome
+    if outcome["capture_required"]:
+        _emit_final_aborted_fill(state, event_callback)
+    elif event_callback:
+        event_callback("ENTRY_FILL_RECOVERY_PENDING", dict(outcome))
+    return outcome
+
+
+def _emit_final_aborted_fill(state, event_callback, flatten_order=None):
+    outcome = dict(
+        getattr(state, "wstrade_live_last_entry_outcome", {}) or {}
+    )
+    if not outcome or float(outcome.get("executed_qty", 0.0) or 0.0) <= 0.0:
+        return False
+    if flatten_order is not None:
+        price = _fill_price(flatten_order)
+        if price > 0.0:
+            outcome["flatten_fill_price"] = price
+    entry_price = float(outcome.get("entry_fill_price", 0.0) or 0.0)
+    flatten_price = float(outcome.get("flatten_fill_price", 0.0) or 0.0)
+    if entry_price > 0.0 and flatten_price > 0.0:
+        direction = 1.0 if str(outcome.get("side")).upper() == "LONG" else -1.0
+        gross_bps = direction * (flatten_price - entry_price) / entry_price * 10_000.0
+        outcome["gross_pnl_bps"] = round(gross_bps, 6)
+        outcome["net_pnl_bps"] = round(
+            gross_bps - float(outcome.get("fee_bps", 0.0) or 0.0), 6
+        )
+    outcome.update({
+        "status": "FILLED_THEN_FLATTENED",
+        "capture_required": True,
+        "reservation_hold_required": False,
+        "flatten_verified": True,
+    })
+    already_emitted = bool(outcome.get("final_event_emitted"))
+    outcome["final_event_emitted"] = True
+    state.wstrade_live_last_entry_outcome = outcome
+    if event_callback and not already_emitted:
+        event_callback("ENTRY_FILLED_THEN_FLATTENED", {
+            **outcome,
+            "miss_taxonomy": "LIVE_FILLED_THEN_FLATTENED",
+            "failed_gates": [str(outcome.get("reason") or "ABORTED_AFTER_FILL")],
+            "counterfactual": {
+                "eligible": bool(entry_price > 0.0),
+                "reference_price": entry_price or None,
+                "side": outcome.get("side"),
+                "hard_sl_bps": None,
+                "windows_seconds": [5, 15, 30, 60],
+            },
+        })
+    return True
+
+
 def _entry_causal_thesis(result):
     """Keep only the cash-led facts Guardian needs to judge thesis failure."""
     causal=(result or {}).get("causal") or {}
@@ -458,6 +576,17 @@ def _position(side, qty, fill_price, hard_sl, risk_plan, now, client_id, result)
 
 async def open_position(api, state, side, result, now=None, event_callback=None):
     now = time.time() if now is None else float(now)
+    result = dict(result or {})
+    state.wstrade_live_last_entry_outcome = {
+        "version": "LIVE_ENTRY_OUTCOME_V1",
+        "status": "NOT_SUBMITTED",
+        "capture_required": False,
+        "reservation_hold_required": False,
+        "canonical_opportunity_id": int(
+            result.get("canonical_opportunity_id", 0) or 0
+        ),
+        "causal_episode_id": result.get("causal_episode_id"),
+    }
     if not bool(getattr(state, "wstrade_live_armed", False)):
         return None
     if not bool(getattr(state, "wstrade_live_entry_allowed", True)):
@@ -501,8 +630,22 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
         }
         if not causal_ok:
             return None
+        cost_ok, cost_reason, cost_detail = (
+            verified_cost_model.validate_execution_cost_contract(
+                result,
+                state,
+                str(result.get("execution_policy") or "MAKER"),
+            )
+        )
+        state.wstrade_live_last_cost_revalidation = {
+            "ok": cost_ok,
+            "reason": cost_reason,
+            "detail": cost_detail,
+            "checked_at": time.time(),
+        }
+        if not cost_ok:
+            return None
     qty = mainnet_safety.fixed_quantity()
-    result = dict(result or {})
     if "edge_tier" not in result:
         result["edge_tier"] = dict(
             getattr(state, "entry_edge_tier", {}) or {}
@@ -515,13 +658,21 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
         recovery_required = bool(
             getattr(state, "wstrade_execution_recovery_required", False)
         )
+        flatten_order, flatten_status = None, 599
         if partial > 0.0 and not recovery_required:
-            await _emergency_flatten(api, state, side, partial)
+            flatten_order, flatten_status = await _emergency_flatten(
+                api, state, side, partial
+            )
         if partial > 0.0:
             state.wstrade_live_last_partial_fill = {
                 "side": side, "executed_qty": partial, "order": order,
                 "recovery_required": recovery_required,
             }
+            _record_aborted_fill(
+                state, result, side, partial, order, flatten_order,
+                flatten_status, "PARTIAL_ENTRY_TERMINAL",
+                event_callback=event_callback,
+            )
         return None
     fill = float((order or {}).get("avgPrice", 0.0) or price)
     hard_sl, risk_plan = _risk_geometry(state, side, fill)
@@ -532,15 +683,13 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
             "risk_plan": dict(risk_plan),
             "client_order_id": client_id,
         }
-        _, flatten_status = await _emergency_flatten(api, state, side, qty)
-        if event_callback:
-            event_callback("LIVE_POST_FILL_RISK_REJECTED", {
-                "side": side,
-                "qty_btc": qty,
-                "fill_price": fill,
-                "risk_plan": risk_plan,
-                "flatten_verified": flatten_status == 200,
-            })
+        flatten_order, flatten_status = await _emergency_flatten(
+            api, state, side, qty
+        )
+        _record_aborted_fill(
+            state, result, side, qty, order, flatten_order, flatten_status,
+            "POST_FILL_RISK_REJECTED", event_callback=event_callback,
+        )
         return None
     position = _position(side, qty, fill, hard_sl, risk_plan, now, client_id, result)
     fill_style = (
@@ -552,8 +701,14 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
     )
     protected, stop_result = await _place_stop(api, state, position)
     if not protected:
-        await _emergency_flatten(api, state, side, qty)
+        flatten_order, flatten_status = await _emergency_flatten(
+            api, state, side, qty
+        )
         state.wstrade_live_last_stop_failure = stop_result
+        _record_aborted_fill(
+            state, result, side, qty, order, flatten_order, flatten_status,
+            "HARD_STOP_PLACEMENT_FAILED", event_callback=event_callback,
+        )
         return None
     state.mainnet_shadow_position = position
     state.mainnet_shadow_position_status = "OPEN"
@@ -564,7 +719,9 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
         state.wstrade_live_checkpoint_error = f"{type(exc).__name__}: {exc}"
         state.shadow_persistence_dirty = True
         _seal_live(state, "LIVE_ENTRY_CHECKPOINT_FAILED", recovery=True)
-        _, flatten_status = await _emergency_flatten(api, state, side, qty)
+        flatten_order, flatten_status = await _emergency_flatten(
+            api, state, side, qty
+        )
         if flatten_status == 200:
             if position.hard_sl_algo_id is not None:
                 try:
@@ -574,6 +731,10 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
             position.active = False
             state.mainnet_shadow_position_status = "FLAT"
             state.wstrade_live_position = None
+        _record_aborted_fill(
+            state, result, side, qty, order, flatten_order, flatten_status,
+            "LIVE_ENTRY_CHECKPOINT_FAILED", event_callback=event_callback,
+        )
         return None
     if event_callback:
         event_callback("LIVE_ENTRY", {
@@ -681,10 +842,14 @@ async def reconcile(api, state, event_callback=None, now=None):
     if not local_active and active_rows:
         # Dedicated account: an unowned exchange position is never adopted.
         flattened = True
+        last_flatten_order = None
         for row in active_rows:
             amount = float(row.get("positionAmt", 0.0) or 0.0)
             side = str(row.get("positionSide") or ("LONG" if amount > 0 else "SHORT"))
-            _, status = await _emergency_flatten(api, state, side, abs(amount))
+            flatten_order, status = await _emergency_flatten(
+                api, state, side, abs(amount)
+            )
+            last_flatten_order = flatten_order
             flattened = flattened and status == 200
         verified, verified_status = await api.get_positions(SYMBOL)
         still_active = verified_status != 200 or any(
@@ -699,6 +864,9 @@ async def reconcile(api, state, event_callback=None, now=None):
             return "UNOWNED_POSITION_UNRESOLVED"
         state.wstrade_execution_recovery_required = False
         state.execution_unknown = False
+        _emit_final_aborted_fill(
+            state, event_callback, flatten_order=last_flatten_order
+        )
         _finalize_shadow_state(state)
         state.wstrade_reconciliation_status = "UNOWNED_POSITION_FLATTENED"
         return "UNOWNED_POSITION_FLATTENED"
@@ -729,6 +897,20 @@ async def reconcile(api, state, event_callback=None, now=None):
             state.execution_unknown = False
             if not bool(getattr(state, "wstrade_live_armed", False)):
                 _finalize_shadow_state(state)
+        recovered_fill = bool(
+            recovery_required
+            and float(
+                (getattr(state, "wstrade_live_last_entry_outcome", {}) or {}).get(
+                    "executed_qty", 0.0
+                ) or 0.0
+            ) > 0.0
+        )
+        if recovered_fill:
+            _emit_final_aborted_fill(state, event_callback)
+            state.wstrade_reconciliation_status = (
+                "RECOVERY_VERIFIED_FLAT_AFTER_FILL"
+            )
+            return "RECOVERY_VERIFIED_FLAT_AFTER_FILL"
         state.wstrade_reconciliation_status = "FLAT"
         return "FLAT"
     exchange_row = next((row for row in active_rows if str(

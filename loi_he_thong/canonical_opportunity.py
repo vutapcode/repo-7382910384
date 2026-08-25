@@ -167,6 +167,12 @@ def _clear_reservation(state):
 def _reservation_context(state, opportunity_id, now):
     result = dict(getattr(state, "entry_shadow_council", {}) or {})
     ignition = dict(result.get("ignition") or {})
+    edge = dict(result.get("edge_tier") or {})
+    cost_contract = dict(
+        result.get("execution_cost_contract")
+        or edge.get("execution_cost_contract")
+        or {}
+    )
     episode_id = (
         result.get("causal_episode_id")
         or ignition.get("causal_episode_id")
@@ -184,6 +190,7 @@ def _reservation_context(state, opportunity_id, now):
         "phase": str(result.get("phase") or "").upper(),
         "result_ts": float(result.get("ts", 0.0) or 0.0),
         "reserved_at": float(now),
+        "execution_cost_contract": cost_contract,
         "active_opportunity_id": int(
             getattr(state, "canonical_opportunity_count", 0) or 0
         ),

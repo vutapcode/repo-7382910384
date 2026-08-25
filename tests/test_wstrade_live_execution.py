@@ -125,6 +125,38 @@ class LiveExecutionTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "BIAS_SIDE_CHANGED")
 
+    def test_post_rest_spread_widen_blocks_before_live_submit(self):
+        async def run():
+            api, s = FakeApi(), state()
+            s.mainnet_commission_verified = True
+            s.mainnet_commission_source = "BINANCE_ACCOUNT_COMMISSION_RATE"
+            s.mainnet_maker_fee_bps = 2.0
+            s.mainnet_taker_fee_bps = 5.0
+            result = {
+                "execution_policy": "TAKER", "phase": "RELEASE",
+                "canonical_opportunity_id": 7,
+                "causal_episode_id": "episode-7",
+            }
+            result["execution_cost_contract"] = (
+                live.verified_cost_model.freeze_execution_cost_contract(result, s)
+            )
+            s.execution_best_bid = 99.5
+            s.execution_best_ask = 100.5
+            with patch.object(
+                live.mainnet_safety, 'exchange_entry_gate',
+                new=AsyncMock(return_value=(True, 'PASS', {})),
+            ), patch.object(
+                live, '_revalidate_before_submit', return_value=(True, 'PASS')
+            ):
+                pos = await live.open_position(api, s, 'LONG', result, now=1.0)
+            self.assertIsNone(pos)
+            self.assertEqual(api.orders, [])
+            self.assertEqual(
+                s.wstrade_live_last_cost_revalidation['reason'],
+                'EXECUTION_COST_WORSE_THAN_DECISION',
+            )
+        asyncio.run(run())
+
     def test_entry_thesis_preserves_cash_authority_for_guardian(self):
         thesis = live._entry_causal_thesis({
             'causal': {
@@ -237,11 +269,17 @@ class LiveExecutionTests(unittest.TestCase):
             self.assertIsNone(pos)
             self.assertIsNone(s.mainnet_shadow_position)
             self.assertEqual([row[1] for row in api.orders], ['MARKET', 'MARKET'])
+            self.assertTrue(s.wstrade_live_last_entry_outcome['capture_required'])
+            self.assertEqual(
+                s.wstrade_live_last_entry_outcome['reason'],
+                'HARD_STOP_PLACEMENT_FAILED',
+            )
         asyncio.run(run())
 
     def test_post_fill_risk_failure_immediately_flattens_before_stop(self):
         async def run():
             api, s = FakeApi(), state()
+            events = []
             with patch.object(
                 live.mainnet_safety, 'exchange_entry_gate',
                 new=AsyncMock(return_value=(True, 'PASS', {})),
@@ -251,12 +289,19 @@ class LiveExecutionTests(unittest.TestCase):
                 pos = await live.open_position(api, s, 'LONG', {
                     'execution_policy': 'TAKER',
                     'phase': 'RELEASE',
-                }, now=1.0)
+                }, now=1.0, event_callback=lambda event, payload: events.append(
+                    (event, payload)
+                ))
             self.assertIsNone(pos)
             self.assertEqual([row[1] for row in api.orders], ['MARKET', 'MARKET'])
             self.assertEqual(api.algos, [])
             self.assertFalse(
                 s.wstrade_live_last_post_fill_rejection['risk_plan']['eligible']
+            )
+            self.assertTrue(s.wstrade_live_last_entry_outcome['capture_required'])
+            self.assertEqual(
+                [event for event, _ in events],
+                ['ENTRY_FILLED_THEN_FLATTENED'],
             )
         asyncio.run(run())
 
@@ -270,6 +315,51 @@ class LiveExecutionTests(unittest.TestCase):
             self.assertIsNone(pos)
             self.assertEqual(api.orders[-1][2], 0.0004)
             self.assertEqual(s.wstrade_live_last_partial_fill['executed_qty'], 0.0004)
+            self.assertTrue(s.wstrade_live_last_entry_outcome['capture_required'])
+        asyncio.run(run())
+
+    def test_partial_fill_unknown_flatten_holds_until_reconcile(self):
+        class Api(FakeApi):
+            async def new_order(self, symbol, side, kind, quantity=None, **kwargs):
+                self.orders.append((side, kind, quantity, kwargs))
+                if len(self.orders) == 1:
+                    return {
+                        'status': 'PARTIALLY_FILLED', 'avgPrice': '78000',
+                        'executedQty': '0.0004', 'orderId': 1,
+                    }, 200
+                return {'status': 'NEW', 'executedQty': '0'}, 200
+
+        async def run():
+            api, s = Api(), state()
+            events = []
+            with patch.object(
+                live.mainnet_safety, 'exchange_entry_gate',
+                new=AsyncMock(return_value=(True, 'PASS', {})),
+            ), patch.object(
+                live.mainnet_safety, 'max_planned_loss_usdt', return_value=0.60
+            ):
+                pos = await live.open_position(
+                    api, s, 'LONG', {
+                        'execution_policy': 'TAKER', 'phase': 'RELEASE',
+                    }, now=1.0,
+                    event_callback=lambda event, payload: events.append((event, payload)),
+                )
+            self.assertIsNone(pos)
+            self.assertTrue(s.wstrade_execution_recovery_required)
+            self.assertFalse(s.wstrade_live_last_entry_outcome['capture_required'])
+            self.assertEqual(events[0][0], 'ENTRY_FILL_RECOVERY_PENDING')
+
+            result = await live.reconcile(
+                api, s, now=2.0,
+                event_callback=lambda event, payload: events.append((event, payload)),
+            )
+            self.assertEqual(result, 'RECOVERY_VERIFIED_FLAT_AFTER_FILL')
+            self.assertTrue(s.wstrade_live_last_entry_outcome['capture_required'])
+            self.assertEqual(
+                [event for event, _ in events].count(
+                    'ENTRY_FILLED_THEN_FLATTENED'
+                ), 1,
+            )
         asyncio.run(run())
 
     def test_http_200_emergency_order_must_still_be_filled(self):

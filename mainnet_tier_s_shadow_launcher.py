@@ -232,7 +232,10 @@ def _settle_reconciled_reservation(state, reconciliation):
         return canonical_opportunity.release(
             state, reserved_id, reason="RECOVERY_VERIFIED_FLAT_NO_FILL"
         )
-    if reconciliation == "UNOWNED_POSITION_FLATTENED":
+    if reconciliation in {
+        "UNOWNED_POSITION_FLATTENED",
+        "RECOVERY_VERIFIED_FLAT_AFTER_FILL",
+    }:
         captured = canonical_opportunity.mark_captured(state, reserved_id)
         if captured:
             entry_council.capture_episode(
@@ -242,6 +245,37 @@ def _settle_reconciled_reservation(state, reconciliation):
             )
         return captured
     return False
+
+
+def _commit_live_execution_capture(state, result, position=None):
+    """Commit a canonical episode for a position or verified fill→flatten."""
+    result = dict(result or {})
+    outcome = dict(
+        getattr(state, "wstrade_live_last_entry_outcome", {}) or {}
+    )
+    opportunity_id = int(result.get("canonical_opportunity_id", 0) or 0)
+    episode_id = str(result.get("causal_episode_id") or "")
+    outcome_matches = bool(
+        int(outcome.get("canonical_opportunity_id", 0) or 0) == opportunity_id
+        and str(outcome.get("causal_episode_id") or "") == episode_id
+    )
+    captured_execution = bool(
+        position is not None
+        or (outcome_matches and outcome.get("capture_required"))
+    )
+    if not captured_execution:
+        return False
+    committed = canonical_opportunity.mark_captured(state, opportunity_id)
+    if committed:
+        entry_council.capture_episode(
+            state,
+            episode_id,
+            side=result.get("side"),
+            last_evidence_ms=(result.get("ignition") or {}).get(
+                "last_evidence_ms"
+            ),
+        )
+    return committed
 
 
 def _latest_futures_price(now=None):
@@ -1076,18 +1110,7 @@ async def _open_position(side, result, now):
         pos = await live_execution.open_position(
             app.api, app.state, side, result, now=now, event_callback=_append_event
         )
-        if pos is not None:
-            canonical_opportunity.mark_captured(
-                app.state, result.get("canonical_opportunity_id", 0)
-            )
-            entry_council.capture_episode(
-                app.state,
-                result.get("causal_episode_id"),
-                side=side,
-                last_evidence_ms=(result.get("ignition") or {}).get(
-                    "last_evidence_ms"
-                ),
-            )
+        _commit_live_execution_capture(app.state, result, position=pos)
         return pos
     return _open_shadow(side, result, now)
 
@@ -1463,6 +1486,15 @@ async def _entry_loop():
 
             quorum_ok = _entry_quorum_ok(result, s, now)
             edge_report = dict(getattr(s, "entry_edge_tier", {}) or {})
+            # Freeze the exact decision-time economics with the decision. This
+            # prevents downstream execution from reading a newer, unrelated
+            # state report or comparing maker and taker as if they were equal.
+            result = dict(result)
+            result["edge_tier"] = edge_report
+            result["execution_cost_contract"] = dict(
+                edge_report.get("execution_cost_contract") or {}
+            )
+            s.entry_shadow_council = result
             decision_cycle_id = _decision_cycle_id(s, now)
             result = dict(result)
             result["decision_cycle_id"] = decision_cycle_id

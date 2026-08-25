@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from loi_he_thong import execution_causal_revalidation as recheck
-from loi_he_thong import ignition_signals
+from loi_he_thong import ignition_signals, verified_cost_model
 
 
 def material(venue, bucket, side, acceleration=1.0, price=None):
@@ -61,6 +61,9 @@ def fixture():
             "phase_measurement": {"precursor_cash_displacement_bps": 0.0},
         },
     }
+    result["execution_cost_contract"] = (
+        verified_cost_model.freeze_execution_cost_contract(result, state)
+    )
     return state, result
 
 

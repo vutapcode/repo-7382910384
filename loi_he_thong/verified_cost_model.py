@@ -138,6 +138,94 @@ def estimate(result, state):
     }
 
 
+def freeze_execution_cost_contract(result, state):
+    """Freeze style-specific executable costs from one decision-time BBO.
+
+    Maker and taker are deliberately separate. Comparing a market fallback to
+    a maker budget would systematically cancel valid fallbacks and manufacture
+    misses rather than detect spread deterioration.
+    """
+    maker = estimate(dict(result or {}, phase="ACCEPTANCE"), state)
+    taker = estimate(dict(result or {}, phase="RELEASE"), state)
+    return {
+        "version": "EXECUTION_COST_CONTRACT_V1_STYLE_SPECIFIC",
+        "commission_verified": bool(
+            maker.get("commission_verified") and taker.get("commission_verified")
+        ),
+        "commission_source": maker.get("commission_source"),
+        "budgets_bps": {
+            "MAKER": float(maker.get("total_cost_bps", 0.0) or 0.0),
+            "TAKER": float(taker.get("total_cost_bps", 0.0) or 0.0),
+        },
+        "decision_components": {"MAKER": maker, "TAKER": taker},
+    }
+
+
+def validate_execution_cost_contract(result, state, execution_style):
+    """Reprice the actual style without inventing a new strategy threshold."""
+    style = str(execution_style or "").upper()
+    style = "MAKER" if style in {"MAKER", "MAKER_TRADE_THROUGH"} else "TAKER"
+    contract = dict((result or {}).get("execution_cost_contract") or {})
+    if not contract:
+        contract = dict(
+            ((result or {}).get("edge_tier") or {}).get(
+                "execution_cost_contract"
+            ) or {}
+        )
+    reserved = dict(
+        getattr(state, "canonical_reserved_context", {}) or {}
+    )
+    same_reservation = bool(
+        int(reserved.get("opportunity_id", 0) or 0)
+        == int((result or {}).get("canonical_opportunity_id", 0) or 0)
+        and str(reserved.get("causal_episode_id") or "")
+        == str((result or {}).get("causal_episode_id") or "")
+    )
+    if same_reservation and reserved.get("execution_cost_contract"):
+        contract = dict(reserved["execution_cost_contract"])
+    budgets = dict(contract.get("budgets_bps") or {})
+    budget = _f(budgets.get(style), -1.0)
+    current = estimate(
+        dict(result or {}, phase="ACCEPTANCE" if style == "MAKER" else "RELEASE"),
+        state,
+    )
+    current_total = _f(current.get("total_cost_bps"), -1.0)
+    if (
+        str(contract.get("version") or "")
+        != "EXECUTION_COST_CONTRACT_V1_STYLE_SPECIFIC"
+        or budget < 0.0
+    ):
+        return False, "EXECUTION_COST_CONTRACT_MISSING", {
+            "execution_style": style, "current": current,
+        }
+    if not bool(
+        contract.get("commission_verified")
+        and current.get("commission_verified")
+    ):
+        return False, "EXECUTION_COMMISSION_UNVERIFIED", {
+            "execution_style": style, "budget_bps": budget, "current": current,
+        }
+    if str(contract.get("commission_source") or "") != str(
+        current.get("commission_source") or ""
+    ):
+        return False, "EXECUTION_COMMISSION_SOURCE_CHANGED", {
+            "execution_style": style, "budget_bps": budget, "current": current,
+        }
+    if current_total > budget + 1e-9:
+        return False, "EXECUTION_COST_WORSE_THAN_DECISION", {
+            "execution_style": style,
+            "budget_bps": round(budget, 6),
+            "current_cost_bps": round(current_total, 6),
+            "current": current,
+        }
+    return True, "EXECUTION_COST_CONTRACT_PASS", {
+        "execution_style": style,
+        "budget_bps": round(budget, 6),
+        "current_cost_bps": round(current_total, 6),
+        "current": current,
+    }
+
+
 def shadow_execution_plan(result, state, execution_style):
     """Return the fee/cost plan for the shadow fill that actually occurred.
 

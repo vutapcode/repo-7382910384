@@ -316,15 +316,17 @@ def maker_ttl_release(state, side, result, now, placed_at):
         return False, "CURRENT_PHASE_SCALE_UNAVAILABLE", phase_detail
     if consumed > 0.35:
         return False, "CURRENT_IMPULSE_ALREADY_CONSUMED", phase_detail
-    refreshed = dict(result or {})
-    refreshed["phase"] = "RELEASE"
-    costs = verified_cost_model.estimate(refreshed, state)
-    current_cost = _f(costs.get("total_cost_bps"), -1.0)
-    if current_cost < 0.0 or not bool(costs.get("commission_verified", False)):
-        return False, "CURRENT_EXECUTION_COST_UNVERIFIED", {"costs": costs}
+    cost_ok, cost_reason, cost_detail = (
+        verified_cost_model.validate_execution_cost_contract(
+            result, state, "TAKER"
+        )
+    )
+    if not cost_ok:
+        return False, cost_reason, cost_detail
     return True, "CURRENT_RELEASE_PASS", {
         **detail,
         "current_phase": phase_detail,
-        "current_execution_cost_bps": current_cost,
-        "cost_components": costs,
+        "current_execution_cost_bps": cost_detail["current_cost_bps"],
+        "cost_budget_bps": cost_detail["budget_bps"],
+        "cost_components": cost_detail["current"],
     }

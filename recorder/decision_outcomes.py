@@ -84,7 +84,11 @@ class DecisionOutcomeTracker:
                 "anchor_role": anchor_role,
                 "qualified_now": qualified_now,
             }
-        if event in ("ENTRY_SKIPPED", "SHADOW_MAKER_CANCELED"):
+        if event in (
+            "ENTRY_SKIPPED",
+            "SHADOW_MAKER_CANCELED",
+            "ENTRY_FILLED_THEN_FLATTENED",
+        ):
             return {
                 "cycle_id": payload.get("cycle_id"),
                 "causal_episode_id": payload.get("causal_episode_id"),
@@ -93,7 +97,10 @@ class DecisionOutcomeTracker:
                     payload.get("miss_taxonomy")
                 ],
                 "counterfactual": payload.get("counterfactual") or {},
-                "decision": "SKIP",
+                "decision": (
+                    "ABORTED_EXECUTION"
+                    if event == "ENTRY_FILLED_THEN_FLATTENED" else "SKIP"
+                ),
                 "reason": payload.get("reason"),
                 "taxonomy_version": payload.get("taxonomy_version"),
                 "strategy_code_version": (
