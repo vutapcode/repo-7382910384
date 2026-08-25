@@ -108,6 +108,36 @@ def classify(result, state):
     )
     empirical_mean = calibration.get("mean_net_bps")
     empirical_lcb = calibration.get("lower_confidence_bound_bps")
+    current_cost_adjustment = dict(calibration.get("current_cost_adjustment") or {})
+    raw_empirical_ok = bool(
+        empirical_mean is not None and _f(empirical_mean) > 0.0
+        and empirical_lcb is not None and _f(empirical_lcb) >= 0.0
+    )
+    adjusted_pass_raw_fail = bool(
+        samples >= 30
+        and str(calibration.get("level") or "").upper() == "EXACT"
+        and current_cost_adjustment.get("live_empirical_ok")
+        and not raw_empirical_ok
+    )
+    cost_gate_telemetry = {
+        "status": "ADJUSTED_PASS_RAW_FAIL" if adjusted_pass_raw_fail else "NO_CONFLICT",
+        "authority": False,
+        "exact_cohort_key": calibration.get("bucket"),
+        "samples": samples,
+        "historical_mean_net_bps": empirical_mean,
+        "historical_lower_confidence_bound_bps": empirical_lcb,
+        "adjusted_mean_net_bps": current_cost_adjustment.get("mean_net_bps"),
+        "adjusted_lower_confidence_bound_bps": current_cost_adjustment.get(
+            "lower_confidence_bound_bps"
+        ),
+        "current_execution_cost_bps": round(cost_budget, 6),
+        "minimum_net_edge_bps": round(reserve, 6),
+        "side": side,
+        "proof_type": ignition.get("proof_type"),
+        "proposer": ignition.get("proposer"),
+        "regime": str(regime.get("regime") or "NORMAL"),
+        "execution_style": costs.get("execution_style"),
+    }
     promotion = getattr(state, "wstrade_promotion", None) or {}
     promotion_trades = int(promotion.get("shadow_trades", 0) or 0)
     stress_total = _f(promotion.get("stress_25bps_pnl_usdt"), -1.0)
@@ -119,8 +149,7 @@ def classify(result, state):
         samples >= 30
         and str(calibration.get("level") or "").upper() == "EXACT"
         and calibration.get("live_empirical_ok")
-        and empirical_mean is not None and _f(empirical_mean) > 0.0
-        and empirical_lcb is not None and _f(empirical_lcb) >= 0.0
+        and raw_empirical_ok
         and stress_ok and not hard_vetoes
         and costs.get("commission_verified")
     )
@@ -162,6 +191,7 @@ def classify(result, state):
             "stress_25bps_ok": stress_ok,
             "commission_verified": bool(costs.get("commission_verified")),
             "status": calibration.get("status"),
+            "cost_gate_telemetry": cost_gate_telemetry,
         },
         "live_empirical_ok": live_empirical_ok,
         "policy": "SHADOW_BOOTSTRAP_LIVE_EMPIRICAL_GUARDIAN_OUTCOME_LCB",
