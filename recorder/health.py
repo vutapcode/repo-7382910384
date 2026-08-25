@@ -25,6 +25,7 @@ class HealthState:
         self.queue_size = 0
         self.queue_max_seen = 0
         self.writer_errors = 0
+        self.decision_tap_parse_errors = 0
         self.depth_synced = False
         self.depth_last_u = None
         self.depth_gaps = 0
@@ -122,7 +123,8 @@ class HealthState:
             usage.free < 5 * 1024 * 1024 * 1024 or disk_free_ratio < 0.10
         )
         operational_problem = bool(
-            self.dropped or self.writer_errors or self.depth_gaps
+            self.dropped or self.writer_errors or self.decision_tap_parse_errors
+            or self.depth_gaps
             or sum(self.sequence_gaps.values())
             or any(not value for value in self.connections.values())
             or disk_pressure
@@ -176,6 +178,7 @@ class HealthState:
             'sequence_gaps': dict(self.sequence_gaps),
             'sequence_gap_total': sum(self.sequence_gaps.values()),
             'writer_errors': self.writer_errors,
+            'decision_tap_parse_errors': self.decision_tap_parse_errors,
             'parquet_files': self.parquet_files,
             'retention': {
                 'hours': self.config.retention_hours,

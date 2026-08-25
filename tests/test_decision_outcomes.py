@@ -108,6 +108,21 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertEqual(payload["max_adverse_excursion_bps"], 100.0)
         self.assertTrue(payload["hypothetical_hard_sl_hit"])
 
+    def test_carries_frozen_cost_into_economic_miss_screen(self):
+        event = decision_event()
+        event["payload"]["decision_record"]["counterfactual"]["frozen_economics"] = {
+            "execution_style": "MAKER",
+            "cost_budget_bps": 8.5,
+            "minimum_net_edge_bps": 2.0,
+            "commission_verified": True,
+        }
+        self.tracker.observe(event)
+        self.tracker.observe(trade(6_000, 10, 100.20, high=100.20, low=100.0))
+        payload = self.rows[0][1]
+        self.assertEqual(payload["economic_miss_threshold_bps"], 10.5)
+        self.assertTrue(payload["economic_miss_screen_passed"])
+        self.assertEqual(payload["frozen_economics"]["execution_style"], "MAKER")
+
     def test_sequence_gap_invalidates_instead_of_bridging(self):
         self.tracker.observe(decision_event())
         self.tracker.observe(trade(2_000, 10, 100.0))

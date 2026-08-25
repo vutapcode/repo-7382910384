@@ -75,6 +75,9 @@ class DecisionOutcomeTracker:
                 "miss_taxonomy": output.get("miss_taxonomy") or payload.get("miss_taxonomy"),
                 "failed_gates": output.get("failed_gates") or payload.get("failed_gates") or [],
                 "counterfactual": counterfactual,
+                "frozen_economics": dict(
+                    counterfactual.get("frozen_economics") or {}
+                ),
                 "decision": output.get("decision") or payload.get("decision"),
                 "reason": output.get("reason") or payload.get("reason"),
                 "taxonomy_version": decision.get("taxonomy_version"),
@@ -97,6 +100,10 @@ class DecisionOutcomeTracker:
                     payload.get("miss_taxonomy")
                 ],
                 "counterfactual": payload.get("counterfactual") or {},
+                "frozen_economics": dict(
+                    (payload.get("counterfactual") or {}).get("frozen_economics")
+                    or payload.get("frozen_economics") or {}
+                ),
                 "decision": (
                     "ABORTED_EXECUTION"
                     if event == "ENTRY_FILLED_THEN_FLATTENED" else "SKIP"
@@ -216,6 +223,7 @@ class DecisionOutcomeTracker:
                 "strategy_code_version": tracker.get("strategy_code_version"),
                 "strategy_config_version": tracker.get("strategy_config_version"),
                 "miss_taxonomy": tracker.get("miss_taxonomy"),
+                "frozen_economics": tracker.get("frozen_economics") or {},
                 "valid": False,
                 "invalid_reason": reason,
                 "completed_windows_seconds": sorted(
@@ -282,6 +290,14 @@ class DecisionOutcomeTracker:
                     if direction > 0 else (tracker["high"] - ref) / ref * 10000.0
                 )
                 stop_bps = tracker.get("hard_sl_bps")
+                economics = dict(tracker.get("frozen_economics") or {})
+                cost_budget = _f(economics.get("cost_budget_bps"), None)
+                minimum_net = _f(economics.get("minimum_net_edge_bps"), None)
+                economic_threshold = (
+                    cost_budget + minimum_net
+                    if cost_budget is not None and minimum_net is not None
+                    else None
+                )
                 self.emit(
                     "decision_counterfactual",
                     {
@@ -306,6 +322,15 @@ class DecisionOutcomeTracker:
                         "signed_close_bps": round(close_bps, 6),
                         "max_favorable_excursion_bps": round(max(0.0, favorable), 6),
                         "max_adverse_excursion_bps": round(max(0.0, adverse), 6),
+                        "frozen_economics": economics,
+                        "economic_miss_threshold_bps": (
+                            round(economic_threshold, 6)
+                            if economic_threshold is not None else None
+                        ),
+                        "economic_miss_screen_passed": (
+                            bool(favorable > economic_threshold)
+                            if economic_threshold is not None else None
+                        ),
                         "hypothetical_hard_sl_bps": stop_bps,
                         "hypothetical_hard_sl_hit": bool(
                             stop_bps is not None and adverse >= float(stop_bps)

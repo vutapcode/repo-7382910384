@@ -268,6 +268,20 @@ def _bias_bucket_at(buckets, target, max_age=2.0):
     return None
 
 
+def _bias_price_epoch_matches(current, reference, source):
+    """Do not measure precursor displacement across a venue reconnect."""
+    try:
+        current_epoch = int(
+            ((current or {}).get("venue_epochs") or {}).get(source, 0) or 0
+        )
+        reference_epoch = int(
+            ((reference or {}).get("venue_epochs") or {}).get(source, 0) or 0
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return current_epoch == reference_epoch
+
+
 def _precursor_cash_progress(state, signal):
     """Measure cash displacement that happened before the proposer bucket.
 
@@ -292,6 +306,8 @@ def _precursor_cash_progress(state, signal):
             continue
         moves = {}
         for source, venue in (("spot", "binance_spot"), ("coinbase", "coinbase_spot")):
+            if not _bias_price_epoch_matches(current, reference, source):
+                continue
             current_price = _f(current.get(source))
             reference_price = _f(reference.get(source))
             if current_price > 0.0 and reference_price > 0.0:
@@ -1071,14 +1087,18 @@ def evaluate(state, now=None, side=None):
             episode = None
             state._ignition_last_reject = "EXECUTED_FLOW_EPOCH_RESET"
 
-    if side not in ("LONG", "SHORT") or _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF:
+    if side not in ("LONG", "SHORT"):
         state._ignition_episode = None
         _remember_bias(state, now)
-        return _wait(now, side, "BIAS_NOT_FRESH_OR_CONFIDENT", freshness=freshness)
+        return _wait(now, side, "BIAS_ABSTAIN", freshness=freshness)
+    if _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF:
+        state._ignition_episode = None
+        _remember_bias(state, now)
+        return _wait(now, side, "BIAS_CONFIDENCE_LOW", freshness=freshness)
     bias_ts = _f(getattr(state, "bias_updated_at", 0.0))
     if bias_ts <= 0.0 or now - bias_ts > BIAS_MAX_AGE:
         state._ignition_episode = None
-        return _wait(now, side, "BIAS_NOT_FRESH_OR_CONFIDENT", freshness=freshness)
+        return _wait(now, side, "BIAS_STALE", freshness=freshness)
 
     if episode is not None:
         age = now_ms - int(episode.get("started_receive_ms", 0))

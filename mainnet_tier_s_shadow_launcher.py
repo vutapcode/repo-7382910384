@@ -19,6 +19,7 @@ from loi_he_thong import canonical_opportunity
 from loi_he_thong import execution_causal_revalidation
 from loi_he_thong import host_cpu_governor
 from loi_he_thong import microstructure_regime
+from loi_he_thong import regime_oi_freshness_hook
 from loi_he_thong import shadow_daily_loss
 from loi_he_thong import shadow_execution_model
 from loi_he_thong import verified_cost_model
@@ -454,7 +455,9 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         failed.append("ABSORPTION_VETO")
     if would_enter and bool(basis.get("perp_expansion")):
         failed.append("PERP_LED_VETO")
-    if "BIAS" in reason or str((result or {}).get("side", "")).upper() not in ("LONG", "SHORT"):
+    if reason == "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS":
+        failed.append("BIAS_ALIGNMENT_FAIL")
+    elif "BIAS" in reason or str((result or {}).get("side", "")).upper() not in ("LONG", "SHORT"):
         failed.append("BIAS_NOT_READY")
     if s1 and str(s1.get("status", "MISSING")) != "PASS":
         failed.append("PRICE_QUORUM_FAIL")
@@ -482,7 +485,7 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         "WAIT_OI_CLOSING_CONTEXT",
         "ABSORPTION_VETO", "PERP_LED_VETO", "EMPIRICAL_ALPHA_NOT_READY",
         "EDGE_COST_FAIL",
-        "BIAS_NOT_READY", "PRICE_QUORUM_FAIL", "FLOW_QUORUM_FAIL",
+        "BIAS_ALIGNMENT_FAIL", "BIAS_NOT_READY", "PRICE_QUORUM_FAIL", "FLOW_QUORUM_FAIL",
     )
     unique = list(dict.fromkeys(failed))
     primary = next((name for name in priority if name in unique), None)
@@ -508,13 +511,27 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             hard_sl_bps = abs(reference - float(hard_sl)) / reference * 10000.0
         except (AttributeError, TypeError, ValueError):
             hard_sl_bps = None
+    oi_max_age = regime_oi_freshness_hook.max_oi_age_seconds(state)
+    cost_snapshot = {
+        "cost_ok": (edge_report or {}).get("cost_ok"),
+        "budget_bps": (edge_report or {}).get("cost_budget_bps_model"),
+        "expected_bps_model": (edge_report or {}).get("expected_excursion_bps_model"),
+        "expected_net_bps_model": (edge_report or {}).get("expected_net_bps_model"),
+        "minimum_net_edge_bps": (edge_report or {}).get("min_net_edge_bps"),
+        "multiple": (edge_report or {}).get("cost_multiple_model"),
+        "execution_style": (edge_report or {}).get("execution_style"),
+        "commission_verified": (edge_report or {}).get("commission_verified"),
+        "commission_source": (edge_report or {}).get("commission_source"),
+        "components": (edge_report or {}).get("cost_components"),
+        "empirical_alpha": (edge_report or {}).get("empirical_alpha"),
+    }
     return {
         "cycle_id": cycle_id,
         "decision_time_ms": int(now * 1000),
         "strategy_authority": "IGNITION_CORE_V1",
         "strategy_code_version": getattr(state, "code_version", None),
         "strategy_config_version": getattr(state, "strategy_config_version", None),
-        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V3_BOOTSTRAP_IS_NOT_MISS",
+        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V4_BIAS_ALIGNMENT",
         "causal_episode_id": (opportunity or {}).get("causal_episode_id"),
         "inputs": {
             "bias": {
@@ -531,7 +548,8 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "open_interest": {
                 "value": float(getattr(state, "open_interest", 0.0) or 0.0),
                 "age_seconds": round(now - oi_ts, 4) if oi_ts > 0.0 else None,
-                "fresh": bool(oi_ts > 0.0 and 0.0 <= now - oi_ts <= 15.0),
+                "fresh": bool(oi_ts > 0.0 and 0.0 <= now - oi_ts <= oi_max_age),
+                "max_age_seconds": round(oi_max_age, 4),
             },
             "regime": (edge_report or {}).get("micro_regime"),
             "spot_perp_relation": (edge_report or {}).get("spot_perp_basis"),
@@ -561,19 +579,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "confidence": float((result or {}).get("confidence", 0.0) or 0.0),
             "quorum_ok": bool(quorum_ok),
             "edge_class": (edge_report or {}).get("edge_class"),
-            "cost": {
-                "cost_ok": (edge_report or {}).get("cost_ok"),
-                "budget_bps": (edge_report or {}).get("cost_budget_bps_model"),
-                "expected_bps_model": (edge_report or {}).get("expected_excursion_bps_model"),
-                "expected_net_bps_model": (edge_report or {}).get("expected_net_bps_model"),
-                "minimum_net_edge_bps": (edge_report or {}).get("min_net_edge_bps"),
-                "multiple": (edge_report or {}).get("cost_multiple_model"),
-                "execution_style": (edge_report or {}).get("execution_style"),
-                "commission_verified": (edge_report or {}).get("commission_verified"),
-                "commission_source": (edge_report or {}).get("commission_source"),
-                "components": (edge_report or {}).get("cost_components"),
-                "empirical_alpha": (edge_report or {}).get("empirical_alpha"),
-            },
+            "cost": cost_snapshot,
             "miss_taxonomy": miss,
             "failed_gates": failed,
         },
@@ -582,6 +588,12 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "reference_price": reference or None,
             "side": side,
             "hard_sl_bps": round(hard_sl_bps, 4) if hard_sl_bps is not None else None,
+            "frozen_economics": {
+                "execution_style": cost_snapshot.get("execution_style"),
+                "cost_budget_bps": cost_snapshot.get("budget_bps"),
+                "minimum_net_edge_bps": cost_snapshot.get("minimum_net_edge_bps"),
+                "commission_verified": cost_snapshot.get("commission_verified"),
+            },
             "windows_seconds": [5, 15, 30, 60],
         },
     }

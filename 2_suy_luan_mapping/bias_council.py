@@ -22,6 +22,13 @@ def side(x,t):
  return "ABSTAIN" if x is None or abs(x)<t else ("LONG" if x>0 else "SHORT")
 def fresh(ts,now,age):
  ts=float(ts or 0); return ts>0 and 0<=now-ts<=age
+def same_epoch(cur,old,venue):
+ """Price changes are causal only inside one collector epoch."""
+ try:
+  current=int((cur.get("venue_epochs") or {}).get(venue,0) or 0)
+  previous=int((old.get("venue_epochs") or {}).get(venue,0) or 0)
+  return current==previous
+ except (AttributeError,TypeError,ValueError):return False
 def ref(hist,target,lag):
  r=None
  for x in hist:
@@ -51,6 +58,14 @@ def bias_buckets(s,now,legacy):
   s.bias_price_buckets=buckets
  last=float(getattr(s,"_bias_bucket_last_sample_at",0) or 0)
  if last>0 and now-last>SPOT_AGE:
+  keys=list(buckets)
+  s.bias_history_reset_at=now
+  s.bias_history_reset_reason="BIAS_LOOP_GAP"
+  s.bias_history_reset_gap_seconds=round(now-last,6)
+  s.bias_history_previous_coverage_seconds=(
+   max(0,max(keys)-min(keys)) if keys else 0
+  )
+  s.bias_history_reset_count=int(getattr(s,"bias_history_reset_count",0) or 0)+1
   buckets.clear();s._bias_bucket_oldest_second=int(now)
  second=int(now);oldest=int(getattr(s,"_bias_bucket_oldest_second",second) or second)
  cutoff=second-330
@@ -78,28 +93,35 @@ def fut_price(s,now):
 
 def price_vote(cur,old,t,fast=False):
  if old is None:return vote(reason="WARMUP_FAST" if fast else "WARMUP")
- tt=t*(1.25 if fast else 1.0); rows=[]
+ tt=t*(1.25 if fast else 1.0); rows=[];epoch_mismatch=[]
  for n in ("spot","coinbase","futures"):
+  if not same_epoch(cur,old,n):
+   epoch_mismatch.append(n);continue
   x=chg(cur.get(n),old.get(n)); d=side(x,tt)
   if d!="ABSTAIN": rows.append((n,d,x,C((abs(x)/tt-1)/2)))
  L=[r for r in rows if r[1]=="LONG"]; S=[r for r in rows if r[1]=="SHORT"]
  maj=L if len(L)>=2 else S if len(S)>=2 else []; opp=S if maj is L else L
- if not maj:return vote(reason="PRICE_CONFLICT" if L and S else "PRICE_INCOMPLETE")
+ if not maj:return vote(reason="PRICE_CONFLICT" if L and S else "PRICE_INCOMPLETE",
+                        epoch_mismatch=epoch_mismatch)
  if fast and len(maj)!=3:return vote(reason="FAST_NEEDS_3_VENUES")
  ms=sum(r[3] for r in maj)/len(maj); os=max((r[3] for r in opp),default=0.)
  if opp and os>=.45:return vote(reason="MATERIAL_PRICE_CONFLICT")
  conf=(.60+.22*ms) if fast else (.55+.12*max(0,len(maj)-2)+.25*ms-.10*(.5+os if opp else 0))
  return vote(maj[0][1],conf,"FAST_3VENUE_PRICE" if fast else "MULTI_VENUE_PRICE",
-             agreeing=len(maj),strength=round(ms,6),opposition=round(os,6))
+             agreeing=len(maj),strength=round(ms,6),opposition=round(os,6),
+             epoch_mismatch=epoch_mismatch)
 
 def cash_price_vote(cur,old,t):
  """Independent cash direction; derivatives never define slow memory."""
  if old is None:return vote(reason="WARMUP_CASH_CONTEXT")
- rows=[]
+ rows=[];epoch_mismatch=[]
  for n in ("spot","coinbase"):
+  if not same_epoch(cur,old,n):
+   epoch_mismatch.append(n);continue
   x=chg(cur.get(n),old.get(n));d=side(x,t)
   if d!="ABSTAIN":rows.append((n,d,x,C((abs(x)/t-1)/2)))
- if len(rows)!=2:return vote(reason="CASH_CONTEXT_INCOMPLETE",venues=rows)
+ if len(rows)!=2:return vote(reason="CASH_CONTEXT_INCOMPLETE",venues=rows,
+                             epoch_mismatch=epoch_mismatch)
  if rows[0][1]!=rows[1][1]:return vote(reason="CASH_CONTEXT_CONFLICT",venues=rows)
  st=sum(r[3] for r in rows)/2.
  return vote(rows[0][1],.58+.30*st,"CASH_PRICE_ALIGNED",venues=rows,strength=st)
@@ -144,6 +166,8 @@ def s1(cur,slow,trigger,fast_ref,t):
 def s2(cur,old,t,oi_fresh,context=None):
  if not oi_fresh:return vote(reason="STALE_OI",regime="OI_UNAVAILABLE")
  if old is None:return vote(reason="WARMUP_OI",regime="WARMUP")
+ if not same_epoch(cur,old,"spot"):
+  return vote(reason="SPOT_PRICE_EPOCH_MISMATCH",regime="WARMUP")
  p,o=chg(cur.get("spot"),old.get("spot")),chg(cur.get("oi"),old.get("oi"))
  if p is None or o is None:return vote(reason="MISSING_PRICE_OR_OI",regime="MISSING")
  context_oi=chg(cur.get("oi"),context.get("oi")) if context else None
@@ -259,7 +283,12 @@ def evaluate(s,now=None,force_full=False):
  context=bucket_ref(buckets,now-CONTEXT,5.)
  fast_ref=bucket_ref(buckets,now-FAST,1.25)
  oi_context=bucket_ref(buckets,now-OI_CONTEXT,20.)
- cur={"ts":now,"spot":spot,"coinbase":cb,"futures":fut,"oi":oi};buckets[int(now)]=cur;t=thr(s,spot)
+ cur={"ts":now,"spot":spot,"coinbase":cb,"futures":fut,"oi":oi,
+      "venue_epochs":{
+       "spot":int(getattr(s,"spot_flow_epoch",0) or 0),
+       "coinbase":int(getattr(s,"coinbase_flow_epoch",0) or 0),
+       "futures":int(getattr(s,"futures_flow_epoch",0) or 0),
+      }};buckets[int(now)]=cur;t=thr(s,spot)
  sv={"S1_cross_price":(s1(cur,slow,trigger,fast_ref,t) if sf else vote(reason="STALE_SPOT")),"S2_price_x_oi":s2(cur,slow,t,mf,oi_context),"S3_multi_flow":s3(s,now)}
  st=story(sv); bias,conf,q,reason,ls,ss=combine(sv,st);total=ls+ss
  memory=direction_memory(cur,context,slow,trigger,t)

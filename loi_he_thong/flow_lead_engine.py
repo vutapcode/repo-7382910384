@@ -1,6 +1,12 @@
 """Trade-relative Cash/Perp context; never objective Spot price discovery."""
-VERSION = "FLOW_LEAD_ENGINE_V2_ALIGNED"
+from collections import deque
+import time
+
+from loi_he_thong import ignition_signals
+
+VERSION = "FLOW_LEAD_ENGINE_V3_ACTIVE_IGNITION"
 MAX_SKEW_S = 0.30
+ACTIVE_GAP_MS = 300
 
 def _f(x):
     try:
@@ -43,10 +49,96 @@ def _freshness(state):
     skew = max(values) - min(values)
     return {"aligned": skew <= MAX_SKEW_S, "skew_s": round(skew, 4)}
 
+
+def _active_histories(state):
+    """Incrementally adapt active Ignition buckets; never call retired Entry."""
+    cache = getattr(state, "_flow_lead_active_cache", None)
+    if not isinstance(cache, dict):
+        cache = {
+            "seen": {}, "epochs": {}, "pending": {}, "latest": {},
+            "flow": deque(maxlen=64), "price": deque(maxlen=96),
+            "last_flow_ms": 0, "last_price_ms": 0,
+        }
+        state._flow_lead_active_cache = cache
+
+    engine = ignition_signals.engine(state)
+    now_ms = int(time.time() * 1000)
+    histories = engine.snapshot(now_ms)
+    grouped = {}
+    epoch_reset = any(
+        venue in cache["epochs"]
+        and int(cache["epochs"][venue]) != int(node.epoch)
+        for venue, node in engine.venues.items()
+    )
+    for venue, rows in histories.items():
+        seen = int(cache["seen"].get(venue, -1))
+        for row in rows:
+            token = int(row.get("bucket_start_ms", -1))
+            if token <= seen:
+                continue
+            epoch = int(row.get("epoch", 0) or 0)
+            previous_epoch = cache["epochs"].get(venue)
+            if previous_epoch is not None and int(previous_epoch) != epoch:
+                epoch_reset = True
+            cache["epochs"][venue] = epoch
+            grouped.setdefault(token, []).append((venue, row))
+            seen = max(seen, token)
+        cache["seen"][venue] = seen
+
+    if epoch_reset:
+        cache["pending"].clear()
+        cache["latest"].clear()
+        cache["flow"].clear()
+        cache["price"].clear()
+        cache["last_flow_ms"] = cache["last_price_ms"] = 0
+
+    aliases = {
+        "binance_spot": "spot", "coinbase_spot": "coinbase",
+        "futures": "futures",
+    }
+    for token in sorted(grouped):
+        pending = cache["pending"].setdefault(token, {"ts": token / 1000.0, "venues": {}})
+        for venue, row in grouped[token]:
+            alias = aliases[venue]
+            pending["venues"][alias] = {
+                "signed_imbalance": _f(row.get("imbalance")),
+                "volume_btc": _f(row.get("total_qty")),
+            }
+            cache["latest"][alias] = {
+                "price": _f(row.get("price")), "receive_ms": token,
+                "epoch": int(row.get("epoch", 0) or 0),
+            }
+        latest = cache["latest"]
+        if all(name in latest for name in ("spot", "coinbase", "futures")):
+            stamps = [latest[name]["receive_ms"] for name in ("spot", "coinbase", "futures")]
+            if max(stamps) - min(stamps) <= int(MAX_SKEW_S * 1000):
+                if cache["last_price_ms"] and token - cache["last_price_ms"] > ACTIVE_GAP_MS:
+                    cache["price"].clear()
+                cache["price"].append({
+                    "ts": token / 1000.0,
+                    "spot": latest["spot"]["price"],
+                    "coinbase": latest["coinbase"]["price"],
+                    "futures": latest["futures"]["price"],
+                })
+                cache["last_price_ms"] = token
+
+    cutoff = now_ms - 200
+    for token in sorted(tuple(cache["pending"])):
+        if token > cutoff:
+            continue
+        row = cache["pending"].pop(token)
+        if len(row["venues"]) < 2:
+            continue
+        if cache["last_flow_ms"] and token - cache["last_flow_ms"] > ACTIVE_GAP_MS:
+            cache["flow"].clear()
+        cache["flow"].append(row)
+        cache["last_flow_ms"] = token
+    return tuple(cache["flow"]), tuple(cache["price"])
+
 def analyze(state, side):
     """Return context only; never creates a trade signal."""
-    flow_rows = list(getattr(state, "entry_causal_flow_history", ()) or ())[-24:]
-    price_rows = list(getattr(state, "entry_shadow_price_history", ()) or ())[-32:]
+    flow_rows, price_rows = _active_histories(state)
+    flow_rows, price_rows = list(flow_rows)[-24:], list(price_rows)[-32:]
     fresh = _freshness(state)
 
     if not flow_rows or not price_rows:
@@ -56,6 +148,7 @@ def analyze(state, side):
             "lead_accel_bps": 0.0, "freshness": fresh,
             "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
             "spot_price_discovery": "NOT_MEASURED_HERE",
+            "history_source": "ACTIVE_IGNITION_100MS",
         }
 
     recent = flow_rows[-12:]
@@ -73,6 +166,7 @@ def analyze(state, side):
             "freshness": fresh,
             "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
             "spot_price_discovery": "NOT_MEASURED_HERE",
+            "history_source": "ACTIVE_IGNITION_100MS",
             "policy": "NO_LEAD_INFERENCE_WHEN_FEEDS_ARE_TIME_SKEWED",
         }
 
@@ -116,5 +210,6 @@ def analyze(state, side):
         "freshness": fresh,
         "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
         "spot_price_discovery": "NOT_MEASURED_HERE",
+        "history_source": "ACTIVE_IGNITION_100MS",
         "policy": "CONTEXT_ONLY_TIME_ALIGNED_NO_SIGNAL_AUTHORITY",
     }

@@ -36,6 +36,37 @@ def state():
 
 
 class BiasCouncilTests(unittest.TestCase):
+    def test_price_memory_does_not_bridge_venue_epoch(self):
+        old = {
+            "spot": 100.0, "coinbase": 100.0, "futures": 100.0,
+            "venue_epochs": {"spot": 1, "coinbase": 1, "futures": 1},
+        }
+        current = {
+            "spot": 101.0, "coinbase": 101.0, "futures": 101.0,
+            "venue_epochs": {"spot": 2, "coinbase": 1, "futures": 1},
+        }
+        report = council.price_vote(current, old, 0.015)
+        self.assertEqual(report["vote"], "LONG")
+        self.assertEqual(report["metrics"]["epoch_mismatch"], ["spot"])
+        cash = council.cash_price_vote(current, old, 0.015)
+        self.assertEqual(cash["vote"], "ABSTAIN")
+        self.assertEqual(cash["metrics"]["epoch_mismatch"], ["spot"])
+        self.assertEqual(
+            council.s2(current, old, 0.015, True)["reason"],
+            "SPOT_PRICE_EPOCH_MISMATCH",
+        )
+
+    def test_bias_loop_gap_reset_is_observable(self):
+        s = SimpleNamespace(
+            bias_price_buckets={1: {"ts": 1.0}, 2: {"ts": 2.0}},
+            _bias_bucket_last_sample_at=2.0,
+            _bias_bucket_oldest_second=1,
+        )
+        council.bias_buckets(s, 6.0, None)
+        self.assertEqual(s.bias_history_reset_reason, "BIAS_LOOP_GAP")
+        self.assertEqual(s.bias_history_previous_coverage_seconds, 1)
+        self.assertEqual(s.bias_history_reset_count, 1)
+
     def test_price_and_price_oi_are_not_two_independent_votes(self):
         s = state()
         r = council.evaluate(s, now=100.0, force_full=False)

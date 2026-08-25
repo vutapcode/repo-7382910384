@@ -71,6 +71,37 @@ def evidence_row(receive_ms, side, price, *, strong=True, material=True):
 
 
 class IgnitionCoreTests(unittest.TestCase):
+    def test_bias_wait_reasons_are_diagnostic_only(self):
+        abstain = state(now=3.0)
+        abstain.bias_state = "ABSTAIN"
+        self.assertEqual(
+            ignition_core.evaluate(abstain, now=3.0)["reason"], "BIAS_ABSTAIN"
+        )
+        low = state(now=3.0)
+        low.bias_confidence = 0.40
+        self.assertEqual(
+            ignition_core.evaluate(low, now=3.0)["reason"],
+            "BIAS_CONFIDENCE_LOW",
+        )
+        stale = state(now=3.0)
+        stale.bias_updated_at = 0.0
+        self.assertEqual(
+            ignition_core.evaluate(stale, now=3.0)["reason"], "BIAS_STALE"
+        )
+
+    def test_precursor_progress_does_not_bridge_cash_reconnect(self):
+        s = state(now=4.0)
+        s.bias_price_buckets = {
+            1: {"ts": 1.0, "spot": 100.0, "coinbase": 100.0,
+                "venue_epochs": {"spot": 1, "coinbase": 1}},
+            4: {"ts": 4.0, "spot": 101.0, "coinbase": 101.0,
+                "venue_epochs": {"spot": 2, "coinbase": 2}},
+        }
+        report = ignition_core._precursor_cash_progress(
+            s, {"receive_time_ms": 4_000, "side": "LONG"}
+        )
+        self.assertFalse(report["valid"])
+
     def test_persistent_metaorder_is_shadow_telemetry_only(self):
         histories = {}
         for venue in ("binance_spot", "futures"):

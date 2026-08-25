@@ -16,7 +16,7 @@ from recorder.cash import (
     CashTradeBatcher, coinbase_time_ms, is_coinbase_live_match,
 )
 from recorder.depth import DepthGap, LocalOrderBook
-from recorder.decision_tap import compact_cycles_delta
+from recorder.decision_tap import DecisionTap, compact_cycles_delta
 from recorder.features import FeatureEngine
 from recorder.health import HealthState
 from recorder.replay import DeterministicReplay, iter_merged_records
@@ -375,6 +375,25 @@ class FeatureTests(unittest.TestCase):
 
 
 class ReplayTests(unittest.TestCase):
+    def test_decision_tap_counts_malformed_complete_lines(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            events = root / 'events.jsonl'
+            events.write_bytes(b'{malformed}\n')
+            config = replace(
+                RecorderConfig(), data_root=root,
+                journal_events_path=events,
+                journal_cycles_path=root / 'cycles.json',
+            )
+            health = HealthState(config)
+            tap = DecisionTap(config, mock.Mock(), health)
+            rows, _ = tap._read_new_events()
+            self.assertEqual(rows, [])
+            self.assertEqual(health.decision_tap_parse_errors, 1)
+            snapshot = health.snapshot()
+            self.assertEqual(snapshot['decision_tap_parse_errors'], 1)
+            self.assertEqual(snapshot['current_status'], 'DEGRADED')
+
     @staticmethod
     def records():
         base = {

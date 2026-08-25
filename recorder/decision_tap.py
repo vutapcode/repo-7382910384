@@ -162,6 +162,9 @@ class DecisionTap:
                 try:
                     rows.append(orjson.loads(line))
                 except orjson.JSONDecodeError:
+                    if self.health is not None:
+                        self.health.decision_tap_parse_errors += 1
+                        self.health.errors['decision_tap_parse_errors'] += 1
                     continue
             new_offset = handle.tell()
         return rows, new_offset
