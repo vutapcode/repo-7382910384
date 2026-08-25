@@ -99,7 +99,8 @@ def classify(result, state):
     calibration = edge_calibration_v2.factor(
         state, mode, str(regime.get("regime") or "NORMAL"), side, edge_class,
         ignition.get("proof_type"), ignition.get("proposer"),
-        costs.get("execution_style"),
+        costs.get("execution_style"), current_cost_bps=cost_budget,
+        minimum_net_edge_bps=reserve,
     )
     samples = int(calibration.get("samples", 0) or 0)
     execution_cost_samples = int(
@@ -147,7 +148,9 @@ def classify(result, state):
         "execution_cost_distribution_bps": calibration.get(
             "execution_cost_distribution_bps"
         ),
-        "execution_cost_authority": False,
+        "execution_cost_authority": bool(
+            calibration.get("execution_cost_authority")
+        ),
         "execution_cost_contract": cost_contract,
         "cost_components": costs, "normal_contract_ok": contract_ok,
         "fast_contract_ok": False, "hard_vetoes": hard_vetoes,

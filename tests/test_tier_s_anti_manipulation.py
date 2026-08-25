@@ -345,10 +345,40 @@ class EmpiricalEdgeTests(unittest.TestCase):
     def test_live_requires_thirty_samples_and_non_negative_lower_bound(self):
         state = SimpleNamespace()
         for value in [4.0] * 30:
-            edge_calibration_v2.record(state, "NORMAL", "TREND", value, "LONG", "HIGH_EDGE")
-        report = edge_calibration_v2.factor(state, "NORMAL", "TREND", "LONG", "HIGH_EDGE")
+            edge_calibration_v2.record(
+                state, "NORMAL", "TREND", value, "LONG", "HIGH_EDGE",
+                execution_cost_bps=4.0,
+            )
+        report = edge_calibration_v2.factor(
+            state, "NORMAL", "TREND", "LONG", "HIGH_EDGE",
+            current_cost_bps=4.0, minimum_net_edge_bps=2.0,
+        )
         self.assertTrue(report["live_empirical_ok"])
         self.assertGreaterEqual(report["lower_confidence_bound_bps"], 0.0)
+
+    def test_live_reprices_exact_cohort_to_current_cost(self):
+        state = SimpleNamespace()
+        for _ in range(30):
+            edge_calibration_v2.record(
+                state, "IGNITION", "NORMAL", 4.0, "LONG",
+                "RESIDUAL_POSITIVE", "FAILED_REVERSION", "BINANCE_SPOT",
+                "MAKER", execution_cost_bps=4.0,
+            )
+        cheap = edge_calibration_v2.factor(
+            state, "IGNITION", "NORMAL", "LONG", "RESIDUAL_POSITIVE",
+            "FAILED_REVERSION", "BINANCE_SPOT", "MAKER",
+            current_cost_bps=4.0, minimum_net_edge_bps=2.0,
+        )
+        expensive = edge_calibration_v2.factor(
+            state, "IGNITION", "NORMAL", "LONG", "RESIDUAL_POSITIVE",
+            "FAILED_REVERSION", "BINANCE_SPOT", "MAKER",
+            current_cost_bps=10.0, minimum_net_edge_bps=2.0,
+        )
+        self.assertTrue(cheap["live_empirical_ok"])
+        self.assertFalse(expensive["live_empirical_ok"])
+        self.assertEqual(
+            expensive["current_cost_adjustment"]["mean_net_bps"], -2.0
+        )
 
     def test_shadow_bucket_with_too_few_samples_cannot_go_live(self):
         state = SimpleNamespace()

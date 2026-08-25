@@ -1,7 +1,7 @@
 """Hierarchical empirical expectancy calibrator persisted by runtime state."""
 import math
 
-VERSION = "EDGE_CAL_V6_COST_TELEMETRY"
+VERSION = "EDGE_CAL_V7_CURRENT_COST_REPRICED"
 MAX_ROWS = 768
 
 
@@ -73,6 +73,18 @@ def _cost_values(rows, key):
     ]
 
 
+def _current_cost_adjusted_values(rows, key, current_cost_bps):
+    """Reprice exact historical net outcomes to today's executable cost."""
+    if current_cost_bps is None:
+        return []
+    current = float(current_cost_bps)
+    return [
+        float(row[7]) + float(row[8]) - current
+        for row in rows
+        if row[:7] == key and len(row) >= 9 and row[8] is not None
+    ]
+
+
 def _percentile(values, q):
     ordered = sorted(values)
     if not ordered:
@@ -115,7 +127,8 @@ def _estimate(values, bound):
 
 
 def factor(state, mode, regime, side=None, edge_class=None, proof_type=None,
-           proposer=None, execution_style=None):
+           proposer=None, execution_style=None, current_cost_bps=None,
+           minimum_net_edge_bps=0.0):
     key = (_u(side, "UNKNOWN"), _u(mode, "NORMAL"),
            _u(regime, "NORMAL"), _u(edge_class, "UNKNOWN"),
            _u(proof_type, "UNKNOWN"), _u(proposer, "UNKNOWN"),
@@ -123,6 +136,26 @@ def factor(state, mode, regime, side=None, edge_class=None, proof_type=None,
     rows = list(_rows(state))
     exact_costs = _cost_values(rows, key)
     cost_distribution = _cost_distribution(exact_costs)
+    adjusted_values = _current_cost_adjusted_values(
+        rows, key, current_cost_bps
+    )
+    adjusted = None
+    if len(adjusted_values) >= 30:
+        _, adjusted_mean, adjusted_win_rate, adjusted_lower = _estimate(
+            adjusted_values, .08
+        )
+        reserve = max(0.0, float(minimum_net_edge_bps or 0.0))
+        adjusted = {
+            "samples": len(adjusted_values),
+            "current_execution_cost_bps": round(float(current_cost_bps), 6),
+            "minimum_net_edge_bps": round(reserve, 6),
+            "mean_net_bps": round(adjusted_mean, 4),
+            "lower_confidence_bound_bps": round(adjusted_lower, 4),
+            "win_rate": round(adjusted_win_rate, 4),
+            "live_empirical_ok": bool(
+                adjusted_mean > reserve and adjusted_lower >= reserve
+            ),
+        }
     levels = (("EXACT", 30, .08), ("SIDE_REGIME_PROOF_EXEC", 40, .06),
               ("REGIME_PROOF_EXEC", 48, .05), ("PROOF_EXEC", 64, .04))
     for level, minimum, bound in levels:
@@ -134,13 +167,17 @@ def factor(state, mode, regime, side=None, edge_class=None, proof_type=None,
                 "factor": round(factor_value, 4), "mean_net_bps": round(mean, 4),
                 "lower_confidence_bound_bps": round(lower, 4),
                 "win_rate": round(win_rate, 4), "status": "ACTIVE",
-                "live_empirical_ok": bool(mean > 0.0 and lower >= 0.0),
+                "live_empirical_ok": bool(
+                    level == "EXACT" and adjusted is not None
+                    and adjusted["live_empirical_ok"]
+                ),
                 "level": level, "minimum_samples": minimum,
                 "max_adjust": bound, "bucket": "|".join(key),
                 "total_samples": len(rows),
                 "execution_cost_samples": len(exact_costs),
                 "execution_cost_distribution_bps": cost_distribution,
-                "execution_cost_authority": False,
+                "current_cost_adjustment": adjusted,
+                "execution_cost_authority": True,
             }
             state.edge_cal_v2 = out
             return out
@@ -150,6 +187,7 @@ def factor(state, mode, regime, side=None, edge_class=None, proof_type=None,
            "bucket": "|".join(key), "total_samples": len(rows),
            "execution_cost_samples": len(exact_costs),
            "execution_cost_distribution_bps": cost_distribution,
-           "execution_cost_authority": False}
+           "current_cost_adjustment": adjusted,
+           "execution_cost_authority": True}
     state.edge_cal_v2 = out
     return out

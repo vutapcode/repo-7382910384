@@ -13,7 +13,7 @@ import time
 import websockets
 
 
-VERSION = "WSTRADE_PRIVATE_USER_STREAM_V1"
+VERSION = "WSTRADE_PRIVATE_USER_STREAM_V2_COMMISSION_AUDIT"
 STREAM_URL = "wss://fstream.binance.com/ws/{listen_key}"
 KEEPALIVE_SECONDS = 25 * 60
 MAX_ORDER_EVENTS = 512
@@ -24,6 +24,10 @@ def _ensure_state(state):
         state.wstrade_user_orders = {}
     if not isinstance(getattr(state, "wstrade_user_event_log", None), deque):
         state.wstrade_user_event_log = deque(maxlen=MAX_ORDER_EVENTS)
+    if not isinstance(getattr(state, "wstrade_user_order_commissions", None), dict):
+        state.wstrade_user_order_commissions = {}
+    if not isinstance(getattr(state, "wstrade_user_order_commission_trades", None), dict):
+        state.wstrade_user_order_commission_trades = {}
     state.wstrade_user_stream_version = VERSION
 
 
@@ -75,12 +79,32 @@ def apply_event(state, payload, received_at=None):
     if event_type == "ORDER_TRADE_UPDATE":
         order = dict(payload.get("o") or {})
         client_id = str(order.get("c", ""))
+        trade_id = order.get("t")
+        commission_asset = str(order.get("N") or "")
+        try:
+            commission_amount = float(order.get("n", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            commission_amount = 0.0
+        totals = dict(state.wstrade_user_order_commissions.get(client_id) or {})
+        seen = set(state.wstrade_user_order_commission_trades.get(client_id) or ())
+        fill_key = str(trade_id) if trade_id not in (None, "", 0, "0") else None
+        unseen_fill = fill_key is None or fill_key not in seen
+        if client_id and commission_asset and commission_amount and unseen_fill:
+            totals[commission_asset] = (
+                float(totals.get(commission_asset, 0.0) or 0.0)
+                + commission_amount
+            )
+            state.wstrade_user_order_commissions[client_id] = totals
+            if fill_key is not None:
+                seen.add(fill_key)
+                state.wstrade_user_order_commission_trades[client_id] = seen
         row = {
             "event_time": event_time,
             "transaction_time": float(payload.get("T", 0.0) or 0.0) / 1000.0,
             "symbol": str(order.get("s", "")),
             "clientOrderId": client_id,
             "orderId": order.get("i"),
+            "tradeId": trade_id,
             "side": str(order.get("S", "")),
             "positionSide": str(order.get("ps", "")),
             "type": str(order.get("o", "")),
@@ -92,11 +116,17 @@ def apply_event(state, payload, received_at=None):
             "lastFilledQty": str(order.get("l", "0")),
             "lastFilledPrice": str(order.get("L", "0")),
             "realizedPnl": str(order.get("rp", "0")),
+            "commissionAmount": str(order.get("n", "0")),
+            "commissionAsset": commission_asset or None,
+            "commissionByAssetCumulative": dict(totals),
         }
         if client_id:
             state.wstrade_user_orders[client_id] = row
             while len(state.wstrade_user_orders) > MAX_ORDER_EVENTS:
-                state.wstrade_user_orders.pop(next(iter(state.wstrade_user_orders)))
+                oldest = next(iter(state.wstrade_user_orders))
+                state.wstrade_user_orders.pop(oldest)
+                state.wstrade_user_order_commissions.pop(oldest, None)
+                state.wstrade_user_order_commission_trades.pop(oldest, None)
         state.wstrade_user_event_log.append(row)
         state.wstrade_user_order_revision = int(
             getattr(state, "wstrade_user_order_revision", 0) or 0
@@ -170,6 +200,9 @@ async def run(api, state, event_callback=None):
                         keepalive.result()
                     raw = receive.result()
                     result = apply_event(state, json.loads(raw))
+                    if result == "ORDER_TRADE_UPDATE" and event_callback:
+                        row = state.wstrade_user_event_log[-1]
+                        event_callback("LIVE_ORDER_UPDATE", dict(row))
                     if result == "LISTEN_KEY_EXPIRED":
                         break
         except asyncio.CancelledError:

@@ -90,6 +90,51 @@ class TradeAuditMirrorTests(unittest.TestCase):
             self.assertEqual(second.run_once(), 0)
             self.assertEqual(len((output / "trades.jsonl").read_text().splitlines()), 1)
 
+    def test_mirror_consumes_live_lifecycle_and_commission_updates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "events.jsonl"
+            rows = [
+                {
+                    "ts": 1.0, "event": "LIVE_ENTRY",
+                    "position_cycle_id": "live:LONG:1",
+                    "decision_cycle_id": "decision:live:1",
+                    "causal_episode_id": "ign:spot:LONG:1",
+                    "side": "LONG", "qty_btc": 0.001, "price": 100.0,
+                    "proof_type": "FAILED_REVERSION",
+                    "proposer": "binance_spot", "regime": "NORMAL",
+                    "frozen_cost_contract": {"total_cost_bps": 8.5},
+                },
+                {
+                    "ts": 1.1, "event": "LIVE_ORDER_UPDATE",
+                    "clientOrderId": "ws_entry_1", "orderId": 7,
+                    "executionType": "TRADE", "status": "FILLED",
+                    "commissionAmount": "0.02", "commissionAsset": "USDT",
+                    "commissionByAssetCumulative": {"USDT": 0.02},
+                },
+                {
+                    "ts": 2.0, "event": "LIVE_EXIT",
+                    "position_cycle_id": "live:LONG:1",
+                    "decision_cycle_id": "decision:live:1",
+                    "causal_episode_id": "ign:spot:LONG:1",
+                    "side": "LONG", "entry_price": 100.0,
+                    "exit_price": 100.2, "gross_pnl_bps": 20.0,
+                    "fee_bps": 7.0, "net_pnl_bps": 13.0,
+                    "reason": "TIER_S_PRICE_PLUS_CAUSE_EXIT",
+                    "commission_source": "BINANCE_ORDER_TRADE_UPDATE",
+                },
+            ]
+            source.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            mirror = audit.AuditMirror(source, root / "out")
+            self.assertEqual(mirror.run_once(), 3)
+            trade = json.loads((root / "out" / "trades.jsonl").read_text())
+            self.assertFalse(trade["virtual_only"])
+            self.assertEqual(trade["trade_id"], "live:LONG:1")
+            self.assertEqual(trade["entry"]["proof_type"], "FAILED_REVERSION")
+            self.assertEqual(trade["exit"]["net_pnl_bps"], 13.0)
+            activity = (root / "out" / "activity.jsonl").read_text()
+            self.assertIn('"event":"LIVE_ORDER_UPDATE"', activity)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -83,6 +83,20 @@ def _executed_qty(order):
         return 0.0
 
 
+def _commission_snapshot(state, client_id):
+    row = private_user_stream.order_snapshot(state, client_id) or {}
+    return {
+        "client_order_id": client_id,
+        "commission_amount": row.get("commissionAmount"),
+        "commission_asset": row.get("commissionAsset"),
+        "commission_by_asset_cumulative": dict(
+            row.get("commissionByAssetCumulative") or {}
+        ),
+        "status": row.get("status"),
+        "execution_type": row.get("executionType"),
+    }
+
+
 def _checkpoint_runtime(state):
     callback = getattr(state, "wstrade_runtime_state_save", None)
     if callable(callback):
@@ -737,13 +751,29 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
         )
         return None
     if event_callback:
+        ignition = dict(result.get("ignition") or {})
+        edge = dict(result.get("edge_tier") or {})
+        regime = dict(edge.get("micro_regime") or {})
         event_callback("LIVE_ENTRY", {
+            "position_cycle_id": position.position_cycle_id,
             "side": side, "qty_btc": qty, "price": fill,
             "hard_sl": hard_sl, "risk_plan": risk_plan,
             "client_order_id": client_id, "lane": result.get("lane", "CORE"),
             "decision_cycle_id": result.get("decision_cycle_id"),
             "canonical_opportunity_id": result.get("canonical_opportunity_id"),
             "causal_episode_id": result.get("causal_episode_id"),
+            "proof_type": ignition.get("proof_type"),
+            "proposer": ignition.get("proposer"),
+            "regime": regime.get("regime"),
+            "entry_mode": edge.get("entry_mode"),
+            "edge_class": edge.get("edge_class"),
+            "frozen_cost_contract": dict(
+                result.get("execution_cost_contract")
+                or edge.get("execution_cost_contract") or {}
+            ),
+            "execution_cost_plan": dict(position.execution_cost_plan or {}),
+            "order_commission": _commission_snapshot(state, client_id),
+            "entry_causal_thesis": dict(position.entry_causal_thesis or {}),
         })
     return position
 
@@ -787,13 +817,54 @@ async def close_position(api, state, position, reason, now=None, event_callback=
         state.shadow_persistence_dirty = True
         _seal_live(state, "LIVE_EXIT_CHECKPOINT_FAILED", recovery=True)
     if event_callback:
+        exit_price = float((result or {}).get("avgPrice", 0.0) or 0.0)
+        direction = 1.0 if position.side == "LONG" else -1.0
+        gross_bps = (
+            direction * (exit_price - position.entry_price)
+            / position.entry_price * 10_000.0
+            if position.entry_price > 0.0 and exit_price > 0.0 else None
+        )
+        cost_plan = dict(getattr(position, "execution_cost_plan", {}) or {})
+        modeled_fee_bps = float(cost_plan.get("roundtrip_fee_bps", 0.0) or 0.0)
+        entry_commission = _commission_snapshot(
+            state, getattr(position, "entry_client_order_id", None)
+        )
+        exit_commission = _commission_snapshot(state, client_id)
+        commission_usdt = sum(
+            float((item.get("commission_by_asset_cumulative") or {}).get("USDT", 0.0) or 0.0)
+            for item in (entry_commission, exit_commission)
+        )
+        actual_fee_bps = (
+            commission_usdt / (position.entry_price * position.qty) * 10_000.0
+            if commission_usdt > 0.0 and position.entry_price > 0.0
+            and position.qty > 0.0 else None
+        )
+        fee_bps = actual_fee_bps if actual_fee_bps is not None else modeled_fee_bps
         event_callback("LIVE_EXIT", {
+            "position_cycle_id": position.position_cycle_id,
             "side": position.side, "qty_btc": position.qty,
             "entry_price": position.entry_price,
-            "exit_price": float((result or {}).get("avgPrice", 0.0) or 0.0),
+            "exit_price": exit_price,
             "reason": reason,
+            "client_order_id": client_id,
             "decision_cycle_id": getattr(position, "decision_cycle_id", None),
             "causal_episode_id": getattr(position, "causal_episode_id", None),
+            "gross_pnl_bps": round(gross_bps, 6) if gross_bps is not None else None,
+            "fee_bps": round(fee_bps, 6),
+            "net_pnl_bps": (
+                round(gross_bps - fee_bps, 6)
+                if gross_bps is not None else None
+            ),
+            "commission_source": (
+                "BINANCE_ORDER_TRADE_UPDATE"
+                if actual_fee_bps is not None else "VERIFIED_ACCOUNT_RATE_MODEL"
+            ),
+            "entry_order_commission": entry_commission,
+            "exit_order_commission": exit_commission,
+            "execution_cost_plan": cost_plan,
+            "entry_causal_thesis": dict(
+                getattr(position, "entry_causal_thesis", {}) or {}
+            ),
         })
     return True
 

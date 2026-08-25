@@ -204,6 +204,11 @@ def _entry_record(row, basis):
         "feasibility": row.get("feasibility"),
         "causal_thesis": row.get("entry_causal_thesis"),
         "regime": row.get("regime_at_entry"),
+        "proof_type": row.get("proof_type"),
+        "proposer": row.get("proposer"),
+        "frozen_cost_contract": row.get("frozen_cost_contract"),
+        "execution_cost_plan": row.get("execution_cost_plan"),
+        "order_commission": row.get("order_commission"),
         "basis": basis,
     }
 
@@ -220,12 +225,20 @@ def _exit_record(row):
         "net_pnl_usdt": row.get("net_pnl_usdt"),
         "gross_pnl_bps": row.get("gross_pnl_bps"),
         "net_pnl_bps": row.get("net_pnl_bps"),
+        "fee_bps": row.get("fee_bps"),
         "net_pnl_r": row.get("net_pnl_r"),
         "holding_seconds": row.get("holding_time_seconds"),
         "best_r": row.get("best_r"),
         "floor_r": row.get("floor_r"),
         "balance_usdt": row.get("balance_usdt"),
-        "reason": row.get("risk_reason") or guardian.get("reason"),
+        "reason": (
+            row.get("risk_reason") or row.get("reason")
+            or guardian.get("reason")
+        ),
+        "commission_source": row.get("commission_source"),
+        "entry_order_commission": row.get("entry_order_commission"),
+        "exit_order_commission": row.get("exit_order_commission"),
+        "execution_cost_plan": row.get("execution_cost_plan"),
         "guardian": {
             "decision": guardian.get("decision"),
             "reason": guardian.get("reason"),
@@ -362,22 +375,30 @@ class AuditMirror:
         if event == "DECISION_EVALUATED":
             self._remember_decision(row)
             return
-        if event == "ENTRY":
-            trade_id = str(row.get("cycle_id") or "")
+        if event in {"ENTRY", "LIVE_ENTRY"}:
+            live = event == "LIVE_ENTRY"
+            trade_id = str((
+                row.get("position_cycle_id") if live else row.get("cycle_id")
+            ) or "")
             basis = self.decisions.get(str(row.get("decision_cycle_id") or ""))
+            entry_row = dict(row)
+            entry_row["cycle_id"] = trade_id
+            if live:
+                entry_row["actual_qty_btc"] = row.get("qty_btc")
+                entry_row["regime_at_entry"] = row.get("regime")
             trade = {
                 "schema_version": "WSTRADE_OPERATOR_TRADE_AUDIT_V1",
-                "virtual_only": True,
+                "virtual_only": not live,
                 "status": "OPEN",
                 "trade_id": trade_id,
-                "entry": _entry_record(row, basis),
+                "entry": _entry_record(entry_row, basis),
                 "timeline": [],
                 "exit": None,
             }
             self.active[trade_id] = trade
             self._latest(trade)
             _append_json(self.activity, {
-                "event": "ENTRY", "source_offset": source_offset,
+                "event": event, "source_offset": source_offset,
                 "trade": trade,
             })
             return
@@ -396,11 +417,14 @@ class AuditMirror:
             trade["timeline"] = trade["timeline"][-600:]
             self._latest(trade)
             return
-        if event == "EXIT":
-            trade_id = str(row.get("cycle_id") or "")
+        if event in {"EXIT", "LIVE_EXIT"}:
+            live = event == "LIVE_EXIT"
+            trade_id = str((
+                row.get("position_cycle_id") if live else row.get("cycle_id")
+            ) or "")
             trade = self.active.pop(trade_id, None) or {
                 "schema_version": "WSTRADE_OPERATOR_TRADE_AUDIT_V1",
-                "virtual_only": True, "trade_id": trade_id,
+                "virtual_only": not live, "trade_id": trade_id,
                 "entry": {
                     "trade_id": trade_id,
                     "decision_cycle_id": row.get("decision_cycle_id"),
@@ -420,8 +444,28 @@ class AuditMirror:
                 self.completed.add(trade_id)
             self._latest(trade)
             _append_json(self.activity, {
-                "event": "EXIT", "source_offset": source_offset,
+                "event": event, "source_offset": source_offset,
                 "trade_id": trade_id, "exit": trade["exit"],
+            })
+            return
+        if event == "LIVE_ORDER_UPDATE":
+            _append_json(self.activity, {
+                "event": event,
+                "source_offset": source_offset,
+                "ts": row.get("ts"),
+                "client_order_id": row.get("clientOrderId"),
+                "order_id": row.get("orderId"),
+                "trade_id": row.get("tradeId"),
+                "execution_type": row.get("executionType"),
+                "status": row.get("status"),
+                "last_filled_qty": row.get("lastFilledQty"),
+                "last_filled_price": row.get("lastFilledPrice"),
+                "realized_pnl": row.get("realizedPnl"),
+                "commission_amount": row.get("commissionAmount"),
+                "commission_asset": row.get("commissionAsset"),
+                "commission_by_asset_cumulative": row.get(
+                    "commissionByAssetCumulative"
+                ),
             })
             return
         if event in {
