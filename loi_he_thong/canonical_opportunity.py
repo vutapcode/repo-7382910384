@@ -200,6 +200,14 @@ def _reservation_context(state, opportunity_id, now):
 def reserve(state, opportunity_id, now=None):
     """Reserve one GO without consuming it; duplicate attempts are rejected until release."""
     opportunity_id = int(opportunity_id or 0)
+    # If execution BBO fields exist, an invalid book is a transient pre-submit
+    # condition: do not reserve/consume the causal opportunity yet.
+    if hasattr(state, "execution_best_bid") or hasattr(state, "execution_best_ask"):
+        bid = float(getattr(state, "execution_best_bid", 0.0) or 0.0)
+        ask = float(getattr(state, "execution_best_ask", 0.0) or 0.0)
+        if bid <= 0.0 or ask <= bid:
+            state.canonical_last_reserve_reject = "BBO_UNAVAILABLE_PRE_SUBMIT"
+            return False
     consumed = int(
         getattr(state, "canonical_last_consumed_opportunity_id", 0) or 0
     )
