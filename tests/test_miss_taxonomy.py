@@ -31,6 +31,7 @@ class MissTaxonomyTests(unittest.TestCase):
         oi = snapshot["inputs"]["open_interest"]
         self.assertTrue(oi["fresh"])
         self.assertEqual(oi["max_age_seconds"], 18.0)
+        self.assertIn("opportunity_research", snapshot["inputs"])
 
     def test_accepted_bootstrap_shadow_trade_is_not_a_miss(self):
         result = {

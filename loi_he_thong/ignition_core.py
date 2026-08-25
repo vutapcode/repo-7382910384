@@ -189,9 +189,20 @@ def _remember_bias(state, now=None):
     price_seat = seats.get("S1_cross_price") or {}
     flow_seat = seats.get("S3_multi_flow") or {}
     oi_seat = seats.get("S2_price_x_oi") or {}
+    compact_votes = {
+        name: {
+            "vote": str((seat or {}).get("vote") or "ABSTAIN"),
+            "confidence": _f((seat or {}).get("confidence")),
+            "reason": str((seat or {}).get("reason") or "UNKNOWN"),
+        }
+        for name, seat in seats.items() if isinstance(seat, dict)
+    }
     row = {
         "direction": str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper(),
         "confidence": _f(getattr(state, "bias_confidence", 0.0)),
+        "raw_direction": str(council.get("raw_bias") or "ABSTAIN").upper(),
+        "raw_confidence": _f(council.get("raw_confidence")),
+        "s_votes": compact_votes,
         "updated_at": _f(getattr(state, "bias_updated_at", 0.0)),
         "version": getattr(state, "bias_version", None),
         "captured_at": time.time() if now is None else float(now),
@@ -221,9 +232,12 @@ def _remember_bias(state, now=None):
     }
     if not history or (
         history[-1].get("direction"), history[-1].get("confidence"),
-        history[-1].get("updated_at"), history[-1].get("direction_context")
+        history[-1].get("updated_at"), history[-1].get("raw_direction"),
+        history[-1].get("raw_confidence"), history[-1].get("s_votes"),
+        history[-1].get("direction_context")
     ) != (
         row["direction"], row["confidence"], row["updated_at"],
+        row["raw_direction"], row["raw_confidence"], row["s_votes"],
         row["direction_context"],
     ):
         history.append(row)
@@ -296,13 +310,21 @@ def _precursor_cash_progress(state, signal):
         return {
             "valid": False, "source": "BIAS_PRICE_BUCKETS_UNAVAILABLE",
             "progress_bps": 0.0, "horizon_seconds": None,
-            "venue_moves_bps": {}, "cash_coverage": 0,
+            "venue_moves_bps": {}, "cash_coverage": 0, "horizons": {},
+            "continuity_status": "UNMEASURED_REQUIRES_EXECUTED_FLOW_PATH",
+            "authority": False,
         }
     sign = _sign(signal.get("side"))
     best = None
+    horizons = {}
     for horizon in (3, 6, 15):
         reference = _bias_bucket_at(buckets, signal_s - horizon, 2.0)
         if reference is None:
+            horizons[str(horizon)] = {
+                "valid": False, "reason": "REFERENCE_UNAVAILABLE",
+                "progress_bps": 0.0, "venue_moves_bps": {},
+                "cash_coverage": 0,
+            }
             continue
         moves = {}
         for source, venue in (("spot", "binance_spot"), ("coinbase", "coinbase_spot")):
@@ -313,6 +335,11 @@ def _precursor_cash_progress(state, signal):
             if current_price > 0.0 and reference_price > 0.0:
                 moves[venue] = sign * _bps(current_price, reference_price)
         if not moves:
+            horizons[str(horizon)] = {
+                "valid": False, "reason": "NO_SAME_EPOCH_CASH_PRICE",
+                "progress_bps": 0.0, "venue_moves_bps": {},
+                "cash_coverage": 0, "reference_ts": reference.get("ts"),
+            }
             continue
         # Both cash venues have equal authority.  With one venue missing we
         # retain measurement coverage metadata instead of inventing agreement.
@@ -325,13 +352,64 @@ def _precursor_cash_progress(state, signal):
             "venue_moves_bps": {name: round(value, 6) for name, value in moves.items()},
             "cash_coverage": len(moves),
         }
+        horizons[str(horizon)] = dict(candidate, reference_ts=reference.get("ts"))
         if best is None or progress > _f(best.get("progress_bps")):
             best = candidate
-    return best or {
+    base = best or {
         "valid": False, "source": "PRECURSOR_REFERENCE_UNAVAILABLE",
         "progress_bps": 0.0, "horizon_seconds": None,
         "venue_moves_bps": {}, "cash_coverage": 0,
     }
+    return dict(
+        base, horizons=horizons,
+        continuity_status="UNMEASURED_REQUIRES_EXECUTED_FLOW_PATH",
+        authority=False,
+    )
+
+
+def _research_reject_context(state, signal, bias, reason):
+    """Group pre-authority rejects without creating a canonical opportunity."""
+    receive_ms = int(signal.get("receive_time_ms", 0) or 0)
+    side = str(signal.get("side") or "ABSTAIN").upper()
+    previous = dict(getattr(state, "_ignition_research_reject", {}) or {})
+    same_wave = bool(
+        previous.get("side") == side
+        and 0 <= receive_ms - int(previous.get("last_evidence_ms", 0) or 0)
+        <= EVIDENCE_GAP_MS
+    )
+    candidate_id = (
+        previous.get("research_candidate_id") if same_wave else
+        "ign-research:%s:%s:%d" % (
+            str(signal.get("venue") or "unknown"), side,
+            int(signal.get("bucket_start_ms", receive_ms) or receive_ms),
+        )
+    )
+    venues = set(previous.get("observed_venues") or ()) if same_wave else set()
+    venues.add(str(signal.get("venue") or "unknown"))
+    grouped = {
+        "research_candidate_id": candidate_id,
+        "side": side,
+        "last_evidence_ms": receive_ms,
+        "observed_venues": sorted(venues),
+    }
+    state._ignition_research_reject = grouped
+    current = dict(getattr(state, "_ignition_last_reject_payload", {}) or {})
+    payload = {
+        "research_candidate_id": candidate_id,
+        "research_candidate_transition": bool(
+            current.get("research_candidate_transition") or not same_wave
+        ),
+        "research_only": True,
+        "authority": False,
+        "policy": "TELEMETRY_ONLY_NEVER_CREATES_CANONICAL_OPPORTUNITY",
+        "bias_snapshot": dict(bias or {}),
+        "proposer": signal.get("venue"),
+        "leader": "UNKNOWN",
+        "observed_venues": sorted(venues),
+        "research_reject_reason": str(reason),
+    }
+    state._ignition_last_reject_payload = payload
+    return payload
 
 
 def _start_episode(state, signal):
@@ -339,6 +417,9 @@ def _start_episode(state, signal):
     side = str(signal.get("side") or "NEUTRAL").upper()
     if side != bias.get("direction") or _f(bias.get("confidence")) < BIAS_MIN_CONF:
         state._ignition_last_reject = "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS"
+        _research_reject_context(
+            state, signal, bias, "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS"
+        )
         return None
     context = bias.get("direction_context") or {}
     candidate = str(context.get("candidate_side") or "ABSTAIN").upper()
@@ -348,9 +429,15 @@ def _start_episode(state, signal):
         and candidate != side
     ):
         state._ignition_last_reject = "BIAS_REVERSAL_CANDIDATE_PENDING"
+        _research_reject_context(
+            state, signal, bias, "BIAS_REVERSAL_CANDIDATE_PENDING"
+        )
         return None
     if bool(context.get("flow_price_trap")):
         state._ignition_last_reject = "FROZEN_BIAS_FLOW_PRICE_TRAP"
+        _research_reject_context(
+            state, signal, bias, "FROZEN_BIAS_FLOW_PRICE_TRAP"
+        )
         return None
     episode = {
         "causal_episode_id": _episode_id(signal), "side": side,
@@ -1137,6 +1224,9 @@ def evaluate(state, now=None, side=None):
     state.persistent_metaorder_shadow = persistent_snapshot
     state.persistent_metaorder_updated_at = now
     rows = _new_signals(state, histories)
+    # This payload describes only a proposer observed in this evaluator cycle;
+    # never let an old research reject masquerade as fresh evidence.
+    state._ignition_last_reject_payload = {}
     episode = getattr(state, "_ignition_episode", None)
 
     if episode is not None:
@@ -1222,7 +1312,10 @@ def evaluate(state, now=None, side=None):
     if episode is None:
         _remember_bias(state, now)
         reason = str(getattr(state, "_ignition_last_reject", "WAIT_IGNITION") or "WAIT_IGNITION")
-        return _wait(now, side, reason, freshness=freshness)
+        research = dict(getattr(state, "_ignition_last_reject_payload", {}) or {})
+        return _wait(
+            now, side, reason, episode=research or None, freshness=freshness
+        )
     if now_ms - int(episode.get("last_evidence_ms", 0)) > EVIDENCE_GAP_MS:
         state._ignition_episode = None
         state._ignition_last_reject = "IGNITION_EVIDENCE_DECAYED"

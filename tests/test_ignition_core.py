@@ -101,6 +101,51 @@ class IgnitionCoreTests(unittest.TestCase):
             s, {"receive_time_ms": 4_000, "side": "LONG"}
         )
         self.assertFalse(report["valid"])
+        self.assertFalse(report["authority"])
+        self.assertEqual(
+            report["continuity_status"],
+            "UNMEASURED_REQUIRES_EXECUTED_FLOW_PATH",
+        )
+
+    def test_precursor_reports_each_horizon_without_changing_winner(self):
+        s = state(now=16.0)
+        s.bias_price_buckets = {
+            1: {"ts": 1.0, "spot": 100.0, "coinbase": 100.0,
+                "venue_epochs": {"spot": 1, "coinbase": 1}},
+            10: {"ts": 10.0, "spot": 100.10, "coinbase": 100.10,
+                 "venue_epochs": {"spot": 1, "coinbase": 1}},
+            13: {"ts": 13.0, "spot": 100.20, "coinbase": 100.20,
+                 "venue_epochs": {"spot": 1, "coinbase": 1}},
+            16: {"ts": 16.0, "spot": 100.30, "coinbase": 100.30,
+                 "venue_epochs": {"spot": 1, "coinbase": 1}},
+        }
+        report = ignition_core._precursor_cash_progress(
+            s, {"receive_time_ms": 16_000, "side": "LONG"}
+        )
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["horizon_seconds"], 15)
+        self.assertEqual(set(report["horizons"]), {"3", "6", "15"})
+        self.assertGreater(
+            report["horizons"]["15"]["progress_bps"],
+            report["horizons"]["3"]["progress_bps"],
+        )
+
+    def test_low_frozen_bias_reject_preserves_research_snapshot(self):
+        s = state(now=3.2)
+        s._ignition_bias_snapshots = __import__("collections").deque([
+            {
+                "direction": "LONG", "confidence": 0.5238,
+                "raw_direction": "LONG", "raw_confidence": 0.51,
+                "captured_at": 2.0, "updated_at": 2.0,
+                "direction_context": {}, "s_votes": {},
+            }
+        ], maxlen=40)
+        signal = evidence_row(3_200, "LONG", 100.01)
+        self.assertIsNone(ignition_core._start_episode(s, signal))
+        payload = s._ignition_last_reject_payload
+        self.assertEqual(payload["bias_snapshot"]["confidence"], 0.5238)
+        self.assertFalse(payload["authority"])
+        self.assertTrue(payload["research_candidate_transition"])
 
     def test_persistent_metaorder_is_shadow_telemetry_only(self):
         histories = {}

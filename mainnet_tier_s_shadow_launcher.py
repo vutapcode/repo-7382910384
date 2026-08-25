@@ -19,6 +19,7 @@ from loi_he_thong import canonical_opportunity
 from loi_he_thong import execution_causal_revalidation
 from loi_he_thong import host_cpu_governor
 from loi_he_thong import microstructure_regime
+from loi_he_thong import opportunity_research_matrix
 from loi_he_thong import regime_oi_freshness_hook
 from loi_he_thong import shadow_daily_loss
 from loi_he_thong import shadow_execution_model
@@ -537,6 +538,8 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "bias": {
                 "direction": getattr(state, "bias_state", "ABSTAIN"),
                 "confidence": float(getattr(state, "bias_confidence", 0.0) or 0.0),
+                "raw_direction": bias.get("raw_bias"),
+                "raw_confidence": bias.get("raw_confidence"),
                 "reason": bias.get("reason"),
                 "hysteresis": bias.get("hysteresis"),
                 "story": bias.get("story"),
@@ -568,6 +571,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "ignition": dict((result or {}).get("ignition") or {}),
             "persistent_metaorder_shadow": dict(
                 (result or {}).get("persistent_metaorder_shadow") or {}
+            ),
+            "opportunity_research": dict(
+                (result or {}).get("opportunity_research") or {}
             ),
         },
         "output": {
@@ -1510,6 +1516,11 @@ async def _entry_loop():
             decision_cycle_id = _decision_cycle_id(s, now)
             result = dict(result)
             result["decision_cycle_id"] = decision_cycle_id
+            opportunity_research = opportunity_research_matrix.build(
+                s, result, edge_report
+            )
+            result["opportunity_research"] = opportunity_research
+            s.opportunity_research_matrix = opportunity_research
             s.entry_shadow_council = result
             vote_status = {
                 name: str((payload or {}).get("status", "MISSING"))
@@ -1546,6 +1557,9 @@ async def _entry_loop():
                 blocking_stage,
                 str(persistent_shadow.get("status", "OBSERVING")),
                 str(persistent_shadow.get("candidate_side", "ABSTAIN")),
+                str((opportunity_research.get("pre_bias") or {}).get("band", "UNOBSERVED")),
+                str(opportunity_research.get("simultaneous_cash_acceptance", "NOT_OBSERVED")),
+                str(opportunity_research.get("research_candidate_id") or ""),
             )
             decision_changed = decision_identity != last_decision_identity
             # A qualified GO can exist for less than the telemetry debounce.
@@ -1555,6 +1569,7 @@ async def _entry_loop():
                 opportunity.get("new")
                 or opportunity.get("qualification_transition")
                 or persistent_shadow.get("transition")
+                or opportunity_research.get("transition")
             )
             decision_event_emitted = False
             recorder_snapshot = None
@@ -1610,6 +1625,7 @@ async def _entry_loop():
                     ),
                     "ignition": dict(result.get("ignition") or {}),
                     "persistent_metaorder_shadow": persistent_shadow,
+                    "opportunity_research": opportunity_research,
                     "ignition_state": (result.get("ignition") or {}).get("state"),
                     "ignition_proposer": (result.get("ignition") or {}).get("proposer"),
                     "ignition_leader": (result.get("ignition") or {}).get("leader"),
