@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 import mainnet_tier_s_shadow_launcher as launcher
+from recorder.decision_outcomes import DecisionOutcomeTracker
 
 
 class MissTaxonomyTests(unittest.TestCase):
@@ -44,6 +45,22 @@ class MissTaxonomyTests(unittest.TestCase):
             "spot_perp_basis": {},
         }
         self.assertEqual(launcher._miss_taxonomy(result, edge, True), (None, []))
+
+
+    def test_proximity_cluster_does_not_dedupe_distinct_causal_episodes(self):
+        tracker = DecisionOutcomeTracker(lambda *args, **kwargs: None)
+        wave_a = tracker._economic_wave_id("ep-a", "LONG", 1_000, 100.0)
+        wave_b = tracker._economic_wave_id("ep-b", "LONG", 4_000, 100.01)
+        cluster_a = tracker._economic_cluster_id("LONG", 1_000, 100.0)
+        cluster_b = tracker._economic_cluster_id("LONG", 4_000, 100.01)
+
+        self.assertNotEqual(wave_a, wave_b)
+        self.assertEqual(cluster_a, cluster_b)
+        self.assertEqual(
+            wave_a,
+            tracker._economic_wave_id("ep-a", "LONG", 4_500, 100.02),
+        )
+
 
 
 if __name__ == "__main__":
