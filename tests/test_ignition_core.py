@@ -390,6 +390,25 @@ class IgnitionCoreTests(unittest.TestCase):
         captured = ignition_core.evaluate(s, now=3.403)
         self.assertNotEqual(captured["decision"], "GO")
 
+    def test_metaorder_proof_keeps_brief_nonmaterial_pause(self):
+        first = evidence_row(3_100, "LONG", 100.001)
+        pause = evidence_row(
+            3_200, "SHORT", 100.001, strong=False, material=False,
+        )
+        second = evidence_row(3_300, "LONG", 100.003)
+        episode = {
+            "side": "LONG", "started_receive_ms": 3_000,
+            "signals": [first, second],
+        }
+        proof_type, proof_signal, proof_venue = ignition_core._proof(
+            episode,
+            {"binance_spot": (first, pause, second)},
+        )
+
+        self.assertEqual(proof_type, "METAORDER_CONTINUATION")
+        self.assertIs(proof_signal, second)
+        self.assertEqual(proof_venue, "binance_spot")
+
     def test_futures_alert_never_self_opens(self):
         s = state()
         warm(s, "futures")

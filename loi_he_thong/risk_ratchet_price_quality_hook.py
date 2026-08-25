@@ -1,10 +1,11 @@
 """Protect profit ratchet from isolated Futures wicks without weakening hard-stop execution."""
 from __future__ import annotations
 
-VERSION = "RISK_RATCHET_PRICE_QUALITY_V3_CASH_CONFIRMED_FLOOR"
+VERSION = "RISK_RATCHET_PRICE_QUALITY_V4_FRESH_ATR_CASH_CONFIRMED_FLOOR"
 
 _SPOT_MAX_AGE_SEC = 3.0
 _COINBASE_MAX_AGE_SEC = 5.0
+_ATR_MAX_AGE_SEC = 120.0
 
 
 def _mid(bid, ask):
@@ -47,7 +48,12 @@ def _fair_price(state, now):
         source = "COINBASE_FALLBACK"
         fallback_multiplier = 1.50
 
-    atr = float(getattr(state, "atr_1m", 0.0) or 0.0)
+    atr_updated_at = getattr(state, "atr_1m_updated_at", 0.0)
+    atr = (
+        float(getattr(state, "atr_1m", 0.0) or 0.0)
+        if _fresh(atr_updated_at, now, _ATR_MAX_AGE_SEC)
+        else 0.0
+    )
     atr_bps = atr / fair * 10000.0 if atr > 0.0 and fair > 0.0 else 0.0
     base = max(4.0, min(15.0, atr_bps * 0.15 if atr_bps > 0.0 else 6.0))
     tolerance_bps = min(25.0, base * fallback_multiplier)
