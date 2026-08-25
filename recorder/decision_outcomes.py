@@ -11,7 +11,9 @@ from collections import deque, OrderedDict
 WINDOWS_MS = (5_000, 15_000, 30_000, 60_000)
 MAX_PENDING = 512
 MAX_CLOSED = 2_048
-VERSION = "DECISION_COUNTERFACTUAL_V4_DUAL_ANCHOR"
+DIAGNOSTIC_WAVE_GAP_MS = 5_000
+DIAGNOSTIC_WAVE_PRICE_BPS = 3.0
+VERSION = "DECISION_COUNTERFACTUAL_V5_SCOPE_SAFE_WAVES"
 
 
 def _f(value, default=0.0):
@@ -32,6 +34,10 @@ class DecisionOutcomeTracker:
         self.recent_futures = deque(maxlen=1_200)
         self.last_gap_event_ms = 0
         self.last_futures_event_ms = 0
+        # One bounded diagnostic identity per side.  These records are useful
+        # for research before Ignition exists, but never count as economic
+        # misses or independent opportunities.
+        self.diagnostic_waves = {}
 
     @staticmethod
     def _candidate(record):
@@ -58,7 +64,13 @@ class DecisionOutcomeTracker:
                 and votes.get("S2_multi_venue_executed_flow") == "PASS"
             )
             is_go = str(output.get("decision") or payload.get("decision") or "").upper() == "GO"
-            if qualified_now:
+            episode_id = str(
+                decision.get("causal_episode_id")
+                or payload.get("causal_episode_id") or ""
+            )
+            if not episode_id:
+                rank, anchor_role = 0, "DECISION_CYCLE"
+            elif qualified_now:
                 rank, anchor_role = 4, "QUALIFIED"
             elif is_go:
                 rank, anchor_role = 3, "GO_CANDIDATE"
@@ -69,8 +81,7 @@ class DecisionOutcomeTracker:
             return {
                 "cycle_id": decision.get("cycle_id") or payload.get("cycle_id"),
                 "causal_episode_id": (
-                    decision.get("causal_episode_id")
-                    or payload.get("causal_episode_id")
+                    episode_id or None
                 ),
                 "miss_taxonomy": output.get("miss_taxonomy") or payload.get("miss_taxonomy"),
                 "failed_gates": output.get("failed_gates") or payload.get("failed_gates") or [],
@@ -125,10 +136,82 @@ class DecisionOutcomeTracker:
             }
         return None
 
-    def _register(self, record):
-        candidate = self._candidate(record)
-        if not candidate:
-            return
+    def _diagnostic_wave_id(self, side, start_ms, reference):
+        previous = self.diagnostic_waves.get(side)
+        if previous is not None:
+            gap = int(start_ms) - int(previous["last_ms"])
+            anchor = float(previous["anchor_price"])
+            distance_bps = abs(float(reference) - anchor) / anchor * 10_000.0
+            if (
+                0 <= gap <= DIAGNOSTIC_WAVE_GAP_MS
+                and distance_bps <= DIAGNOSTIC_WAVE_PRICE_BPS
+            ):
+                previous["last_ms"] = int(start_ms)
+                return str(previous["wave_id"])
+        wave_id = "diag:%s:%d" % (side, int(start_ms))
+        self.diagnostic_waves[side] = {
+            "wave_id": wave_id,
+            "anchor_price": float(reference),
+            "started_at_ms": int(start_ms),
+            "last_ms": int(start_ms),
+        }
+        return wave_id
+
+    @staticmethod
+    def _persistent_candidate(record):
+        if str(record.get("stream", "")) != "bot_event":
+            return None
+        payload = record.get("payload") or {}
+        if str(payload.get("event", "")) != "DECISION_EVALUATED":
+            return None
+        report = payload.get("persistent_metaorder_shadow") or {}
+        side = str(report.get("candidate_side") or "").upper()
+        if not report.get("transition") or side not in ("LONG", "SHORT"):
+            return None
+        decision = payload.get("decision_record") or {}
+        source_cf = decision.get("counterfactual") or {}
+        reference = _f(source_cf.get("reference_price"))
+        start_ms = int(record.get("event_time_ms", 0) or 0)
+        if reference <= 0.0 or start_ms <= 0:
+            return None
+        candidate_id = str(
+            report.get("candidate_id")
+            or "pmeta:%s:%d" % (side, start_ms)
+        )
+        counterfactual = dict(source_cf)
+        counterfactual.update({
+            "eligible": True,
+            "side": side,
+            "reference_price": reference,
+        })
+        return {
+            "cycle_id": decision.get("cycle_id") or payload.get("cycle_id"),
+            "causal_episode_id": None,
+            "persistent_metaorder_candidate_id": candidate_id,
+            "persistent_candidate_started_at_ms": int(
+                report.get("candidate_started_at_ms") or start_ms
+            ),
+            "persistent_metaorder_evidence": dict(
+                (report.get("sides") or {}).get(side) or {}
+            ),
+            "miss_taxonomy": "PERSISTENT_METAORDER_SHADOW_CANDIDATE",
+            "failed_gates": [],
+            "counterfactual": counterfactual,
+            "frozen_economics": dict(
+                counterfactual.get("frozen_economics") or {}
+            ),
+            "decision": "SHADOW_OBSERVATION",
+            "reason": str(report.get("status") or "PERSISTENT_CANDIDATE"),
+            "taxonomy_version": decision.get("taxonomy_version"),
+            "strategy_code_version": decision.get("strategy_code_version"),
+            "strategy_config_version": decision.get("strategy_config_version"),
+            "anchor_rank": 0,
+            "anchor_role": "PERSISTENT_METAORDER_CANDIDATE",
+            "qualified_now": False,
+            "authority": False,
+        }
+
+    def _register_candidate(self, record, candidate):
         cf = candidate.get("counterfactual") or {}
         cycle_id = str(candidate.get("cycle_id") or "")
         side = str(cf.get("side") or "").upper()
@@ -143,36 +226,56 @@ class DecisionOutcomeTracker:
         if start_ms <= 0:
             return
         episode_id = str(candidate.get("causal_episode_id") or "")
-        base_key = episode_id or cycle_id
-        anchor_role = str(candidate.get("anchor_role") or "EPISODE_ORIGIN")
+        anchor_role = str(candidate.get("anchor_role") or "DECISION_CYCLE")
+        diagnostic_wave_id = None
+        persistent_id = str(
+            candidate.get("persistent_metaorder_candidate_id") or ""
+        )
         suffix = (
             "::EXECUTION" if episode_id and anchor_role == "EXECUTION"
             else "::GO" if episode_id and anchor_role in ("QUALIFIED", "GO_CANDIDATE")
             else ""
         )
-        tracking_key = base_key + suffix
-        if tracking_key in self.closed:
-            return
-        existing = self.pending.get(tracking_key)
-        if existing is not None:
-            better_anchor = int(candidate.get("anchor_rank", 1) or 1) > int(
-                existing.get("anchor_rank", 1) or 1
-            )
-            if not better_anchor or existing.get("completed"):
-                return
-            self.pending.pop(tracking_key, None)
-        self.pending[tracking_key] = {
-            **candidate,
-            "tracking_key": tracking_key,
-            "sample_scope": (
+        if persistent_id:
+            sample_scope = "PERSISTENT_METAORDER_SHADOW"
+            tracking_key = persistent_id
+        elif episode_id:
+            sample_scope = (
                 "CAUSAL_EPISODE_EXECUTION"
                 if suffix == "::EXECUTION"
                 else "CAUSAL_EPISODE_GO_ANCHOR"
                 if suffix == "::GO"
                 else "CAUSAL_EPISODE_ORIGIN"
-                if episode_id
-                else "DECISION_CYCLE"
-            ),
+            )
+            tracking_key = episode_id + suffix
+        elif anchor_role == "EXECUTION":
+            sample_scope = "EXECUTION_EVENT"
+            tracking_key = cycle_id + "::EXECUTION"
+        else:
+            sample_scope = "DECISION_CYCLE"
+            diagnostic_wave_id = self._diagnostic_wave_id(
+                side, start_ms, reference,
+            )
+            tracking_key = diagnostic_wave_id
+        if tracking_key in self.closed:
+            return
+        existing = self.pending.get(tracking_key)
+        if existing is not None:
+            candidate_rank = int(candidate.get("anchor_rank", 0) or 0)
+            existing_rank = int(existing.get("anchor_rank", 0) or 0)
+            better_anchor = candidate_rank > existing_rank
+            if not better_anchor or existing.get("completed"):
+                return
+            self.pending.pop(tracking_key, None)
+        economic_miss_eligible = bool(
+            episode_id or sample_scope == "EXECUTION_EVENT"
+        ) and sample_scope != "PERSISTENT_METAORDER_SHADOW"
+        self.pending[tracking_key] = {
+            **candidate,
+            "tracking_key": tracking_key,
+            "sample_scope": sample_scope,
+            "diagnostic_wave_id": diagnostic_wave_id,
+            "economic_miss_eligible": economic_miss_eligible,
             "start_ms": start_ms,
             "side": side,
             "reference_price": reference,
@@ -203,6 +306,14 @@ class DecisionOutcomeTracker:
             self._emit_invalid(dropped, "PENDING_CAPACITY_EXCEEDED", start_ms)
             self._close_key(dropped_key)
 
+    def _register(self, record):
+        candidate = self._candidate(record)
+        if candidate is not None:
+            self._register_candidate(record, candidate)
+        persistent = self._persistent_candidate(record)
+        if persistent is not None:
+            self._register_candidate(record, persistent)
+
     def _close_key(self, tracking_key):
         self.closed[str(tracking_key)] = True
         self.closed.move_to_end(str(tracking_key))
@@ -216,9 +327,17 @@ class DecisionOutcomeTracker:
                 "version": VERSION,
                 "cycle_id": tracker.get("cycle_id"),
                 "causal_episode_id": tracker.get("causal_episode_id"),
+                "diagnostic_wave_id": tracker.get("diagnostic_wave_id"),
+                "persistent_metaorder_candidate_id": tracker.get(
+                    "persistent_metaorder_candidate_id"
+                ),
                 "sample_scope": tracker.get("sample_scope"),
                 "episode_anchor_rank": tracker.get("anchor_rank"),
                 "anchor_role": tracker.get("anchor_role"),
+                "authority": bool(tracker.get("authority", False)),
+                "economic_miss_eligible": bool(
+                    tracker.get("economic_miss_eligible", False)
+                ),
                 "taxonomy_version": tracker.get("taxonomy_version"),
                 "strategy_code_version": tracker.get("strategy_code_version"),
                 "strategy_config_version": tracker.get("strategy_config_version"),
@@ -304,9 +423,23 @@ class DecisionOutcomeTracker:
                         "version": VERSION,
                         "cycle_id": tracker.get("cycle_id"),
                         "causal_episode_id": tracker.get("causal_episode_id"),
+                        "diagnostic_wave_id": tracker.get("diagnostic_wave_id"),
+                        "persistent_metaorder_candidate_id": tracker.get(
+                            "persistent_metaorder_candidate_id"
+                        ),
+                        "persistent_candidate_started_at_ms": tracker.get(
+                            "persistent_candidate_started_at_ms"
+                        ),
+                        "persistent_metaorder_evidence": tracker.get(
+                            "persistent_metaorder_evidence"
+                        ),
                         "sample_scope": tracker.get("sample_scope"),
                         "episode_anchor_rank": tracker.get("anchor_rank"),
                         "anchor_role": tracker.get("anchor_role"),
+                        "authority": bool(tracker.get("authority", False)),
+                        "economic_miss_eligible": bool(
+                            tracker.get("economic_miss_eligible", False)
+                        ),
                         "taxonomy_version": tracker.get("taxonomy_version"),
                         "strategy_code_version": tracker.get("strategy_code_version"),
                         "strategy_config_version": tracker.get("strategy_config_version"),
@@ -327,9 +460,15 @@ class DecisionOutcomeTracker:
                             round(economic_threshold, 6)
                             if economic_threshold is not None else None
                         ),
-                        "economic_miss_screen_passed": (
-                            bool(favorable > economic_threshold)
-                            if economic_threshold is not None else None
+                        "economic_miss_screen_passed": bool(
+                            tracker.get("economic_miss_eligible", False)
+                            and economic_threshold is not None
+                            and favorable > economic_threshold
+                        ),
+                        "diagnostic_move_screen_passed": bool(
+                            not tracker.get("economic_miss_eligible", False)
+                            and economic_threshold is not None
+                            and favorable > economic_threshold
                         ),
                         "hypothetical_hard_sl_bps": stop_bps,
                         "hypothetical_hard_sl_hit": bool(

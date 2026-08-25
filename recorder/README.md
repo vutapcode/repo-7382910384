@@ -16,7 +16,8 @@ Recorder và dữ liệu/replay của nó **không có trading authority**. Auth
 - `mark_price`, `premium_index`, `open_interest`
 - `liquidation`: force-liquidation thật từ `BTCUSDT@forceOrder`
 - `bot_event`, `bot_cycles_snapshot`
-- `decision_counterfactual`: kết quả giả định 5/15/30/60 giây cho miss
+- `decision_counterfactual`: kết quả giả định 5/15/30/60 giây; V5 tách
+  economic miss theo causal episode khỏi diagnostic wave/persistent shadow
 - `feature_1s`: flow, spread, depth bands, OI/funding và liquidation theo giây
 - `recorder_health_event`
 - `binance_spot_trade_100ms`, `binance_spot_ticker`
@@ -69,6 +70,10 @@ tại, recorder ưu tiên ba lớp bằng chứng:
    nối outcome qua gap. `qualified_now` tách trạng thái hiện tại khỏi
    `qualified_ever` đã latch. `RISK_DAILY_LOCK` được ghi cho từng `GO` đã journal
    nhưng bị daily loss breaker chặn, nên không bị đếm nhầm thành execution miss.
+   Cycle chưa có `causal_episode_id` được gộp O(1) thành `diagnostic_wave_id` và
+   luôn có `economic_miss_eligible=false`; chuyển động sau đó chỉ nằm ở
+   `diagnostic_move_screen_passed`. Candidate persistent-metaorder cũng có outcome
+   riêng với `authority=false`, tuyệt đối không mở/veto/promote Entry.
 
 Raw market data chỉ là nền để kiểm chứng ba lớp trên. Depth wall, indicator phụ
 và debug không gắn `cycle_id` không được xem là bằng chứng quyết định.

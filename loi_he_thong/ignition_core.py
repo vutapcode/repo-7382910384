@@ -529,15 +529,47 @@ def _proof(episode, histories):
     candidates = []
     proof_rank = {"METAORDER_CONTINUATION": 0, "FAILED_REVERSION": 1}
     for venue in cash_venues:
+        venue_history = tuple(histories.get(venue, ()))
         rows = [
-            row for row in histories.get(venue, ())
+            row for row in venue_history
             if row.get("side") == side
             and int(row.get("receive_time_ms", 0)) >= episode["started_receive_ms"]
         ]
         if len(rows) >= 2 and rows[-1].get("strong") and rows[-2].get("strong"):
             if _f(rows[-1].get("flow_acceleration")) >= 0.0:
-                candidates.append(("METAORDER_CONTINUATION", rows[-1], venue))
-        failed = _failed_reversion(histories.get(venue, ()), side, episode["started_receive_ms"])
+                first_bucket = int(rows[-2].get("bucket_start_ms", 0) or 0)
+                second_bucket = int(rows[-1].get("bucket_start_ms", 0) or 0)
+                intervening = [
+                    row for row in venue_history
+                    if first_bucket < int(row.get("bucket_start_ms", 0) or 0)
+                    < second_bucket
+                ]
+                expected_between = max(
+                    0,
+                    (second_bucket - first_bucket)
+                    // ignition_signals.BUCKET_MS - 1,
+                )
+                proof = dict(rows[-1])
+                proof["_metaorder_evidence"] = {
+                    "version": "METAORDER_PROOF_QUALITY_V1",
+                    "proof_buckets": [first_bucket, second_bucket],
+                    "proof_bucket_gap_ms": second_bucket - first_bucket,
+                    "proof_buckets_adjacent": bool(
+                        second_bucket - first_bucket
+                        == ignition_signals.BUCKET_MS
+                    ),
+                    "intervening_observed_buckets": len(intervening),
+                    "intervening_nonmaterial_buckets": sum(
+                        not _material_flow(row) for row in intervening
+                    ),
+                    "intervening_missing_buckets": max(
+                        0, expected_between - len(intervening)
+                    ),
+                    "metadata_authority": False,
+                    "proof_policy": "BRIEF_NONMATERIAL_PAUSE_ALLOWED",
+                }
+                candidates.append(("METAORDER_CONTINUATION", proof, venue))
+        failed = _failed_reversion(venue_history, side, episode["started_receive_ms"])
         if failed is not None:
             candidates.append(("FAILED_REVERSION", failed, venue))
 
@@ -707,10 +739,27 @@ def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
         str((previous or {}).get("status", "")),
         str((previous or {}).get("candidate_side", "")),
     )
+    candidate_started_at_ms = None
+    candidate_id = None
+    if candidate_side != "ABSTAIN":
+        if (
+            candidate_side == str((previous or {}).get("candidate_side", ""))
+            and (previous or {}).get("candidate_started_at_ms")
+        ):
+            candidate_started_at_ms = int(
+                previous.get("candidate_started_at_ms")
+            )
+        else:
+            candidate_started_at_ms = int(now_ms)
+        candidate_id = "pmeta:%s:%d" % (
+            candidate_side, candidate_started_at_ms,
+        )
     return {
         "version": "PERSISTENT_METAORDER_SHADOW_V2",
         "status": status,
         "candidate_side": candidate_side,
+        "candidate_id": candidate_id,
+        "candidate_started_at_ms": candidate_started_at_ms,
         "sides": sides,
         "authority": False,
         "policy": "RECORDER_ONLY_NEVER_OPENS_OR_VETOES",
@@ -947,6 +996,11 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "failed_reversion_evidence": (
             dict(proof_signal.get("_failed_reversion_evidence") or {})
             if proof_type == "FAILED_REVERSION" and isinstance(proof_signal, dict) else {}
+        ),
+        "metaorder_proof_evidence": (
+            dict(proof_signal.get("_metaorder_evidence") or {})
+            if proof_type == "METAORDER_CONTINUATION"
+            and isinstance(proof_signal, dict) else {}
         ),
         "impulse_phase": "EARLY" if consumed <= 0.35 else "MATURE",
         "consumed_fraction": consumed, "fair_value_gap_bps": round(fair_value_gap, 6),

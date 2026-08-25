@@ -136,6 +136,12 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(result["decision"], "WAIT")
         self.assertIsNone(getattr(s, "_ignition_episode", None))
         self.assertEqual(s.persistent_metaorder_shadow["candidate_side"], "LONG")
+        self.assertEqual(
+            s.persistent_metaorder_shadow["candidate_id"], "pmeta:LONG:3100",
+        )
+        self.assertEqual(
+            s.persistent_metaorder_shadow["candidate_started_at_ms"], 3_100,
+        )
         self.assertFalse(s.persistent_metaorder_shadow["authority"])
 
     def test_persistent_metaorder_does_not_bridge_empty_seconds(self):
@@ -372,6 +378,17 @@ class IgnitionCoreTests(unittest.TestCase):
         proved = ignition_core.evaluate(s, now=3.401)
         self.assertEqual(proved["decision"], "GO")
         self.assertEqual(proved["ignition"]["proof_type"], "METAORDER_CONTINUATION")
+        self.assertEqual(
+            proved["ignition"]["metaorder_proof_evidence"][
+                "proof_bucket_gap_ms"
+            ],
+            100,
+        )
+        self.assertTrue(
+            proved["ignition"]["metaorder_proof_evidence"][
+                "proof_buckets_adjacent"
+            ]
+        )
         self.assertEqual(proved["ignition"]["residual_edge_proxy_bps"], 0.0)
         self.assertEqual(
             proved["ignition"]["residual_edge_source"],
@@ -406,8 +423,14 @@ class IgnitionCoreTests(unittest.TestCase):
         )
 
         self.assertEqual(proof_type, "METAORDER_CONTINUATION")
-        self.assertIs(proof_signal, second)
+        self.assertEqual(proof_signal["bucket_start_ms"], second["bucket_start_ms"])
         self.assertEqual(proof_venue, "binance_spot")
+        evidence = proof_signal["_metaorder_evidence"]
+        self.assertEqual(evidence["proof_buckets"], [3_000, 3_200])
+        self.assertEqual(evidence["proof_bucket_gap_ms"], 200)
+        self.assertFalse(evidence["proof_buckets_adjacent"])
+        self.assertEqual(evidence["intervening_nonmaterial_buckets"], 1)
+        self.assertFalse(evidence["metadata_authority"])
 
     def test_futures_alert_never_self_opens(self):
         s = state()

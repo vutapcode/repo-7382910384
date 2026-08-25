@@ -87,6 +87,37 @@ def daily_lock_skip(cycle_id="risk-1", start_ms=1_000):
     }
 
 
+def persistent_candidate_event(start_ms=1_000, side="SHORT"):
+    row = decision_event(start_ms=start_ms)
+    decision = row["payload"]["decision_record"]
+    decision["counterfactual"].update({
+        "eligible": False,
+        "side": "ABSTAIN",
+        "frozen_economics": {
+            "execution_style": "MAKER",
+            "cost_budget_bps": 8.5,
+            "minimum_net_edge_bps": 2.0,
+            "commission_verified": True,
+        },
+    })
+    row["payload"]["persistent_metaorder_shadow"] = {
+        "status": side + "_CANDIDATE",
+        "candidate_side": side,
+        "candidate_id": "pmeta:%s:%d" % (side, start_ms),
+        "candidate_started_at_ms": start_ms,
+        "transition": True,
+        "authority": False,
+        "sides": {
+            side: {
+                "status": "PERSISTENT_METAORDER_CANDIDATE",
+                "cash_candidates": ["binance_spot"],
+                "futures_follow": True,
+            },
+        },
+    }
+    return row
+
+
 class DecisionOutcomeTrackerTests(unittest.TestCase):
     def setUp(self):
         self.rows = []
@@ -109,7 +140,7 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertTrue(payload["hypothetical_hard_sl_hit"])
 
     def test_carries_frozen_cost_into_economic_miss_screen(self):
-        event = decision_event()
+        event = decision_event(episode_id="episode-economic")
         event["payload"]["decision_record"]["counterfactual"]["frozen_economics"] = {
             "execution_style": "MAKER",
             "cost_budget_bps": 8.5,
@@ -121,7 +152,54 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         payload = self.rows[0][1]
         self.assertEqual(payload["economic_miss_threshold_bps"], 10.5)
         self.assertTrue(payload["economic_miss_screen_passed"])
+        self.assertTrue(payload["economic_miss_eligible"])
+        self.assertFalse(payload["diagnostic_move_screen_passed"])
         self.assertEqual(payload["frozen_economics"]["execution_style"], "MAKER")
+
+    def test_decision_cycles_are_one_diagnostic_wave_not_economic_misses(self):
+        for cycle_id, start_ms, reference in (
+            ("cycle-a", 1_000, 100.0),
+            ("cycle-b", 1_100, 100.01),
+            ("cycle-c", 1_200, 100.02),
+        ):
+            event = decision_event(
+                cycle_id=cycle_id, start_ms=start_ms,
+                reference_price=reference,
+            )
+            event["payload"]["decision_record"]["counterfactual"][
+                "frozen_economics"
+            ] = {
+                "execution_style": "MAKER",
+                "cost_budget_bps": 8.5,
+                "minimum_net_edge_bps": 2.0,
+                "commission_verified": True,
+            }
+            self.tracker.observe(event)
+
+        self.assertEqual(list(self.tracker.pending), ["diag:LONG:1000"])
+        self.tracker.observe(trade(6_200, 10, 100.20, high=100.20, low=100.0))
+        payload = self.rows[0][1]
+        self.assertEqual(payload["sample_scope"], "DECISION_CYCLE")
+        self.assertEqual(payload["anchor_role"], "DECISION_CYCLE")
+        self.assertEqual(payload["episode_anchor_rank"], 0)
+        self.assertEqual(payload["diagnostic_wave_id"], "diag:LONG:1000")
+        self.assertFalse(payload["economic_miss_eligible"])
+        self.assertFalse(payload["economic_miss_screen_passed"])
+        self.assertTrue(payload["diagnostic_move_screen_passed"])
+
+    def test_persistent_candidate_gets_non_authoritative_outcomes(self):
+        self.tracker.observe(persistent_candidate_event())
+        self.assertEqual(list(self.tracker.pending), ["pmeta:SHORT:1000"])
+        self.tracker.observe(trade(6_000, 10, 99.0, high=100.0, low=98.0))
+        payload = self.rows[0][1]
+        self.assertEqual(payload["sample_scope"], "PERSISTENT_METAORDER_SHADOW")
+        self.assertEqual(
+            payload["persistent_metaorder_candidate_id"], "pmeta:SHORT:1000",
+        )
+        self.assertFalse(payload["authority"])
+        self.assertFalse(payload["economic_miss_eligible"])
+        self.assertFalse(payload["economic_miss_screen_passed"])
+        self.assertTrue(payload["diagnostic_move_screen_passed"])
 
     def test_sequence_gap_invalidates_instead_of_bridging(self):
         self.tracker.observe(decision_event())
@@ -151,8 +229,8 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
 
     def test_daily_lock_skip_is_tracked_as_execution_miss(self):
         self.tracker.observe(daily_lock_skip())
-        self.assertIn("risk-1", self.tracker.pending)
-        tracker = self.tracker.pending["risk-1"]
+        self.assertIn("risk-1::EXECUTION", self.tracker.pending)
+        tracker = self.tracker.pending["risk-1::EXECUTION"]
         self.assertEqual(tracker["miss_taxonomy"], "RISK_DAILY_LOCK")
         self.assertEqual(tracker["failed_gates"], ["RISK_DAILY_LOCK"])
         self.assertEqual(tracker["strategy_code_version"], "code-v1")
@@ -161,6 +239,8 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         payload = self.rows[0][1]
         self.assertEqual(payload["miss_taxonomy"], "RISK_DAILY_LOCK")
         self.assertEqual(payload["signed_close_bps"], 100.0)
+        self.assertEqual(payload["sample_scope"], "EXECUTION_EVENT")
+        self.assertTrue(payload["economic_miss_eligible"])
 
     def test_filled_then_flattened_is_one_execution_outcome(self):
         event = daily_lock_skip(cycle_id="abort-1", start_ms=1_000)
