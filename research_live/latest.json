@@ -1,0 +1,3203 @@
+{
+  "decision_counts": {
+    "WAIT": 21
+  },
+  "event_counts": {
+    "DECISION_EVALUATED": 21
+  },
+  "journal_events_read": 21,
+  "miss_taxonomy_counts": {
+    "BIAS_NOT_READY": 19,
+    "WAIT_STALE_DATA": 2
+  },
+  "reason_counts": {
+    "BIAS_NOT_READY": 19,
+    "WAIT_STALE_DATA": 2
+  },
+  "recent_candidates": [
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:futures:LONG:1788640508400",
+      "consumed_fraction": 1.106549,
+      "cycle_id": "decision:751b8469e2cb:111920:1788640513467",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_OI_REFRESH"
+      ],
+      "ignition_proposer": "futures",
+      "miss_taxonomy": "WAIT_OI_REFRESH",
+      "oi_intent": {
+        "age_seconds": 4.6932,
+        "aligned_with_entry": true,
+        "causal_class": "OI_NEUTRAL",
+        "change_pct": -0.003192,
+        "expected_side": null,
+        "fresh": true,
+        "frozen_oi_age_seconds": 15.5645,
+        "frozen_oi_updated_at": 1788640497.902811,
+        "intent": "NEUTRAL",
+        "intent_source": "REFRESHED_OI_DELTA_NEUTRAL",
+        "live_oi_age_seconds": 4.6932,
+        "live_oi_updated_at": 1788640508.7741048,
+        "raw_regime": "PRICE_DOWN_OI_CONTRACTION",
+        "sample_window_seconds": 10.8713,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PRESSURE_BUILDING",
+      "reason": "WAIT_OI_REFRESH",
+      "side": "LONG",
+      "ts": 1788640513.4793854,
+      "utc": "2026-09-05T20:35:13.479385+00:00",
+      "vn": "2026-09-06T03:35:13.479385+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:fb4af126410c60da0a25",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:118871:1788641920069",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_LATE_IMPULSE"
+      ],
+      "ignition_proof_type": "METAORDER_CONTINUATION",
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "WAIT_LATE_IMPULSE",
+      "oi_intent": {
+        "age_seconds": 5.7801,
+        "aligned_with_entry": true,
+        "causal_class": "CASH_LED_UNWIND",
+        "change_pct": -0.032532,
+        "expected_side": "LONG",
+        "fresh": true,
+        "frozen_oi_age_seconds": null,
+        "frozen_oi_updated_at": null,
+        "intent": "UNWIND",
+        "intent_source": "REFRESHED_OI_DELTA",
+        "live_oi_age_seconds": 5.7801,
+        "live_oi_updated_at": 1788641914.289021,
+        "raw_regime": "UNKNOWN",
+        "sample_window_seconds": 14.9993,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "MATURE",
+      "reason": "WAIT_LATE_IMPULSE",
+      "side": "LONG",
+      "ts": 1788641920.0834556,
+      "utc": "2026-09-05T20:58:40.083456+00:00",
+      "vn": "2026-09-06T03:58:40.083456+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:727e3ad04dabb812bc75",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:123718:1788643380252",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_IGNITION_PROOF"
+      ],
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "WAIT_IGNITION_PROOF",
+      "oi_intent": {
+        "age_seconds": 1788643380.2522,
+        "aligned_with_entry": true,
+        "causal_class": "OI_STALE_CONTEXT",
+        "change_pct": null,
+        "expected_side": null,
+        "fresh": false,
+        "frozen_oi_age_seconds": null,
+        "frozen_oi_updated_at": null,
+        "intent": "NEUTRAL",
+        "intent_source": "FROZEN_BIAS_OI_REGIME",
+        "live_oi_age_seconds": 10.5482,
+        "live_oi_updated_at": 1788643369.7039504,
+        "raw_regime": "UNKNOWN",
+        "sample_window_seconds": null,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_IGNITION_PROOF",
+      "side": "LONG",
+      "ts": 1788643380.2643592,
+      "utc": "2026-09-05T21:23:00.264359+00:00",
+      "vn": "2026-09-06T04:23:00.264359+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:727e3ad04dabb812bc75",
+      "cycle_id": "decision:751b8469e2cb:123725:1788643380941",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_id": "pmeta:LONG:1788643375299",
+      "persistent_candidate_side": "LONG",
+      "persistent_status": "LONG_CANDIDATE",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "LONG",
+      "ts": 1788643380.9486594,
+      "utc": "2026-09-05T21:23:00.948659+00:00",
+      "vn": "2026-09-06T04:23:00.948659+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:727e3ad04dabb812bc75",
+      "cycle_id": "decision:751b8469e2cb:123731:1788643385686",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "oi_intent": {},
+      "persistent_candidate_id": "pmeta:LONG:1788643375299",
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "IGNITION_EPISODE_SAFETY_EXPIRED",
+      "side": "LONG",
+      "ts": 1788643385.6916912,
+      "utc": "2026-09-05T21:23:05.691691+00:00",
+      "vn": "2026-09-06T04:23:05.691691+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:LONG:1788645804800",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:133583:1788645805149",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_IGNITION_PROOF"
+      ],
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "WAIT_IGNITION_PROOF",
+      "oi_intent": {
+        "age_seconds": 4.6086,
+        "aligned_with_entry": false,
+        "causal_class": "OI_DIRECTION_CONFLICT",
+        "change_pct": 0.000239,
+        "expected_side": "SHORT",
+        "fresh": true,
+        "frozen_oi_age_seconds": 4.6086,
+        "frozen_oi_updated_at": 1788645800.541358,
+        "intent": "UNWIND",
+        "intent_source": "FROZEN_BIAS_OI_REGIME",
+        "live_oi_age_seconds": 4.6086,
+        "live_oi_updated_at": 1788645800.541358,
+        "raw_regime": "PRICE_DOWN_OI_CONTRACTION",
+        "sample_window_seconds": 15.0053,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_IGNITION_PROOF",
+      "side": "LONG",
+      "ts": 1788645805.1645806,
+      "utc": "2026-09-05T22:03:25.164581+00:00",
+      "vn": "2026-09-06T05:03:25.164581+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:LONG:1788645804800",
+      "cycle_id": "decision:751b8469e2cb:133583:1788645806230",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "LONG",
+      "ts": 1788645806.2351258,
+      "utc": "2026-09-05T22:03:26.235126+00:00",
+      "vn": "2026-09-06T05:03:26.235126+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:LONG:1788645804800",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:133605:1788645809645",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "ignition_proposer": "binance_spot",
+      "oi_intent": {
+        "age_seconds": 9.1042,
+        "aligned_with_entry": false,
+        "causal_class": "OI_STALE_CONTEXT",
+        "change_pct": null,
+        "expected_side": "SHORT",
+        "fresh": false,
+        "frozen_oi_age_seconds": 9.1042,
+        "frozen_oi_updated_at": 1788645800.541358,
+        "intent": "UNWIND",
+        "intent_source": "FROZEN_BIAS_OI_REGIME",
+        "live_oi_age_seconds": 9.1042,
+        "live_oi_updated_at": 1788645800.541358,
+        "raw_regime": "PRICE_DOWN_OI_CONTRACTION",
+        "sample_window_seconds": null,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "INVALID",
+      "reason": "OPPOSING_CASH_FLOW",
+      "side": "LONG",
+      "ts": 1788645809.653812,
+      "utc": "2026-09-05T22:03:29.653812+00:00",
+      "vn": "2026-09-06T05:03:29.653812+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:3f48d0a7c74ac80080d8",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:134202:1788645883229",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_IGNITION_PROOF"
+      ],
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "WAIT_IGNITION_PROOF",
+      "oi_intent": {
+        "age_seconds": 1788645883.2296,
+        "aligned_with_entry": true,
+        "causal_class": "OI_STALE_CONTEXT",
+        "change_pct": null,
+        "expected_side": null,
+        "fresh": false,
+        "frozen_oi_age_seconds": null,
+        "frozen_oi_updated_at": null,
+        "intent": "NEUTRAL",
+        "intent_source": "FROZEN_BIAS_OI_REGIME",
+        "live_oi_age_seconds": 7.6628,
+        "live_oi_updated_at": 1788645875.5668383,
+        "raw_regime": "UNKNOWN",
+        "sample_window_seconds": null,
+        "side": "SHORT"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_IGNITION_PROOF",
+      "side": "SHORT",
+      "ts": 1788645883.2366772,
+      "utc": "2026-09-05T22:04:43.236677+00:00",
+      "vn": "2026-09-06T05:04:43.236677+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:3f48d0a7c74ac80080d8",
+      "cycle_id": "decision:751b8469e2cb:134205:1788645884267",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "SHORT",
+      "ts": 1788645884.274064,
+      "utc": "2026-09-05T22:04:44.274064+00:00",
+      "vn": "2026-09-06T05:04:44.274064+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:coinbase_spot:LONG:1788645884300",
+      "consumed_fraction": 0.569824,
+      "cycle_id": "decision:751b8469e2cb:134235:1788645884950",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_IGNITION_PROOF"
+      ],
+      "ignition_proposer": "coinbase_spot",
+      "miss_taxonomy": "WAIT_IGNITION_PROOF",
+      "oi_intent": {
+        "age_seconds": 9.3837,
+        "aligned_with_entry": false,
+        "causal_class": "OI_STALE_CONTEXT",
+        "change_pct": null,
+        "expected_side": "SHORT",
+        "fresh": false,
+        "frozen_oi_age_seconds": 9.3837,
+        "frozen_oi_updated_at": 1788645875.5668383,
+        "intent": "UNWIND",
+        "intent_source": "FROZEN_BIAS_OI_REGIME",
+        "live_oi_age_seconds": 9.3837,
+        "live_oi_updated_at": 1788645875.5668383,
+        "raw_regime": "PRICE_DOWN_OI_CONTRACTION",
+        "sample_window_seconds": null,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_IGNITION_PROOF",
+      "side": "LONG",
+      "ts": 1788645884.962718,
+      "utc": "2026-09-05T22:04:44.962718+00:00",
+      "vn": "2026-09-06T05:04:44.962718+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:coinbase_spot:LONG:1788645884300",
+      "cycle_id": "decision:751b8469e2cb:134236:1788645886017",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "LONG",
+      "ts": 1788645886.0219448,
+      "utc": "2026-09-05T22:04:46.021945+00:00",
+      "vn": "2026-09-06T05:04:46.021945+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:coinbase_spot:LONG:1788645884300",
+      "cycle_id": "decision:751b8469e2cb:134247:1788645889791",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "IGNITION_EPISODE_SAFETY_EXPIRED",
+      "side": "LONG",
+      "ts": 1788645889.7949073,
+      "utc": "2026-09-05T22:04:49.794907+00:00",
+      "vn": "2026-09-06T05:04:49.794907+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:619ac4b9b6feae615b46",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:136204:1788646370151",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "ignition_proposer": "coinbase_spot",
+      "oi_intent": {
+        "age_seconds": 1788646370.1517,
+        "aligned_with_entry": true,
+        "causal_class": "OI_STALE_CONTEXT",
+        "change_pct": null,
+        "expected_side": null,
+        "fresh": false,
+        "frozen_oi_age_seconds": null,
+        "frozen_oi_updated_at": null,
+        "intent": "NEUTRAL",
+        "intent_source": "FROZEN_BIAS_OI_REGIME",
+        "live_oi_age_seconds": 14.516,
+        "live_oi_updated_at": 1788646355.6356843,
+        "raw_regime": "UNKNOWN",
+        "sample_window_seconds": null,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CASH_IGNITION_FUTURES_RESPONSE",
+      "side": "LONG",
+      "ts": 1788646370.1610048,
+      "utc": "2026-09-05T22:12:50.161005+00:00",
+      "vn": "2026-09-06T05:12:50.161005+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:619ac4b9b6feae615b46",
+      "cycle_id": "decision:751b8469e2cb:136206:1788646371248",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "LONG",
+      "ts": 1788646371.2521129,
+      "utc": "2026-09-05T22:12:51.252113+00:00",
+      "vn": "2026-09-06T05:12:51.252113+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:619ac4b9b6feae615b46",
+      "cycle_id": "decision:751b8469e2cb:136211:1788646374641",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "IGNITION_EPISODE_SAFETY_EXPIRED",
+      "side": "LONG",
+      "ts": 1788646374.6459937,
+      "utc": "2026-09-05T22:12:54.645994+00:00",
+      "vn": "2026-09-06T05:12:54.645994+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:futures:SHORT:1788646722300",
+      "cycle_id": "decision:751b8469e2cb:137676:1788646723867",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "SHORT",
+      "ts": 1788646723.8713346,
+      "utc": "2026-09-05T22:18:43.871335+00:00",
+      "vn": "2026-09-06T05:18:43.871335+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:futures:SHORT:1788646722300",
+      "consumed_fraction": 0.322445,
+      "cycle_id": "decision:751b8469e2cb:137678:1788646726411",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_OI_REFRESH"
+      ],
+      "ignition_proposer": "futures",
+      "miss_taxonomy": "WAIT_OI_REFRESH",
+      "oi_intent": {
+        "age_seconds": 3.8472,
+        "aligned_with_entry": true,
+        "causal_class": "OI_NEUTRAL",
+        "change_pct": 0.002794,
+        "expected_side": null,
+        "fresh": true,
+        "frozen_oi_age_seconds": 10.7184,
+        "frozen_oi_updated_at": 1788646715.6930623,
+        "intent": "NEUTRAL",
+        "intent_source": "REFRESHED_OI_DELTA_NEUTRAL",
+        "live_oi_age_seconds": 3.8472,
+        "live_oi_updated_at": 1788646722.5642889,
+        "raw_regime": "PRICE_DOWN_OI_CONTRACTION",
+        "sample_window_seconds": 6.8712,
+        "side": "SHORT"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PRESSURE_BUILDING",
+      "reason": "WAIT_OI_REFRESH",
+      "side": "SHORT",
+      "ts": 1788646726.4175596,
+      "utc": "2026-09-05T22:18:46.417560+00:00",
+      "vn": "2026-09-06T05:18:46.417560+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:futures:SHORT:1788646722300",
+      "cycle_id": "decision:751b8469e2cb:137678:1788646727649",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "IGNITION_EPISODE_SAFETY_EXPIRED",
+      "side": "SHORT",
+      "ts": 1788646727.654149,
+      "utc": "2026-09-05T22:18:47.654149+00:00",
+      "vn": "2026-09-06T05:18:47.654149+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:85b370e045ba89bc2bd5",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:140010:1788647421237",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_IGNITION_PROOF"
+      ],
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "WAIT_IGNITION_PROOF",
+      "oi_intent": {
+        "age_seconds": 3.4617,
+        "aligned_with_entry": true,
+        "causal_class": "OI_NEUTRAL",
+        "change_pct": -5e-05,
+        "expected_side": null,
+        "fresh": true,
+        "frozen_oi_age_seconds": null,
+        "frozen_oi_updated_at": null,
+        "intent": "NEUTRAL",
+        "intent_source": "REFRESHED_OI_DELTA_NEUTRAL",
+        "live_oi_age_seconds": 3.4617,
+        "live_oi_updated_at": 1788647417.7755775,
+        "raw_regime": "UNKNOWN",
+        "sample_window_seconds": 14.7258,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_IGNITION_PROOF",
+      "side": "LONG",
+      "ts": 1788647421.2501097,
+      "utc": "2026-09-05T22:30:21.250110+00:00",
+      "vn": "2026-09-06T05:30:21.250110+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:85b370e045ba89bc2bd5",
+      "cycle_id": "decision:751b8469e2cb:140014:1788647422256",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "LONG",
+      "ts": 1788647422.2622483,
+      "utc": "2026-09-05T22:30:22.262248+00:00",
+      "vn": "2026-09-06T05:30:22.262248+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:85b370e045ba89bc2bd5",
+      "cycle_id": "decision:751b8469e2cb:140037:1788647426436",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "oi_intent": {},
+      "persistent_candidate_id": "pmeta:LONG:1788647420844",
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "IGNITION_EPISODE_SAFETY_EXPIRED",
+      "side": "LONG",
+      "ts": 1788647426.4444005,
+      "utc": "2026-09-05T22:30:26.444401+00:00",
+      "vn": "2026-09-06T05:30:26.444401+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:futures:LONG:1788647430400",
+      "cycle_id": "decision:751b8469e2cb:140174:1788647433803",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "LONG",
+      "ts": 1788647433.809282,
+      "utc": "2026-09-05T22:30:33.809282+00:00",
+      "vn": "2026-09-06T05:30:33.809282+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:futures:LONG:1788647430400",
+      "consumed_fraction": 1.30325,
+      "cycle_id": "decision:751b8469e2cb:140194:1788647435400",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_OI_REFRESH"
+      ],
+      "ignition_proposer": "futures",
+      "miss_taxonomy": "WAIT_OI_REFRESH",
+      "oi_intent": {
+        "age_seconds": 4.8555,
+        "aligned_with_entry": true,
+        "causal_class": "OI_NEUTRAL",
+        "change_pct": -0.004196,
+        "expected_side": null,
+        "fresh": true,
+        "frozen_oi_age_seconds": 17.6246,
+        "frozen_oi_updated_at": 1788647417.7755775,
+        "intent": "NEUTRAL",
+        "intent_source": "REFRESHED_OI_DELTA_NEUTRAL",
+        "live_oi_age_seconds": 4.8555,
+        "live_oi_updated_at": 1788647430.5446272,
+        "raw_regime": "PRICE_UP_OI_EXPANSION",
+        "sample_window_seconds": 12.769,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PRESSURE_BUILDING",
+      "reason": "WAIT_OI_REFRESH",
+      "side": "LONG",
+      "ts": 1788647435.4107428,
+      "utc": "2026-09-05T22:30:35.410743+00:00",
+      "vn": "2026-09-06T05:30:35.410743+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:futures:LONG:1788647430400",
+      "cycle_id": "decision:751b8469e2cb:140206:1788647435887",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "BIAS_ALIGNMENT_FAIL"
+      ],
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "BIAS_ALIGNMENT_FAIL",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "BIAS_ALIGNMENT_FAIL",
+      "side": "LONG",
+      "ts": 1788647435.8953114,
+      "utc": "2026-09-05T22:30:35.895311+00:00",
+      "vn": "2026-09-06T05:30:35.895311+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:SHORT:1788648252100",
+      "consumed_fraction": 0.889934,
+      "cycle_id": "decision:751b8469e2cb:142743:1788648252440",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_IGNITION_PROOF"
+      ],
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "WAIT_IGNITION_PROOF",
+      "oi_intent": {
+        "age_seconds": 1.7526,
+        "aligned_with_entry": true,
+        "causal_class": "OI_NEUTRAL",
+        "change_pct": 0.005887,
+        "expected_side": null,
+        "fresh": true,
+        "frozen_oi_age_seconds": 1.7526,
+        "frozen_oi_updated_at": 1788648250.6875055,
+        "intent": "NEUTRAL",
+        "intent_source": "FROZEN_BIAS_OI_REGIME",
+        "live_oi_age_seconds": 1.7526,
+        "live_oi_updated_at": 1788648250.6875055,
+        "raw_regime": "POSITIONING_UNRESOLVED",
+        "sample_window_seconds": 15.0033,
+        "side": "SHORT"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_IGNITION_PROOF",
+      "side": "SHORT",
+      "ts": 1788648252.4483416,
+      "utc": "2026-09-05T22:44:12.448342+00:00",
+      "vn": "2026-09-06T05:44:12.448342+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:SHORT:1788648252100",
+      "cycle_id": "decision:751b8469e2cb:142745:1788648253809",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "SHORT",
+      "ts": 1788648253.816938,
+      "utc": "2026-09-05T22:44:13.816938+00:00",
+      "vn": "2026-09-06T05:44:13.816938+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:SHORT:1788648252100",
+      "cycle_id": "decision:751b8469e2cb:142877:1788648257262",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "IGNITION_EPISODE_SAFETY_EXPIRED",
+      "side": "SHORT",
+      "ts": 1788648257.268331,
+      "utc": "2026-09-05T22:44:17.268331+00:00",
+      "vn": "2026-09-06T05:44:17.268331+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:SHORT:1788648262800",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:143267:1788648263032",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_IGNITION_PROOF"
+      ],
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "WAIT_IGNITION_PROOF",
+      "oi_intent": {
+        "age_seconds": 12.3454,
+        "aligned_with_entry": true,
+        "causal_class": "OI_STALE_CONTEXT",
+        "change_pct": null,
+        "expected_side": null,
+        "fresh": false,
+        "frozen_oi_age_seconds": 12.3454,
+        "frozen_oi_updated_at": 1788648250.6875055,
+        "intent": "NEUTRAL",
+        "intent_source": "FROZEN_BIAS_OI_REGIME",
+        "live_oi_age_seconds": 12.3454,
+        "live_oi_updated_at": 1788648250.6875055,
+        "raw_regime": "POSITIONING_UNRESOLVED",
+        "sample_window_seconds": null,
+        "side": "SHORT"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_IGNITION_PROOF",
+      "side": "SHORT",
+      "ts": 1788648263.0417151,
+      "utc": "2026-09-05T22:44:23.041715+00:00",
+      "vn": "2026-09-06T05:44:23.041715+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:SHORT:1788648262800",
+      "cycle_id": "decision:751b8469e2cb:143270:1788648264055",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "SHORT",
+      "ts": 1788648264.0613396,
+      "utc": "2026-09-05T22:44:24.061340+00:00",
+      "vn": "2026-09-06T05:44:24.061340+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:SHORT:1788648262800",
+      "cycle_id": "decision:751b8469e2cb:143275:1788648268000",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "IGNITION_EPISODE_SAFETY_EXPIRED",
+      "side": "SHORT",
+      "ts": 1788648268.0047429,
+      "utc": "2026-09-05T22:44:28.004743+00:00",
+      "vn": "2026-09-06T05:44:28.004743+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:a62bd7c2776e45c99fc2",
+      "cycle_id": "decision:751b8469e2cb:145087:1788649013941",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "SHORT",
+      "ts": 1788649013.9462128,
+      "utc": "2026-09-05T22:56:53.946213+00:00",
+      "vn": "2026-09-06T05:56:53.946213+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:a62bd7c2776e45c99fc2",
+      "cycle_id": "decision:751b8469e2cb:145185:1788649014373",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "BIAS_ALIGNMENT_FAIL"
+      ],
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "BIAS_ALIGNMENT_FAIL",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "BIAS_ALIGNMENT_FAIL",
+      "side": "SHORT",
+      "ts": 1788649014.378217,
+      "utc": "2026-09-05T22:56:54.378217+00:00",
+      "vn": "2026-09-06T05:56:54.378217+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:69e3540cbf2c833478c3",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:153711:1788651484008",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_LATE_IMPULSE"
+      ],
+      "ignition_proof_type": "METAORDER_CONTINUATION",
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "WAIT_LATE_IMPULSE",
+      "oi_intent": {
+        "age_seconds": 1788651484.0087,
+        "aligned_with_entry": true,
+        "causal_class": "OI_STALE_CONTEXT",
+        "change_pct": null,
+        "expected_side": null,
+        "fresh": false,
+        "frozen_oi_age_seconds": null,
+        "frozen_oi_updated_at": null,
+        "intent": "NEUTRAL",
+        "intent_source": "FROZEN_BIAS_OI_REGIME",
+        "live_oi_age_seconds": 7.3986,
+        "live_oi_updated_at": 1788651476.6101127,
+        "raw_regime": "UNKNOWN",
+        "sample_window_seconds": null,
+        "side": "SHORT"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "MATURE",
+      "reason": "WAIT_LATE_IMPULSE",
+      "side": "SHORT",
+      "ts": 1788651484.0209892,
+      "utc": "2026-09-05T23:38:04.020989+00:00",
+      "vn": "2026-09-06T06:38:04.020989+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "cycle_id": "decision:751b8469e2cb:157450:1788651972322",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "oi_intent": {},
+      "persistent_candidate_id": "pmeta:LONG:1788651965760",
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "PENDING_REVERSAL_EVIDENCE_GAP",
+      "side": "LONG",
+      "ts": 1788651972.327602,
+      "utc": "2026-09-05T23:46:12.327602+00:00",
+      "vn": "2026-09-06T06:46:12.327602+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:fd744f76b4641cadda26",
+      "consumed_fraction": 1.5,
+      "cycle_id": "decision:751b8469e2cb:157618:1788651976278",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_IGNITION_PROOF"
+      ],
+      "ignition_proposer": "binance_spot",
+      "miss_taxonomy": "WAIT_IGNITION_PROOF",
+      "oi_intent": {
+        "age_seconds": 4.4857,
+        "aligned_with_entry": true,
+        "causal_class": "CASH_LED_UNWIND",
+        "change_pct": -0.024282,
+        "expected_side": "LONG",
+        "fresh": true,
+        "frozen_oi_age_seconds": null,
+        "frozen_oi_updated_at": null,
+        "intent": "UNWIND",
+        "intent_source": "REFRESHED_OI_DELTA",
+        "live_oi_age_seconds": 4.4857,
+        "live_oi_updated_at": 1788651971.793196,
+        "raw_regime": "UNKNOWN",
+        "sample_window_seconds": 15.0236,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_IGNITION_PROOF",
+      "side": "LONG",
+      "ts": 1788651976.291762,
+      "utc": "2026-09-05T23:46:16.291762+00:00",
+      "vn": "2026-09-06T06:46:16.291762+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "cash-acquisition:fd744f76b4641cadda26",
+      "cycle_id": "decision:751b8469e2cb:157643:1788651977500",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "BIAS_ALIGNMENT_FAIL"
+      ],
+      "miss_taxonomy": "BIAS_ALIGNMENT_FAIL",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "BIAS_ALIGNMENT_FAIL",
+      "side": "LONG",
+      "ts": 1788651977.504885,
+      "utc": "2026-09-05T23:46:17.504885+00:00",
+      "vn": "2026-09-06T06:46:17.504885+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:LONG:1788651982700",
+      "cycle_id": "decision:751b8469e2cb:158110:1788651986203",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [
+        "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      ],
+      "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+      "side": "LONG",
+      "ts": 1788651986.211695,
+      "utc": "2026-09-05T23:46:26.211695+00:00",
+      "vn": "2026-09-06T06:46:26.211695+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:LONG:1788651982700",
+      "consumed_fraction": 0.0,
+      "cycle_id": "decision:751b8469e2cb:158144:1788651987729",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "ignition_proposer": "binance_spot",
+      "oi_intent": {
+        "age_seconds": 0.9361,
+        "aligned_with_entry": true,
+        "causal_class": "ALIGNED_BUILD",
+        "change_pct": 0.023396,
+        "expected_side": "LONG",
+        "fresh": true,
+        "frozen_oi_age_seconds": 15.9362,
+        "frozen_oi_updated_at": 1788651971.793196,
+        "intent": "POSITION_BUILD",
+        "intent_source": "REFRESHED_OI_DELTA",
+        "live_oi_age_seconds": 0.9361,
+        "live_oi_updated_at": 1788651986.7932935,
+        "raw_regime": "PRICE_UP_OI_CONTRACTION",
+        "sample_window_seconds": 15.0001,
+        "side": "LONG"
+      },
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "PROBE",
+      "reason": "WAIT_CASH_IGNITION_FUTURES_RESPONSE",
+      "side": "LONG",
+      "ts": 1788651987.7418046,
+      "utc": "2026-09-05T23:46:27.741805+00:00",
+      "vn": "2026-09-06T06:46:27.741805+07:00"
+    },
+    {
+      "blocking_stage": "COUNCIL",
+      "causal_episode_id": "ign:binance_spot:LONG:1788651982700",
+      "cycle_id": "decision:751b8469e2cb:158194:1788651988798",
+      "decision": "WAIT",
+      "entry_mode": "NONE",
+      "event": "DECISION_EVALUATED",
+      "failed_gates": [],
+      "oi_intent": {},
+      "persistent_candidate_side": "ABSTAIN",
+      "persistent_status": "OBSERVING",
+      "phase": "ARMED",
+      "reason": "IGNITION_EPISODE_SAFETY_EXPIRED",
+      "side": "LONG",
+      "ts": 1788651988.8034227,
+      "utc": "2026-09-05T23:46:28.803423+00:00",
+      "vn": "2026-09-06T06:46:28.803423+07:00"
+    }
+  ],
+  "recent_closed_trades": [],
+  "recent_opportunities": [
+    {
+      "anchor_role": "DECISION_CYCLE",
+      "causal_episode_id": null,
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:153730:1788651484335",
+      "decision_count": 4,
+      "diagnostic_wave_id": "diag:SHORT:1788651484335",
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "DECISION_CYCLE",
+      "side": "SHORT",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788651544.517,
+      "utc": "2026-09-05T23:39:04.517000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:39:04.517000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 7.807087,
+        "max_favorable_excursion_bps": 0.539718,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.547972,
+            "max_favorable_excursion_bps": 0.539718,
+            "outcome_price": 79688.8,
+            "signed_close_bps": -2.209079,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.547972,
+            "max_favorable_excursion_bps": 0.539718,
+            "outcome_price": 79688.9,
+            "signed_close_bps": -2.221631,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 4.531123,
+            "max_favorable_excursion_bps": 0.539718,
+            "outcome_price": 79707.3,
+            "signed_close_bps": -4.531123,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 7.807087,
+            "max_favorable_excursion_bps": 0.539718,
+            "outcome_price": 79733.4,
+            "signed_close_bps": -7.807087,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "BIAS_ALIGNMENT_FAIL"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "BIAS_ALIGNMENT_FAIL"
+        ],
+        "miss_taxonomy": "BIAS_ALIGNMENT_FAIL",
+        "origin_reason": "BIAS_ALIGNMENT_FAIL",
+        "primary_reason": "BIAS_ALIGNMENT_FAIL",
+        "terminal_reason": "BIAS_ALIGNMENT_FAIL"
+      }
+    },
+    {
+      "anchor_role": "EPISODE_ORIGIN",
+      "causal_episode_id": "ign:futures:LONG:1788651486000",
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:153828:1788651487171",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CAUSAL_EPISODE_RESEARCH_ONLY",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788651547.536,
+      "utc": "2026-09-05T23:39:07.536000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:39:07.536000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 0.006274,
+        "max_favorable_excursion_bps": 5.690941,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006274,
+            "max_favorable_excursion_bps": 0.106666,
+            "outcome_price": 79688.9,
+            "signed_close_bps": 0.106666,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006274,
+            "max_favorable_excursion_bps": 0.106666,
+            "outcome_price": 79688.9,
+            "signed_close_bps": 0.106666,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006274,
+            "max_favorable_excursion_bps": 4.009384,
+            "outcome_price": 79720.0,
+            "signed_close_bps": 4.009384,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006274,
+            "max_favorable_excursion_bps": 5.690941,
+            "outcome_price": 79733.4,
+            "signed_close_bps": 5.690941,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "BIAS_NOT_READY"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "BIAS_NOT_READY"
+        ],
+        "miss_taxonomy": "BIAS_NOT_READY",
+        "origin_reason": "BIAS_NOT_READY",
+        "primary_reason": "BIAS_NOT_READY",
+        "terminal_reason": "BIAS_NOT_READY"
+      }
+    },
+    {
+      "anchor_role": "CASH_ACQUISITION_CANDIDATE",
+      "causal_episode_id": null,
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:154706:1788651606835",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CASH_ACQUISITION_SHADOW",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788651667.18,
+      "utc": "2026-09-05T23:41:07.180000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:41:07.180000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 1.598336,
+        "max_favorable_excursion_bps": 0.006268,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.006268,
+            "outcome_price": 79770.5,
+            "signed_close_bps": 0.006268,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.598336,
+            "max_favorable_excursion_bps": 0.006268,
+            "outcome_price": 79757.7,
+            "signed_close_bps": -1.598336,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.598336,
+            "max_favorable_excursion_bps": 0.006268,
+            "outcome_price": 79765.8,
+            "signed_close_bps": -0.582923,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.598336,
+            "max_favorable_excursion_bps": 0.006268,
+            "outcome_price": 79759.3,
+            "signed_close_bps": -1.397761,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+        ],
+        "diagnostic_reasons": [],
+        "failed_gates": [],
+        "miss_taxonomy": "CASH_CONTROL_ACQUISITION_SHADOW_CANDIDATE",
+        "origin_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "primary_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "EPISODE_ORIGIN",
+      "causal_episode_id": "ign:binance_spot:LONG:1788651743700",
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:155602:1788651743902",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CAUSAL_EPISODE_RESEARCH_ONLY",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788651805.473,
+      "utc": "2026-09-05T23:43:25.473000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:43:25.473000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 1.147151,
+        "max_favorable_excursion_bps": 0.206863,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006269,
+            "max_favorable_excursion_bps": 0.04388,
+            "outcome_price": 79763.2,
+            "signed_close_bps": 0.04388,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006269,
+            "max_favorable_excursion_bps": 0.04388,
+            "outcome_price": 79763.2,
+            "signed_close_bps": 0.04388,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.147151,
+            "max_favorable_excursion_bps": 0.194326,
+            "outcome_price": 79764.3,
+            "signed_close_bps": 0.181789,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.147151,
+            "max_favorable_excursion_bps": 0.206863,
+            "outcome_price": 79764.5,
+            "signed_close_bps": 0.206863,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "BIAS_NOT_READY"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "BIAS_NOT_READY"
+        ],
+        "miss_taxonomy": "BIAS_NOT_READY",
+        "origin_reason": "BIAS_NOT_READY",
+        "primary_reason": "BIAS_NOT_READY",
+        "terminal_reason": "BIAS_NOT_READY"
+      }
+    },
+    {
+      "anchor_role": "PERSISTENT_METAORDER_CANDIDATE",
+      "causal_episode_id": null,
+      "classification": "RESEARCH_ONLY",
+      "cycle_id": "decision:751b8469e2cb:157447:1788651971432",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": "pmeta:LONG:1788651965760",
+      "raw_screen_passed": false,
+      "sample_scope": "PERSISTENT_METAORDER_SHADOW",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652032.394,
+      "utc": "2026-09-05T23:47:12.394000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:47:12.394000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 2.548824,
+        "max_favorable_excursion_bps": 4.765737,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.50726,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79858.5,
+            "signed_close_bps": 2.223176,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.997727,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79824.8,
+            "signed_close_bps": -1.997727,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.010252,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79825.7,
+            "signed_close_bps": -1.885002,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.548824,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79820.4,
+            "signed_close_bps": -2.548824,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "LONG_CANDIDATE"
+        ],
+        "diagnostic_reasons": [],
+        "failed_gates": [],
+        "miss_taxonomy": "PERSISTENT_METAORDER_SHADOW_CANDIDATE",
+        "origin_reason": "LONG_CANDIDATE",
+        "primary_reason": "LONG_CANDIDATE",
+        "terminal_reason": "LONG_CANDIDATE"
+      }
+    },
+    {
+      "anchor_role": "CASH_ACQUISITION_CANDIDATE",
+      "causal_episode_id": null,
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:157447:1788651971432",
+      "decision_count": 2,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CASH_ACQUISITION_SHADOW",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652032.394,
+      "utc": "2026-09-05T23:47:12.394000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:47:12.394000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 2.548824,
+        "max_favorable_excursion_bps": 4.765737,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.50726,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79858.5,
+            "signed_close_bps": 2.223176,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.997727,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79824.8,
+            "signed_close_bps": -1.997727,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.010252,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79825.7,
+            "signed_close_bps": -1.885002,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.548824,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79820.4,
+            "signed_close_bps": -2.548824,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+        ],
+        "diagnostic_reasons": [],
+        "failed_gates": [],
+        "miss_taxonomy": "CASH_CONTROL_ACQUISITION_SHADOW_CANDIDATE",
+        "origin_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "primary_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "DECISION_CYCLE",
+      "causal_episode_id": null,
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:157614:1788651976171",
+      "decision_count": 1,
+      "diagnostic_wave_id": "diag:LONG:1788651976171",
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "DECISION_CYCLE",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652036.701,
+      "utc": "2026-09-05T23:47:16.701000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:47:16.701000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 6.053712,
+        "max_favorable_excursion_bps": 0.018781,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.23328,
+            "max_favorable_excursion_bps": 0.018781,
+            "outcome_price": 79863.0,
+            "signed_close_bps": -0.669852,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 5.465244,
+            "max_favorable_excursion_bps": 0.018781,
+            "outcome_price": 79835.9,
+            "signed_close_bps": -4.062936,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 5.527847,
+            "max_favorable_excursion_bps": 0.018781,
+            "outcome_price": 79824.3,
+            "signed_close_bps": -5.515326,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 6.053712,
+            "max_favorable_excursion_bps": 0.018781,
+            "outcome_price": 79820.0,
+            "signed_close_bps": -6.053712,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "BIAS_ALIGNMENT_FAIL"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "BIAS_ALIGNMENT_FAIL"
+        ],
+        "miss_taxonomy": "BIAS_ALIGNMENT_FAIL",
+        "origin_reason": "BIAS_ALIGNMENT_FAIL",
+        "primary_reason": "BIAS_ALIGNMENT_FAIL",
+        "terminal_reason": "BIAS_ALIGNMENT_FAIL"
+      }
+    },
+    {
+      "anchor_role": "EPISODE_ORIGIN",
+      "causal_episode_id": "cash-acquisition:fd744f76b4641cadda26",
+      "classification": "NO_ECONOMIC_SCREEN",
+      "cycle_id": "decision:751b8469e2cb:157618:1788651976278",
+      "decision_count": 15,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": true,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [
+        "CAUSAL_CONTINUITY",
+        "EXECUTABLE_FILL",
+        "CLEAN_FEED",
+        "GUARDIAN_COUNTERFACTUAL"
+      ],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CAUSAL_EPISODE_ORIGIN",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652036.701,
+      "utc": "2026-09-05T23:47:16.701000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:47:16.701000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 5.415507,
+        "max_favorable_excursion_bps": 0.657374,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.594767,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79863.0,
+            "signed_close_bps": -0.031304,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 4.827001,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79835.9,
+            "signed_close_bps": -3.424604,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 4.889608,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79824.3,
+            "signed_close_bps": -4.877087,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 5.415507,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79820.0,
+            "signed_close_bps": -5.415507,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+          "WAIT_IGNITION_PROOF",
+          "BIAS_ALIGNMENT_FAIL"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "WAIT_IGNITION_PROOF",
+          "BIAS_ALIGNMENT_FAIL"
+        ],
+        "miss_taxonomy": "WAIT_IGNITION_PROOF",
+        "origin_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "primary_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "EPISODE_ORIGIN",
+      "causal_episode_id": "ign:binance_spot:LONG:1788651982700",
+      "classification": "NO_ECONOMIC_SCREEN",
+      "cycle_id": "decision:751b8469e2cb:157851:1788651983977",
+      "decision_count": 2,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": true,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [
+        "CAUSAL_CONTINUITY",
+        "EXECUTABLE_FILL",
+        "CLEAN_FEED",
+        "GUARDIAN_COUNTERFACTUAL"
+      ],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CAUSAL_EPISODE_ORIGIN",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652045.573,
+      "utc": "2026-09-05T23:47:25.573000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:47:25.573000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 3.901008,
+        "max_favorable_excursion_bps": 0.006262,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.312413,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79827.3,
+            "signed_close_bps": -2.986807,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.312413,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79825.8,
+            "signed_close_bps": -3.174657,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.37503,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79824.3,
+            "signed_close_bps": -3.362506,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.901008,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79820.0,
+            "signed_close_bps": -3.901008,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "WAIT_CAUSAL_EVIDENCE_REFRESH"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "WAIT_CAUSAL_EVIDENCE_REFRESH"
+        ],
+        "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+        "origin_reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+        "primary_reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+        "terminal_reason": "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      }
+    },
+    {
+      "anchor_role": "CASH_ACQUISITION_CANDIDATE",
+      "causal_episode_id": null,
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:159229:1788652317713",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CASH_ACQUISITION_SHADOW",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652377.939,
+      "utc": "2026-09-05T23:52:57.939000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:52:57.939000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 0.0,
+        "max_favorable_excursion_bps": 0.018793,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.018793,
+            "outcome_price": 79816.1,
+            "signed_close_bps": 0.018793,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.018793,
+            "outcome_price": 79816.1,
+            "signed_close_bps": 0.018793,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.018793,
+            "outcome_price": 79816.1,
+            "signed_close_bps": 0.018793,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.018793,
+            "outcome_price": 79816.0,
+            "signed_close_bps": 0.006264,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+        ],
+        "diagnostic_reasons": [],
+        "failed_gates": [],
+        "miss_taxonomy": "CASH_CONTROL_ACQUISITION_SHADOW_CANDIDATE",
+        "origin_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "primary_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "EPISODE_ORIGIN",
+      "causal_episode_id": "cash-acquisition:69e3540cbf2c833478c3",
+      "classification": "NO_ECONOMIC_SCREEN",
+      "cycle_id": "decision:751b8469e2cb:153711:1788651484008",
+      "decision_count": 8,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": true,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [
+        "CAUSAL_CONTINUITY",
+        "EXECUTABLE_FILL",
+        "CLEAN_FEED",
+        "GUARDIAN_COUNTERFACTUAL"
+      ],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CAUSAL_EPISODE_ORIGIN",
+      "side": "SHORT",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652384.075,
+      "utc": "2026-09-05T23:53:04.075000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:53:04.075000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 24.383663,
+        "max_favorable_excursion_bps": 2.208711,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.509898,
+            "max_favorable_excursion_bps": 2.208711,
+            "outcome_price": 79688.8,
+            "signed_close_bps": -0.539628,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.509898,
+            "max_favorable_excursion_bps": 2.208711,
+            "outcome_price": 79688.9,
+            "signed_close_bps": -0.552178,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.861284,
+            "max_favorable_excursion_bps": 2.208711,
+            "outcome_price": 79707.3,
+            "signed_close_bps": -2.861284,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 6.136702,
+            "max_favorable_excursion_bps": 2.208711,
+            "outcome_price": 79733.4,
+            "signed_close_bps": -6.136702,
+            "valid": true,
+            "window_seconds": 60
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 10.792563,
+            "max_favorable_excursion_bps": 2.208711,
+            "outcome_price": 79765.9,
+            "signed_close_bps": -10.215287,
+            "valid": true,
+            "window_seconds": 180
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 10.980806,
+            "max_favorable_excursion_bps": 2.208711,
+            "outcome_price": 79764.4,
+            "signed_close_bps": -10.027044,
+            "valid": true,
+            "window_seconds": 300
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 24.383663,
+            "max_favorable_excursion_bps": 2.208711,
+            "outcome_price": 79815.9,
+            "signed_close_bps": -16.490033,
+            "valid": true,
+            "window_seconds": 900
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "WAIT_LATE_IMPULSE",
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "WAIT_LATE_IMPULSE"
+        ],
+        "miss_taxonomy": "WAIT_LATE_IMPULSE",
+        "origin_reason": "WAIT_LATE_IMPULSE",
+        "primary_reason": "WAIT_LATE_IMPULSE",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "CASH_ACQUISITION_CANDIDATE",
+      "causal_episode_id": null,
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:154706:1788651606835",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CASH_ACQUISITION_SHADOW",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652507.593,
+      "utc": "2026-09-05T23:55:07.593000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:55:07.593000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 3.716915,
+        "max_favorable_excursion_bps": 13.582724,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.006268,
+            "outcome_price": 79770.5,
+            "signed_close_bps": 0.006268,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.598336,
+            "max_favorable_excursion_bps": 0.006268,
+            "outcome_price": 79757.7,
+            "signed_close_bps": -1.598336,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.598336,
+            "max_favorable_excursion_bps": 0.006268,
+            "outcome_price": 79765.8,
+            "signed_close_bps": -0.582923,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.598336,
+            "max_favorable_excursion_bps": 0.006268,
+            "outcome_price": 79759.3,
+            "signed_close_bps": -1.397761,
+            "valid": true,
+            "window_seconds": 60
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.716915,
+            "max_favorable_excursion_bps": 0.194308,
+            "outcome_price": 79764.4,
+            "signed_close_bps": -0.758426,
+            "valid": true,
+            "window_seconds": 180
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.716915,
+            "max_favorable_excursion_bps": 1.372689,
+            "outcome_price": 79770.9,
+            "signed_close_bps": 0.056412,
+            "valid": true,
+            "window_seconds": 300
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.716915,
+            "max_favorable_excursion_bps": 13.582724,
+            "outcome_price": 79820.0,
+            "signed_close_bps": 6.211573,
+            "valid": true,
+            "window_seconds": 900
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+        ],
+        "diagnostic_reasons": [],
+        "failed_gates": [],
+        "miss_taxonomy": "CASH_CONTROL_ACQUISITION_SHADOW_CANDIDATE",
+        "origin_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "primary_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "CASH_ACQUISITION_CANDIDATE",
+      "causal_episode_id": null,
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:160475:1788652726819",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CASH_ACQUISITION_SHADOW",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652787.082,
+      "utc": "2026-09-05T23:59:47.082000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T06:59:47.082000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 4.204485,
+        "max_favorable_excursion_bps": 1.40985,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006266,
+            "max_favorable_excursion_bps": 0.006266,
+            "outcome_price": 79795.7,
+            "signed_close_bps": -0.006266,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.008826,
+            "max_favorable_excursion_bps": 1.40985,
+            "outcome_price": 79801.4,
+            "signed_close_bps": 0.708058,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.008826,
+            "max_favorable_excursion_bps": 1.40985,
+            "outcome_price": 79800.8,
+            "signed_close_bps": 0.632866,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 4.204485,
+            "max_favorable_excursion_bps": 1.40985,
+            "outcome_price": 79791.9,
+            "signed_close_bps": -0.482482,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+        ],
+        "diagnostic_reasons": [],
+        "failed_gates": [],
+        "miss_taxonomy": "CASH_CONTROL_ACQUISITION_SHADOW_CANDIDATE",
+        "origin_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "primary_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "PERSISTENT_METAORDER_CANDIDATE",
+      "causal_episode_id": null,
+      "classification": "RESEARCH_ONLY",
+      "cycle_id": "decision:751b8469e2cb:157447:1788651971432",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": "pmeta:LONG:1788651965760",
+      "raw_screen_passed": false,
+      "sample_scope": "PERSISTENT_METAORDER_SHADOW",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652871.471,
+      "utc": "2026-09-06T00:01:11.471000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T07:01:11.471000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 13.195016,
+        "max_favorable_excursion_bps": 4.765737,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.50726,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79858.5,
+            "signed_close_bps": 2.223176,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.997727,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79824.8,
+            "signed_close_bps": -1.997727,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.010252,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79825.7,
+            "signed_close_bps": -1.885002,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.548824,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79820.4,
+            "signed_close_bps": -2.548824,
+            "valid": true,
+            "window_seconds": 60
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 4.540288,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79804.5,
+            "signed_close_bps": -4.540288,
+            "valid": true,
+            "window_seconds": 180
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 8.83634,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79784.9,
+            "signed_close_bps": -6.995175,
+            "valid": true,
+            "window_seconds": 300
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 13.195016,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79788.3,
+            "signed_close_bps": -6.569327,
+            "valid": true,
+            "window_seconds": 900
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "LONG_CANDIDATE"
+        ],
+        "diagnostic_reasons": [],
+        "failed_gates": [],
+        "miss_taxonomy": "PERSISTENT_METAORDER_SHADOW_CANDIDATE",
+        "origin_reason": "LONG_CANDIDATE",
+        "primary_reason": "LONG_CANDIDATE",
+        "terminal_reason": "LONG_CANDIDATE"
+      }
+    },
+    {
+      "anchor_role": "CASH_ACQUISITION_CANDIDATE",
+      "causal_episode_id": null,
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:157447:1788651971432",
+      "decision_count": 2,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CASH_ACQUISITION_SHADOW",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652871.471,
+      "utc": "2026-09-06T00:01:11.471000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T07:01:11.471000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 13.195016,
+        "max_favorable_excursion_bps": 4.765737,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.50726,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79858.5,
+            "signed_close_bps": 2.223176,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 1.997727,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79824.8,
+            "signed_close_bps": -1.997727,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.010252,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79825.7,
+            "signed_close_bps": -1.885002,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 2.548824,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79820.4,
+            "signed_close_bps": -2.548824,
+            "valid": true,
+            "window_seconds": 60
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 4.540288,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79804.5,
+            "signed_close_bps": -4.540288,
+            "valid": true,
+            "window_seconds": 180
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 8.83634,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79784.9,
+            "signed_close_bps": -6.995175,
+            "valid": true,
+            "window_seconds": 300
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 13.195016,
+            "max_favorable_excursion_bps": 4.765737,
+            "outcome_price": 79788.3,
+            "signed_close_bps": -6.569327,
+            "valid": true,
+            "window_seconds": 900
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+        ],
+        "diagnostic_reasons": [],
+        "failed_gates": [],
+        "miss_taxonomy": "CASH_CONTROL_ACQUISITION_SHADOW_CANDIDATE",
+        "origin_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "primary_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "EPISODE_ORIGIN",
+      "causal_episode_id": "cash-acquisition:fd744f76b4641cadda26",
+      "classification": "NO_ECONOMIC_SCREEN",
+      "cycle_id": "decision:751b8469e2cb:157618:1788651976278",
+      "decision_count": 32,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": true,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [
+        "CAUSAL_CONTINUITY",
+        "EXECUTABLE_FILL",
+        "CLEAN_FEED",
+        "GUARDIAN_COUNTERFACTUAL"
+      ],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CAUSAL_EPISODE_ORIGIN",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652876.32,
+      "utc": "2026-09-06T00:01:16.320000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T07:01:16.320000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 16.008615,
+        "max_favorable_excursion_bps": 0.657374,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.594767,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79863.0,
+            "signed_close_bps": -0.031304,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 4.827001,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79835.9,
+            "signed_close_bps": -3.424604,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 4.889608,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79824.3,
+            "signed_close_bps": -4.877087,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 5.415507,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79820.0,
+            "signed_close_bps": -5.415507,
+            "valid": true,
+            "window_seconds": 60
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 7.356325,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79804.6,
+            "signed_close_bps": -7.343803,
+            "valid": true,
+            "window_seconds": 180
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 11.651166,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79784.9,
+            "signed_close_bps": -9.81052,
+            "valid": true,
+            "window_seconds": 300
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 16.008615,
+            "max_favorable_excursion_bps": 0.657374,
+            "outcome_price": 79788.3,
+            "signed_close_bps": -9.384792,
+            "valid": true,
+            "window_seconds": 900
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+          "BIAS_ALIGNMENT_FAIL"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "BIAS_ALIGNMENT_FAIL"
+        ],
+        "miss_taxonomy": "WAIT_IGNITION_PROOF",
+        "origin_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "primary_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "EPISODE_ORIGIN",
+      "causal_episode_id": "ign:binance_spot:LONG:1788651982700",
+      "classification": "NO_ECONOMIC_SCREEN",
+      "cycle_id": "decision:751b8469e2cb:157851:1788651983977",
+      "decision_count": 2,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": true,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [
+        "CAUSAL_CONTINUITY",
+        "EXECUTABLE_FILL",
+        "CLEAN_FEED",
+        "GUARDIAN_COUNTERFACTUAL"
+      ],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CAUSAL_EPISODE_ORIGIN",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788652884.605,
+      "utc": "2026-09-06T00:01:24.605000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T07:01:24.605000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 14.495721,
+        "max_favorable_excursion_bps": 0.006262,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.312413,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79827.3,
+            "signed_close_bps": -2.986807,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.312413,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79825.8,
+            "signed_close_bps": -3.174657,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.37503,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79824.3,
+            "signed_close_bps": -3.362506,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 3.901008,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79820.0,
+            "signed_close_bps": -3.901008,
+            "valid": true,
+            "window_seconds": 60
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 5.84212,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79804.5,
+            "signed_close_bps": -5.84212,
+            "valid": true,
+            "window_seconds": 180
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 10.137612,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79793.6,
+            "signed_close_bps": -7.20716,
+            "valid": true,
+            "window_seconds": 300
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 14.495721,
+            "max_favorable_excursion_bps": 0.006262,
+            "outcome_price": 79802.8,
+            "signed_close_bps": -6.055016,
+            "valid": true,
+            "window_seconds": 900
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "WAIT_CAUSAL_EVIDENCE_REFRESH"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "WAIT_CAUSAL_EVIDENCE_REFRESH"
+        ],
+        "miss_taxonomy": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+        "origin_reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+        "primary_reason": "WAIT_CAUSAL_EVIDENCE_REFRESH",
+        "terminal_reason": "WAIT_CAUSAL_EVIDENCE_REFRESH"
+      }
+    },
+    {
+      "anchor_role": "EPISODE_ORIGIN",
+      "causal_episode_id": "ign:futures:SHORT:1788653110600",
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:162155:1788653110757",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CAUSAL_EPISODE_RESEARCH_ONLY",
+      "side": "SHORT",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788653170.785,
+      "utc": "2026-09-06T00:06:10.785000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T07:06:10.785000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 0.006261,
+        "max_favorable_excursion_bps": 1.621666,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006261,
+            "max_favorable_excursion_bps": 0.369414,
+            "outcome_price": 79853.3,
+            "signed_close_bps": 0.356892,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006261,
+            "max_favorable_excursion_bps": 1.020585,
+            "outcome_price": 79848.0,
+            "signed_close_bps": 1.020585,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006261,
+            "max_favorable_excursion_bps": 1.020585,
+            "outcome_price": 79848.1,
+            "signed_close_bps": 1.008063,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.006261,
+            "max_favorable_excursion_bps": 1.621666,
+            "outcome_price": 79843.2,
+            "signed_close_bps": 1.621666,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "BIAS_NOT_READY"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "BIAS_NOT_READY"
+        ],
+        "miss_taxonomy": "BIAS_NOT_READY",
+        "origin_reason": "BIAS_NOT_READY",
+        "primary_reason": "BIAS_NOT_READY",
+        "terminal_reason": "BIAS_NOT_READY"
+      }
+    },
+    {
+      "anchor_role": "CASH_ACQUISITION_CANDIDATE",
+      "causal_episode_id": null,
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:159229:1788652317713",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CASH_ACQUISITION_SHADOW",
+      "side": "LONG",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788653218.644,
+      "utc": "2026-09-06T00:06:58.644000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T07:06:58.644000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 10.091968,
+        "max_favorable_excursion_bps": 5.919869,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.018793,
+            "outcome_price": 79816.1,
+            "signed_close_bps": 0.018793,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.018793,
+            "outcome_price": 79816.1,
+            "signed_close_bps": 0.018793,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.018793,
+            "outcome_price": 79816.1,
+            "signed_close_bps": 0.018793,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.0,
+            "max_favorable_excursion_bps": 0.018793,
+            "outcome_price": 79816.0,
+            "signed_close_bps": 0.006264,
+            "valid": true,
+            "window_seconds": 60
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.093966,
+            "max_favorable_excursion_bps": 1.822944,
+            "outcome_price": 79824.2,
+            "signed_close_bps": 1.033628,
+            "valid": true,
+            "window_seconds": 180
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 6.283205,
+            "max_favorable_excursion_bps": 1.822944,
+            "outcome_price": 79767.0,
+            "signed_close_bps": -6.132859,
+            "valid": true,
+            "window_seconds": 300
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 10.091968,
+            "max_favorable_excursion_bps": 5.919869,
+            "outcome_price": 79843.2,
+            "signed_close_bps": 3.414105,
+            "valid": true,
+            "window_seconds": 900
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+        ],
+        "diagnostic_reasons": [],
+        "failed_gates": [],
+        "miss_taxonomy": "CASH_CONTROL_ACQUISITION_SHADOW_CANDIDATE",
+        "origin_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "primary_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+        "terminal_reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION"
+      }
+    },
+    {
+      "anchor_role": "EPISODE_ORIGIN",
+      "causal_episode_id": "ign:futures:SHORT:1788653305100",
+      "classification": "DIAGNOSTIC_ONLY",
+      "cycle_id": "decision:751b8469e2cb:162969:1788653305213",
+      "decision_count": 1,
+      "diagnostic_wave_id": null,
+      "economic_miss_confirmed": false,
+      "economic_miss_eligible": false,
+      "frozen_economics": {
+        "commission_verified": false,
+        "cost_budget_bps": 13.012484,
+        "execution_style": "TAKER",
+        "minimum_net_edge_bps": 6.0
+      },
+      "guardian_counterfactual_net_bps": null,
+      "missing_confirmation": [],
+      "persistent_candidate_id": null,
+      "raw_screen_passed": false,
+      "sample_scope": "CAUSAL_EPISODE_RESEARCH_ONLY",
+      "side": "SHORT",
+      "strategy_code_version": "7913541fe43c5434",
+      "strategy_config_version": "2e587b1f637e347d",
+      "ts": 1788653365.56,
+      "utc": "2026-09-06T00:09:25.560000+00:00",
+      "version": "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT",
+      "vn": "2026-09-06T07:09:25.560000+07:00",
+      "what_happened_after": {
+        "hypothetical_hard_sl_hit": false,
+        "invalid_reason": null,
+        "max_adverse_excursion_bps": 0.206586,
+        "max_favorable_excursion_bps": 1.070489,
+        "valid": true,
+        "windows": [
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.00626,
+            "max_favorable_excursion_bps": 0.431952,
+            "outcome_price": 79866.6,
+            "signed_close_bps": 0.431952,
+            "valid": true,
+            "window_seconds": 5
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.00626,
+            "max_favorable_excursion_bps": 0.431952,
+            "outcome_price": 79866.6,
+            "signed_close_bps": 0.431952,
+            "valid": true,
+            "window_seconds": 15
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.00626,
+            "max_favorable_excursion_bps": 0.431952,
+            "outcome_price": 79866.7,
+            "signed_close_bps": 0.419431,
+            "valid": true,
+            "window_seconds": 30
+          },
+          {
+            "economic_screen_passed": false,
+            "hypothetical_hard_sl_hit": false,
+            "max_adverse_excursion_bps": 0.206586,
+            "max_favorable_excursion_bps": 1.070489,
+            "outcome_price": 79871.7,
+            "signed_close_bps": -0.206586,
+            "valid": true,
+            "window_seconds": 60
+          }
+        ]
+      },
+      "why_no_entry": {
+        "all_reasons": [
+          "BIAS_NOT_READY"
+        ],
+        "diagnostic_reasons": [
+          "PRICE_QUORUM_FAIL",
+          "FLOW_QUORUM_FAIL"
+        ],
+        "failed_gates": [
+          "BIAS_NOT_READY"
+        ],
+        "miss_taxonomy": "BIAS_NOT_READY",
+        "origin_reason": "BIAS_NOT_READY",
+        "primary_reason": "BIAS_NOT_READY",
+        "terminal_reason": "BIAS_NOT_READY"
+      }
+    }
+  ],
+  "recent_trades": [],
+  "runtime": {
+    "balance_usdt": 4996.509435876403,
+    "breakeven": null,
+    "losses": 33,
+    "position": null,
+    "trades": 35,
+    "wins": 2
+  },
+  "services": {
+    "wstrade-bot": "active",
+    "wstrade-health": "active",
+    "wstrade-recorder": "active"
+  },
+  "side_counts": {
+    "ABSTAIN": 21
+  },
+  "source": {
+    "branch": "telemetry",
+    "journal": "/home/ubuntu/.local/state/smc2026/mainnet_shadow/events.jsonl",
+    "mode": "SHADOW_ONLY",
+    "real_exchange_mutations": false,
+    "retention_hours": 84
+  },
+  "ts": 1788653367.316032,
+  "utc": "2026-09-06T00:09:27.316032+00:00",
+  "vn": "2026-09-06T07:09:27.316032+07:00"
+}

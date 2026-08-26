@@ -1,0 +1,36 @@
+[Unit]
+Description=WStrade read-only operator trade audit mirror
+After=wstrade-bot.service
+Wants=wstrade-bot.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/WStrade
+ExecStartPre=+/usr/bin/install -d -m 0750 -o ubuntu -g ubuntu /home/ubuntu/wstrade_trade_log
+ExecStart=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/trade_audit_mirror.py
+Restart=always
+RestartSec=5s
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=WSTRADE_AUDIT_SOURCE=/home/ubuntu/.local/state/smc2026/mainnet_shadow/events.jsonl
+Environment=WSTRADE_AUDIT_OUTPUT_DIR=/home/ubuntu/wstrade_trade_log
+Environment=WSTRADE_AUDIT_POLL_SECONDS=1.0
+UMask=0027
+Nice=15
+CPUAccounting=true
+CPUWeight=10
+MemoryHigh=48M
+MemoryMax=64M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/ubuntu/.local/state/smc2026/mainnet_shadow
+ReadWritePaths=/home/ubuntu/wstrade_trade_log
+RestrictAddressFamilies=AF_UNIX
+LimitNOFILE=64
+
+[Install]
+WantedBy=multi-user.target

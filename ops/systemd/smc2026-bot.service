@@ -1,0 +1,57 @@
+[Unit]
+Description=SMC2026 BTCUSDT Mainnet Tier-S shadow bot
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/WStrade
+EnvironmentFile=-/home/ubuntu/WStrade/.env
+ExecStartPre=+/usr/bin/install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.local/state/smc2026 /home/ubuntu/.local/state/smc2026/runtime /home/ubuntu/.local/state/smc2026/mainnet_shadow /home/ubuntu/smc2026_data/health
+ExecStartPre=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/repo_integrity_check.py
+ExecStartPre=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/shadow_state_guard.py
+ExecStartPre=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/mainnet_preflight.py
+ExecStart=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/mainnet_tier_s_lean_launcher.py
+Restart=always
+RestartSec=15s
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=SMC_RUNTIME_DIR=/home/ubuntu/.local/state/smc2026/runtime
+Environment=SMC_BOT_HEARTBEAT_PATH=/home/ubuntu/smc2026_data/health/bot_runtime.json
+Environment=SMC_EXECUTION_VENUE=MAINNET
+Environment=SMC_ENABLE_TRADING=false
+Environment=SMC_MAINNET_TRADING_ENABLED=false
+Environment=SMC_MAINNET_ARMED=false
+Environment=SMC_MAINNET_EXCLUSIVE_ACCOUNT=false
+Environment=SMC_FIXED_QTY_BTC=0.001
+Environment=SMC_LEVERAGE=20
+Environment=SMC_MARGIN_TYPE=ISOLATED
+Environment=SMC_SHADOW_BALANCE_USDT=5.4
+Environment=SMC_SHADOW_FEE_BPS_PER_SIDE=9.0
+Environment=SMC_RECORDER_POLICY=DISABLED
+Environment=SMC_CONTINUOUS_SHADOW=0
+Environment=SMC_SIDE_CALIBRATION_MODE=OFF
+Environment=SMC_ML_META_MODE=OFF
+Environment=SMC_JOURNAL_DIR=/home/ubuntu/.local/state/smc2026/mainnet_shadow
+Environment=SMC_SHADOW_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/mainnet_shadow/events.jsonl
+Environment=SMC_JOURNAL_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/mainnet_shadow/events.jsonl
+UMask=0077
+CPUAccounting=true
+MemoryAccounting=true
+CPUQuota=200%
+MemoryHigh=768M
+MemoryMax=1G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/.local/state/smc2026 /home/ubuntu/smc2026_data/health
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=4096
+
+[Install]
+WantedBy=default.target
