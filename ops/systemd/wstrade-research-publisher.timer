@@ -1,0 +1,12 @@
+[Unit]
+Description=Publish WStrade SHADOW research telemetry every three minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+AccuracySec=10s
+Persistent=true
+Unit=wstrade-research-publisher.service
+
+[Install]
+WantedBy=timers.target

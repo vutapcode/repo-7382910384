@@ -28,6 +28,8 @@ install -m 0644 "$repo/ops/systemd/wstrade-bot.service" "$units/wstrade-bot.serv
 install -m 0644 "$repo/ops/systemd/wstrade-recorder.service" "$units/wstrade-recorder.service"
 install -m 0644 "$repo/ops/systemd/wstrade-health.service" "$units/wstrade-health.service"
 install -m 0644 "$repo/ops/systemd/wstrade-trade-audit.service" "$units/wstrade-trade-audit.service"
+install -m 0644 "$repo/ops/systemd/wstrade-research-publisher.service" "$units/wstrade-research-publisher.service"
+install -m 0644 "$repo/ops/systemd/wstrade-research-publisher.timer" "$units/wstrade-research-publisher.timer"
 systemctl daemon-reload
 
 echo "AUTO_PROMOTE units installed but not enabled or started. Activate with:"

@@ -1,0 +1,31 @@
+[Unit]
+Description=WStrade sanitized SHADOW research publisher
+After=network-online.target wstrade-bot.service wstrade-recorder.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/WStrade
+ExecStartPre=+/usr/bin/install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.local/state/wstrade /home/ubuntu/.local/share/wstrade-telemetry
+ExecStart=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/publish_research_snapshot.py
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+Nice=19
+CPUAccounting=true
+CPUWeight=1
+MemoryHigh=96M
+MemoryMax=128M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/ubuntu/.local/state/smc2026/mainnet_shadow
+ReadOnlyPaths=/home/ubuntu/wstrade_trade_log
+ReadWritePaths=/home/ubuntu/.local/state/wstrade /home/ubuntu/.local/share/wstrade-telemetry
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=128
+
+[Install]
+WantedBy=multi-user.target
