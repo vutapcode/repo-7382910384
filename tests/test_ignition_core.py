@@ -497,6 +497,8 @@ class IgnitionCoreTests(unittest.TestCase):
         allowed, report = entry_edge_tier.authorize(result, s)
         self.assertTrue(allowed)
         self.assertTrue(report["bootstrap_shadow_allowed"])
+        self.assertEqual(report["shadow_ledger_type"], "RESEARCH_PROBE")
+        self.assertFalse(report["live_like_shadow_allowed"])
         s.wstrade_live_armed = True
         allowed, report = entry_edge_tier.authorize(result, s)
         self.assertFalse(allowed)
@@ -666,6 +668,20 @@ class IgnitionCoreTests(unittest.TestCase):
         build = ignition_core._oi_intent(s, "SHORT", 10.0, frozen)
         self.assertEqual(build["intent"], "POSITION_BUILD")
         self.assertEqual(build["intent_source"], "REFRESHED_OI_DELTA")
+
+    def test_fresh_immaterial_oi_delta_overrides_stale_frozen_regime_as_neutral(self):
+        s = state(now=10.0)
+        s.prev_open_interest = 100_000.0
+        s.open_interest_change_window_seconds = 5.0
+        s.open_interest_change_pct = 0.008
+        frozen = {"direction_context": {
+            "oi_regime": "NEW_LONG_BUILD", "oi_updated_at": 1.0,
+        }}
+        intent = ignition_core._oi_intent(s, "LONG", 10.0, frozen)
+        self.assertTrue(intent["fresh"])
+        self.assertEqual(intent["intent"], "NEUTRAL")
+        self.assertEqual(intent["intent_source"], "REFRESHED_OI_DELTA_NEUTRAL")
+        self.assertEqual(intent["causal_class"], "OI_NEUTRAL")
 
     def test_futures_proposer_waits_for_fresh_oi_and_rejects_unwind(self):
         s = state(now=10.0)

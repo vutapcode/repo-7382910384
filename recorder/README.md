@@ -11,8 +11,8 @@ Recorder và dữ liệu/replay của nó **không có trading authority**. Auth
 
 - `futures_trade_100ms` (thay `agg_trade` raw ở schema mới)
 - `book_ticker` dựng và kiểm tra continuity từ partial depth 100 ms
-- `depth_diff`, `depth_checkpoint`, `depth_snapshot`: chỉ còn để replay dữ liệu
-  lịch sử; recorder mới không ghi wall/depth rows
+- `depth_checkpoint`: top-20 checkpoint thưa để replay; depth 100 ms chỉ được
+  xử lý trong RAM cho nghiên cứu depletion/refill, không ghi wall rows liên tục
 - `mark_price`, `premium_index`, `open_interest`
 - `liquidation`: force-liquidation thật từ `BTCUSDT@forceOrder`
 - `bot_event`, `bot_cycles_snapshot`
@@ -28,8 +28,9 @@ Recorder và dữ liệu/replay của nó **không có trading authority**. Auth
   maker/taker execution twins using the same Guardian V6 and hard-risk logic
 - `residual_edge_report`: empirical net Guardian outcome with hierarchical LCB;
   heuristic `13/20/35 bps` labels have no authority here
-- `liquidity_response`: replay-only executed depletion/refill observation;
-  static wall/cancel never counts as executed flow
+- `liquidity_response`: live-recorder/replay executed depletion/refill và
+  absorption research (`authority=false`); static wall/cancel không bao giờ
+  được tính là executed flow
 
 WAL nằm ở `smc2026_data/raw/wal`; các giờ đã đóng được compact sang Parquet
 ZSTD tại `smc2026_data/raw/parquet`. Recorder giữ tối đa 24 giờ raw theo

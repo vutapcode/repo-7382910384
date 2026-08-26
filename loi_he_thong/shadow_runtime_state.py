@@ -33,6 +33,7 @@ PERSIST_FIELDS = (
     "decision_cycle_id", "entry_regime", "entry_edge_class",
     "entry_causal_thesis",
     "shadow_cost_plan", "execution_cost_plan",
+    "shadow_ledger_type", "would_live_authorize",
 )
 
 # Short-lived evidence must never bridge a process/network outage.

@@ -45,6 +45,7 @@ class HealthState:
         self.code_version = None
         self.config_version = None
         self.wavefront_shadow = None
+        self.liquidity_response = None
 
     def saw(self, stream, event_time_ms):
         self.received[stream] += 1
@@ -149,6 +150,7 @@ class HealthState:
             'code_version': self.code_version,
             'config_version': self.config_version,
             'wavefront_shadow': self.wavefront_shadow,
+            'liquidity_response': self.liquidity_response,
             'started_at_ms': self.started_at_ms,
             'updated_at_ms': now_ms,
             'uptime_seconds': max(0.0, (now_ms - self.started_at_ms) / 1000.0),

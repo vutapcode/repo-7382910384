@@ -105,7 +105,10 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         self.assertIn("futures_flow_ring_saturated", text)
         self.assertIn("exchange_time_ms", text)
         self.assertIn('@aggTrade', text)
-        self.assertNotIn('@forceOrder', text)
+        self.assertIn('async def liquidations', text)
+        self.assertIn('@forceOrder', text)
+        self.assertIn('mod.hung_force_order_futures = liquidations', text)
+        self.assertIn('subscribe to aggTrade only (never forceOrder here)', text)
         self.assertNotIn('WhaleIntent', text)
         self.assertIn("state.system_ready = False", text)
 

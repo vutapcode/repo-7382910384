@@ -13,6 +13,7 @@ from recorder.decision_outcomes import DecisionOutcomeTracker
 from recorder.health import HealthState, health_loop
 from recorder.features import FeatureEngine
 from recorder.metadata import code_version, config_version
+from recorder.liquidity_response import LiquidityResponseAnalyzer
 from recorder.storage import AppendOnlyStore
 from recorder.wavefront import WavefrontShadowEvaluator
 
@@ -537,6 +538,9 @@ async def run():
     )
     collector.decision_outcome_tracker = RecorderResearchTracker(
         research_emit, DecisionOutcomeTracker(research_emit)
+    )
+    collector.liquidity_response_analyzer = LiquidityResponseAnalyzer(
+        research_emit
     )
     if config.wavefront_enabled:
         collector.wavefront_evaluator = WavefrontShadowEvaluator(

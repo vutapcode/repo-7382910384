@@ -5,8 +5,11 @@ has no authorization power. Shadow may collect structurally valid bootstrap
 trades; real money additionally requires persisted empirical expectancy/LCB.
 """
 
+import time
+
 from loi_he_thong import edge_calibration_v2
 from loi_he_thong import entry_microstructure as micro
+from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
 from loi_he_thong import verified_cost_model
 
@@ -81,6 +84,15 @@ def classify(result, state):
         hard_vetoes.append("ABSORPTION_VETO")
     if basis.get("perp_expansion"):
         hard_vetoes.append("PERP_LED_VETO")
+
+    liquidation = liquidation_context.assess_entry(
+        state, result, _f((result or {}).get("ts"), time.time())
+    )
+    # New liquidation evidence is deliberately shadow-only until outcomes
+    # prove value. It cannot alter any armed-money authorization.
+    live = bool(getattr(state, "wstrade_live_armed", False))
+    if candidate and liquidation.get("tail_veto") and not live:
+        hard_vetoes.append("LIQUIDATION_TAIL_VETO")
 
     regime = regime_engine.classify(state, side)
     costs = verified_cost_model.estimate(result, state)
@@ -159,11 +171,13 @@ def classify(result, state):
         and stress_ok and not hard_vetoes
         and costs.get("commission_verified")
     )
-    live = bool(getattr(state, "wstrade_live_armed", False))
     bootstrap_shadow_allowed = bool(contract_ok and not hard_vetoes and not live)
+    research_probe_allowed = bool(bootstrap_shadow_allowed)
+    ledger_type = "LIVE_LIKE_SHADOW" if live_empirical_ok else "RESEARCH_PROBE"
 
     state.tier_s_entry_regime = regime
     state.tier_s_entry_calibration = calibration
+    state.tier_s_liquidation_context = liquidation
     return {
         "version": VERSION, "edge_class": edge_class,
         "entry_mode": mode, "execution_style": costs.get("execution_style"),
@@ -176,6 +190,9 @@ def classify(result, state):
         "min_net_edge_bps": round(reserve, 6),
         "cost_multiple_model": round(residual / cost_budget, 6) if cost_budget > 0.0 else 999.0,
         "cost_ok": economic_ok, "bootstrap_shadow_allowed": bootstrap_shadow_allowed,
+        "research_probe_allowed": research_probe_allowed,
+        "live_like_shadow_allowed": live_empirical_ok,
+        "shadow_ledger_type": ledger_type,
         "commission_verified": bool(costs.get("commission_verified")),
         "commission_source": costs.get("commission_source"),
         "current_execution_cost_bps": round(cost_budget, 6),
@@ -190,6 +207,7 @@ def classify(result, state):
         "cost_components": costs, "normal_contract_ok": contract_ok,
         "fast_contract_ok": False, "hard_vetoes": hard_vetoes,
         "price_impact": impact, "spot_perp_basis": basis,
+        "liquidation_context": liquidation,
         "micro_regime": regime, "empirical_calibration": calibration,
         "empirical_alpha": {
             "samples": samples, "mean_net_bps": empirical_mean,

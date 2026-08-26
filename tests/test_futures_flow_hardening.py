@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import unittest
 
 from loi_he_thong import futures_flow_hardening as hardening
+from loi_he_thong import liquidation_context
 
 
 def state():
@@ -83,6 +84,15 @@ class FuturesFlowHardeningTests(unittest.TestCase):
             "o": {"S": "SELL", "q": "2", "ap": "100"},
         }, 2_100.0)
         self.assertEqual(result, "IGNORED")
+        self.assertEqual(len(s.danh_sach_khop_lenh_futures), 0)
+        self.assertEqual(
+            liquidation_context.observe_force_order(s, {
+                "e": "forceOrder", "E": 2_000,
+                "o": {"S": "SELL", "q": "2", "ap": "100", "i": 1},
+            }, 2_100.0),
+            "LIQUIDATION",
+        )
+        self.assertGreater(s.long_liquidation_quote_total, 0.0)
         self.assertEqual(len(s.danh_sach_khop_lenh_futures), 0)
 
     def test_unrelated_event_does_not_mark_flow_fresh(self):

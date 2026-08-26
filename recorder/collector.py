@@ -29,7 +29,9 @@ class BinanceRecorder:
         self.session = None
         self.decision_outcome_tracker = None
         self.wavefront_evaluator = None
+        self.liquidity_response_analyzer = None
         self._wavefront_health_at_ms = 0
+        self._liquidity_health_at_ms = 0
 
     @staticmethod
     def now_ms():
@@ -83,6 +85,16 @@ class BinanceRecorder:
             except Exception as exc:
                 # Wavefront is research-only and must never interrupt raw WAL.
                 self.health.error('wavefront_shadow', exc)
+        if published and self.liquidity_response_analyzer is not None:
+            try:
+                self.liquidity_response_analyzer.observe(record)
+                if receive_time_ms - self._liquidity_health_at_ms >= 5_000:
+                    self.health.liquidity_response = (
+                        self.liquidity_response_analyzer.summary()
+                    )
+                    self._liquidity_health_at_ms = receive_time_ms
+            except Exception as exc:
+                self.health.error('liquidity_response', exc)
         return published
 
     def _emit_cash_batch(
@@ -150,6 +162,12 @@ class BinanceRecorder:
                     self.health.connection(name, True)
                     self.health.depth_synced = False
                     last_book_ticker_ms = 0
+                    last_book_second = None
+                    last_checkpoint_ms = 0
+                    if self.liquidity_response_analyzer is not None:
+                        self.liquidity_response_analyzer.reset(
+                            self.now_ms(), 'DEPTH_EPOCH_RESET'
+                        )
                     async for raw in ws:
                         receive_ms = self.now_ms()
                         wrapper = orjson.loads(raw)
@@ -169,10 +187,38 @@ class BinanceRecorder:
                                 'component': 'depth', 'event': 'SEQUENCE_GAP',
                                 'detail': str(exc),
                             })
+                            if self.liquidity_response_analyzer is not None:
+                                self.liquidity_response_analyzer.reset(
+                                    receive_ms, 'DEPTH_SEQUENCE_GAP'
+                                )
                             raise
                         if status == 'APPLIED':
                             self.health.depth_synced = True
                             self.health.depth_last_u = book.last_u
+                            if self.liquidity_response_analyzer is not None:
+                                self.liquidity_response_analyzer.observe({
+                                    'stream': 'depth_diff',
+                                    'event_time_ms': event_ms,
+                                    'receive_time_ms': receive_ms,
+                                    'payload': partial,
+                                })
+                            second = event_ms // 1000
+                            if second != last_book_second:
+                                if self.feature_engine is not None:
+                                    self.feature_engine.capture_book(second, book)
+                                last_book_second = second
+                            checkpoint_ms = int(
+                                max(1.0, self.config.depth_checkpoint_interval) * 1000
+                            )
+                            if event_ms - last_checkpoint_ms >= checkpoint_ms:
+                                self.emit(
+                                    'depth_checkpoint', book.checkpoint(20),
+                                    event_time_ms=event_ms,
+                                    sequence_end=book.last_u,
+                                    feed_features=False,
+                                )
+                                self.health.depth_checkpoints += 1
+                                last_checkpoint_ms = event_ms
                             ticker = book.best_ticker()
                             if (
                                 ticker is not None

@@ -426,6 +426,7 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
     s2 = votes.get("S2_multi_venue_executed_flow") or {}
     impact = (edge_report or {}).get("price_impact") or {}
     basis = (edge_report or {}).get("spot_perp_basis") or {}
+    liquidation = (edge_report or {}).get("liquidation_context") or {}
     would_enter = (result or {}).get("decision") == "GO"
     failed = []
     if "STALE" in reason or "FEED_NOT_READY" in reason:
@@ -456,6 +457,8 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         failed.append("ABSORPTION_VETO")
     if would_enter and bool(basis.get("perp_expansion")):
         failed.append("PERP_LED_VETO")
+    if would_enter and bool(liquidation.get("tail_veto")):
+        failed.append("LIQUIDATION_TAIL_VETO")
     if reason == "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS":
         failed.append("BIAS_ALIGNMENT_FAIL")
     elif "BIAS" in reason or str((result or {}).get("side", "")).upper() not in ("LONG", "SHORT"):
@@ -484,7 +487,8 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         "WAIT_CASH_RESPONSE", "WAIT_LEADER_UNCERTAIN", "WAIT_LATE_IMPULSE",
         "WAIT_IGNITION_PROOF", "WAIT_CAUSAL_PERSISTENCE", "WAIT_OI_REFRESH",
         "WAIT_OI_CLOSING_CONTEXT",
-        "ABSORPTION_VETO", "PERP_LED_VETO", "EMPIRICAL_ALPHA_NOT_READY",
+        "ABSORPTION_VETO", "PERP_LED_VETO", "LIQUIDATION_TAIL_VETO",
+        "EMPIRICAL_ALPHA_NOT_READY",
         "EDGE_COST_FAIL",
         "BIAS_ALIGNMENT_FAIL", "BIAS_NOT_READY", "PRICE_QUORUM_FAIL", "FLOW_QUORUM_FAIL",
     )
@@ -793,6 +797,14 @@ def _open_shadow(side, result, now):
         entry_edge_class=(result.get("edge_tier") or {}).get("edge_class"),
         entry_causal_thesis=live_execution._entry_causal_thesis(result),
         shadow_cost_plan=shadow_cost_plan,
+        shadow_ledger_type=str(
+            (result.get("edge_tier") or {}).get(
+                "shadow_ledger_type", "RESEARCH_PROBE"
+            )
+        ),
+        would_live_authorize=bool(
+            (result.get("edge_tier") or {}).get("live_like_shadow_allowed")
+        ),
         execution_cost_plan=shadow_cost_plan,
         decision_cycle_id=result.get("decision_cycle_id"),
         canonical_opportunity_id=int(
@@ -831,6 +843,8 @@ def _open_shadow(side, result, now):
             "phase": result.get("phase"),
             "confidence": result.get("confidence"),
             "edge_class": (result.get("edge_tier") or {}).get("edge_class"),
+            "shadow_ledger_type": pos.shadow_ledger_type,
+            "would_live_authorize": pos.would_live_authorize,
             "regime_at_entry": entry_regime,
             "entry_causal_thesis": pos.entry_causal_thesis,
             "canonical_opportunity_id": pos.canonical_opportunity_id,
@@ -1076,6 +1090,12 @@ def _close_shadow(pos, guardian_result, now):
             "gross_pnl_bps": gross_bps,
             "net_pnl_bps": net_bps,
             "net_pnl_r": net_r,
+            "shadow_ledger_type": getattr(
+                pos, "shadow_ledger_type", "RESEARCH_PROBE"
+            ),
+            "would_live_authorize": bool(
+                getattr(pos, "would_live_authorize", False)
+            ),
             "holding_time_seconds": max(
                 0.0, now - float(getattr(pos, "opened_at", now) or now)
             ),

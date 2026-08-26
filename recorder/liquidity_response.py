@@ -1,4 +1,4 @@
-"""Offline-only executed depletion/refill research.
+"""Recorder/replay executed depletion/refill research.
 
 Static walls and disappearing levels are never treated as execution evidence.
 Rows from this analyzer remain correlated observations until an ablation proves
@@ -12,7 +12,7 @@ from collections import deque
 from recorder.depth import DepthGap, LocalOrderBook
 
 
-VERSION = "LIQUIDITY_RESPONSE_OFFLINE_V1"
+VERSION = "LIQUIDITY_RESPONSE_RESEARCH_V2"
 HORIZONS_MS = (250, 1_000, 3_000)
 
 
@@ -52,11 +52,29 @@ class LiquidityResponseAnalyzer:
     def _emit(self, tracker, now_ms, valid=True, reason="COMPLETE"):
         before = tracker["before_levels"]
         after = tracker.get("latest_levels") or {}
-        depletion = sum(
+        current_depletion = sum(
             max(0.0, qty - after.get(price, 0.0))
             for price, qty in before.items()
         )
+        depletion = max(current_depletion, _f(tracker.get("max_depletion_qty")))
         executed = tracker["executed_qty"]
+        ticker = self.book.best_ticker()
+        current_mid = (
+            (_f(ticker.get("b")) + _f(ticker.get("a"))) / 2.0
+            if ticker else 0.0
+        )
+        pre_mid = _f(tracker.get("pre_mid"))
+        direction = 1.0 if tracker["side"] == "LONG" else -1.0
+        signed_move_bps = (
+            (current_mid - pre_mid) / pre_mid * 10_000.0 * direction
+            if current_mid > 0.0 and pre_mid > 0.0 else None
+        )
+        refill_1s = tracker["refill_ratio"].get(1_000)
+        absorption_candidate = bool(
+            valid and executed > 0.0 and depletion > 0.0
+            and refill_1s is not None and _f(refill_1s) >= 0.5
+            and signed_move_bps is not None and signed_move_bps <= 0.5
+        )
         payload = {
             "schema_version": "WAVEFRONT_RESEARCH_V1",
             "version": VERSION, "authority": False,
@@ -73,6 +91,14 @@ class LiquidityResponseAnalyzer:
                 for horizon in HORIZONS_MS
             },
             "refill_half_life_ms": tracker.get("refill_half_life_ms"),
+            "pre_mid": pre_mid or None, "post_mid": current_mid or None,
+            "signed_price_move_bps": (
+                round(signed_move_bps, 6) if signed_move_bps is not None else None
+            ),
+            "absorption_candidate": absorption_candidate,
+            "absorption_definition": (
+                "EXECUTED_DEPLETION_PLUS_REFILL_WITHOUT_PRICE_PROGRESS"
+            ),
             "cancel_is_execution": False,
             "evidence_status": "EXECUTED_CORRELATED_NOT_CAUSALLY_PROVEN",
             "eligible_for_live_gate": False,
@@ -87,6 +113,11 @@ class LiquidityResponseAnalyzer:
         while self.pending:
             self._emit(self.pending.popleft(), now_ms, valid=False, reason=reason)
         self.synced = False
+
+    def reset(self, now_ms, reason="DEPTH_EPOCH_RESET"):
+        """Invalidate pending research across a reconnect or sequence gap."""
+        self._invalidate(int(now_ms), reason)
+        self.book = LocalOrderBook()
 
     def _update_pending(self, now_ms):
         keep = deque(maxlen=self.pending.maxlen)
@@ -107,6 +138,10 @@ class LiquidityResponseAnalyzer:
                 tracker["refill_half_life_ms"] = max(0, elapsed)
             if current_qty < pre_qty:
                 tracker["depletion_seen"] = True
+                tracker["max_depletion_qty"] = max(
+                    _f(tracker.get("max_depletion_qty")),
+                    max(0.0, pre_qty - current_qty),
+                )
             if elapsed >= HORIZONS_MS[-1]:
                 self._emit(tracker, now_ms)
             else:
@@ -162,11 +197,17 @@ class LiquidityResponseAnalyzer:
         before = self._levels(self.book, side, limit)
         if executed <= 0.0 or limit <= 0.0 or not before:
             return
+        ticker = self.book.best_ticker()
+        pre_mid = (
+            (_f(ticker.get("b")) + _f(ticker.get("a"))) / 2.0
+            if ticker else 0.0
+        )
         self.pending.append({
             "start_ms": now_ms, "side": side, "executed_qty": executed,
             "limit": limit, "before_levels": before,
             "latest_levels": dict(before), "refill_ratio": {},
             "refill_half_life_ms": None, "depletion_seen": False,
+            "pre_mid": pre_mid, "max_depletion_qty": 0.0,
         })
 
     def summary(self):

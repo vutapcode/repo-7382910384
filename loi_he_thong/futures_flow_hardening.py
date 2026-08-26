@@ -5,6 +5,7 @@ import logging
 import time
 
 from loi_he_thong import ignition_signals
+from loi_he_thong import liquidation_context
 
 RETENTION_MS = 20_000.0
 HARD_MAX = 12_000
@@ -246,8 +247,45 @@ def install(base):
                 logging.exception("[FUTURES FLOW] hardened collector failure")
                 await asyncio.sleep(3)
 
+    async def liquidations(symbol: str, state):
+        """Dedicated forceOrder lane; never contaminates aggTrade flow."""
+        stream = f"{symbol.lower()}@forceOrder"
+        url = f"wss://fstream.binance.com/market/stream?streams={stream}"
+        while True:
+            try:
+                async with mod.websockets.connect(
+                    url, ping_interval=20, ping_timeout=20
+                ) as ws:
+                    liquidation_context.reset_epoch(state)
+                    state.liquidation_stream_connected = True
+                    state.liquidation_stream_connected_at = time.time()
+                    logging.info(
+                        "[FUTURES LIQUIDATION] context collector epoch=%s: %s",
+                        state.liquidation_epoch, symbol.upper(),
+                    )
+                    async for raw in ws:
+                        try:
+                            data = _unwrap_combined_stream(mod.orjson.loads(raw))
+                            liquidation_context.observe_force_order(
+                                state, data, time.time() * 1000.0
+                            )
+                        except (KeyError, TypeError, ValueError):
+                            continue
+            except asyncio.CancelledError:
+                state.liquidation_stream_connected = False
+                raise
+            except mod.websockets.exceptions.ConnectionClosed as exc:
+                state.liquidation_stream_connected = False
+                logging.warning("[FUTURES LIQUIDATION] reconnect: %s", exc)
+                await asyncio.sleep(3)
+            except Exception:
+                state.liquidation_stream_connected = False
+                logging.exception("[FUTURES LIQUIDATION] collector failure")
+                await asyncio.sleep(3)
+
     mod.hung_dong_tien_spot = spot_local_time
     # Historical alias: this name also pointed at the Spot collector.
     mod.hung_dong_tien_futures = spot_local_time
     mod.hung_dong_tien_futures_real = hardened
+    mod.hung_force_order_futures = liquidations
     return hardened

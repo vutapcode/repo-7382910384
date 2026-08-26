@@ -1238,14 +1238,20 @@ def _oi_intent(state, side, now, bias_snapshot=None):
     elif delta_valid and delta <= -OI_BUILD_MIN_PCT:
         intent, intent_source = "UNWIND", "REFRESHED_OI_DELTA"
         expected_side = str(side).upper()
+    elif delta_valid and not frozen_fresh:
+        # A current but immaterial OI move is better evidence than a stale
+        # frozen regime.  It confirms NEUTRAL state only; direction remains
+        # exclusively owned by the frozen Bias snapshot.
+        intent, intent_source = "NEUTRAL", "REFRESHED_OI_DELTA_NEUTRAL"
+        expected_side = None
     else:
         intent, intent_source = frozen_intent, "FROZEN_BIAS_OI_REGIME"
-    fresh = live_fresh if intent_source == "REFRESHED_OI_DELTA" else frozen_fresh
+    fresh = live_fresh if intent_source.startswith("REFRESHED_OI_DELTA") else frozen_fresh
     aligned = expected_side in (None, str(side).upper())
     return {
         "intent": intent,
         "raw_regime": regime, "fresh": fresh,
-        "age_seconds": round(max(0.0, live_age if intent_source == "REFRESHED_OI_DELTA" else frozen_age), 4),
+        "age_seconds": round(max(0.0, live_age if intent_source.startswith("REFRESHED_OI_DELTA") else frozen_age), 4),
         "frozen_oi_updated_at": frozen_updated_at or None,
         "frozen_oi_age_seconds": round(max(0.0, frozen_age), 4) if frozen_updated_at > 0.0 else None,
         "live_oi_updated_at": live_updated_at or None,
