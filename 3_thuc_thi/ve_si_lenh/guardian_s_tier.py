@@ -4,7 +4,7 @@ import time
 
 from loi_he_thong import liquidation_context
 
-VERSION="GUARDIAN_S_TIER_V7_ADVERSE_EVENT_CLASSIFIER"
+VERSION="GUARDIAN_S_TIER_V8_BREAK_CONFLICT_RECOVERY"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -21,6 +21,8 @@ RUNNER_DETERIORATION_SECONDS=1.80
 TREND_DETERIORATION_SECONDS=3.00
 RUNNER_MIN_BEST_R=1.0
 COINBASE_STRICT_AGE_SECONDS=2.5
+RECOVERY_MIN_SECONDS=0.50
+RECOVERY_MAX_SECONDS=3.00
 
 def _clamp(x): return max(0.0,min(1.0,float(x)))
 def _mid(b,a):
@@ -61,6 +63,7 @@ def _ensure(state,pos):
         pos.guardian_s_candidate_since=0.0
         pos.guardian_s_signature=()
         pos.guardian_s_scout_since=0.0
+        pos.guardian_s_adverse_started_at=0.0
     return state.guardian_s_prices,state.guardian_s_oi
 
 def _sample(state,pos,now):
@@ -317,6 +320,12 @@ def _trend_context_shield(state,pos):
         "ESTABLISHED_TREND","PULLBACK_AGAINST_CONTEXT",
         "CONTEXT_WITHOUT_CONFIRMATION",
     }
+    promoted_phases={"ESTABLISHED_TREND","PULLBACK_AGAINST_CONTEXT"}
+    soft_promoted=bool(
+        side in ("LONG","SHORT") and frozen_side=="ABSTAIN"
+        and current_side==side and current_phase in promoted_phases
+        and current_bias in (side,"ABSTAIN")
+    )
     active=bool(
         side in ("LONG","SHORT") and frozen_side==side
         and frozen_phase in eligible_phases and current_side==side
@@ -333,14 +342,45 @@ def _trend_context_shield(state,pos):
         and current_bias in (side,"ABSTAIN")
     ):
         active=True
+    if soft_promoted:
+        active=True
     return {
         "active":active,"side":side,"frozen_context_side":frozen_side,
         "frozen_phase":frozen_phase,"current_context_side":current_side,
         "current_phase":current_phase,"current_bias":current_bias,
+        "soft_promoted_after_entry":soft_promoted,
+        "promotion_source":(
+            "CURRENT_CONFIRMED_CONTEXT" if soft_promoted else None
+        ),
+        "frozen_thesis_rewritten":False,
         "policy":"SOFT_CAUSAL_HOLD_ONLY_HARD_RISK_UNCHANGED",
     }
 
-def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis):
+def _adverse_recovery_window(pos,now,s1,s2,profile):
+    observed=bool(
+        profile.get("active") or s1.get("status")=="ADVERSE"
+        or s2.get("status")=="ADVERSE"
+    )
+    started=float(getattr(pos,"guardian_s_adverse_started_at",0.0) or 0.0)
+    if observed and started<=0.0:
+        started=now
+        pos.guardian_s_adverse_started_at=started
+    elapsed=max(0.0,now-started) if started>0.0 else 0.0
+    if not observed and started>0.0 and elapsed>RECOVERY_MAX_SECONDS:
+        started=0.0; elapsed=0.0
+        pos.guardian_s_adverse_started_at=0.0
+    return {
+        "adverse_observed_now":observed,
+        "started_at":started or None,
+        "elapsed_seconds":round(elapsed,4),
+        "eligible":bool(
+            started>0.0 and RECOVERY_MIN_SECONDS<=elapsed<=RECOVERY_MAX_SECONDS
+        ),
+        "minimum_seconds":RECOVERY_MIN_SECONDS,
+        "maximum_seconds":RECOVERY_MAX_SECONDS,
+    }
+
+def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_window=None):
     """Separate a new opposing thesis from forced flow and pullback noise.
 
     The classifier is intentionally narrower than Guardian itself. It may
@@ -370,8 +410,23 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis):
     )
 
     flow_venues=set((s2.get("metrics") or {}).get("venues") or ())
+    signed_flows=(s2.get("metrics") or {}).get("signed_imbalances") or {}
     adverse_cash_flow=bool(flow_venues&{"spot","coinbase"})
     primary_flow=bool(primary and primary in flow_venues)
+    original_cash_flow=bool(any(
+        float(signed_flows.get(name,0.0) or 0.0)>=MIN_FLOW_IMB
+        for name in ("spot","coinbase")
+    ))
+    futures_flow_supportive=bool(
+        float(signed_flows.get("futures",0.0) or 0.0)>=MIN_FLOW_IMB
+    )
+    futures_price_supportive=False
+    for row in horizons.values():
+        moves=(row or {}).get("moves") or {}
+        if float(moves.get("futures",0.0) or 0.0)>=SCOUT_PRICE_BPS:
+            futures_price_supportive=True
+            break
+    futures_supportive=bool(futures_flow_supportive or futures_price_supportive)
 
     oi_metrics=s3.get("metrics") or {}
     oi_pct=oi_metrics.get("oi_pct")
@@ -410,14 +465,37 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis):
         "reason":"RECORDER_DEPTH_RESEARCH_NOT_GUARDIAN_AUTHORITY",
     }
 
+    price_reclaim=bool(s1.get("status")=="SUPPORTIVE")
+    recovery_window=dict(recovery_window or {})
+    recovery_confirmed=bool(
+        primary
+        and recovery_window.get("eligible")
+        and oi_state!="OPPOSITE_POSITION_BUILD"
+        and (
+            (price_reclaim and original_cash_flow)
+            or (price_stalled and original_cash_flow)
+            or (price_stalled and liquidation_phase=="DECELERATING")
+        )
+    )
+    cross_evidence_conflict=bool(
+        dual_cash and futures_supportive
+        and oi_state!="OPPOSITE_POSITION_BUILD"
+    )
+
     confirmed=bool(
-        primary_broken and dual_cash and adverse_cash_flow
+        primary_broken and dual_cash and adverse_cash_flow and not price_stalled
         and (
             oi_state=="OPPOSITE_POSITION_BUILD"
             or (persistent_cash_acceptance and oi_state!="UNWIND")
         )
     )
-    if confirmed:
+    if recovery_confirmed:
+        classification="THESIS_RECOVERY_CONFIRMED"
+        reason="ADVERSE_BURST_LOST_EFFICIENCY_OR_ORIGINAL_FLOW_RECLAIMED"
+    elif cross_evidence_conflict:
+        classification="CONFLICTED_CAUSAL_EVIDENCE"
+        reason="CASH_ADVERSE_BUT_FUTURES_SUPPORTS_POSITION_WITHOUT_OPPOSITE_BUILD"
+    elif confirmed:
         classification="THESIS_BREAK_CONFIRMED"
         reason="PRIMARY_CASH_PLUS_INDEPENDENT_ACCEPTANCE_AND_NEW_CAUSE"
     elif liquidation_flush:
@@ -446,6 +524,22 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis):
             "persistent_3s":persistent_cash_acceptance,
             "adverse_flow_venues":sorted(flow_venues),
             "primary_flow_adverse":primary_flow,
+        },
+        "cross_evidence":{
+            "conflicted":cross_evidence_conflict,
+            "futures_price_supportive":futures_price_supportive,
+            "futures_flow_supportive":futures_flow_supportive,
+            "opposite_oi_build":oi_state=="OPPOSITE_POSITION_BUILD",
+            "no_refill_proxy":not price_stalled,
+        },
+        "recovery":{
+            **recovery_window,
+            "confirmed":recovery_confirmed,
+            "price_reclaim":price_reclaim,
+            "original_cash_flow_returned":original_cash_flow,
+            "adverse_flow_price_nonconversion":price_stalled,
+            "refill_authority":False,
+            "refill_proxy":"PRICE_NON_CONVERSION_ONLY",
         },
         "liquidity_response":liquidity,
         "kill_fast_eligible":classification=="THESIS_BREAK_CONFIRMED",
@@ -481,8 +575,9 @@ def assess(state,pos,now=None):
         and getattr(pos,"floor_r",None) is not None
     )
     trend_context=_trend_context_shield(state,pos)
+    recovery_window=_adverse_recovery_window(pos,now,s1,s2,profile)
     adverse_event=_classify_adverse_event(
-        state,pos,now,s1,s2,s3,profile,thesis
+        state,pos,now,s1,s2,s3,profile,thesis,recovery_window
     )
     trend_fast_override=bool(adverse_event["kill_fast_eligible"])
     kill_fast=bool(
@@ -492,11 +587,16 @@ def assess(state,pos,now=None):
     classifier_shield=bool(
         causal_exit and profile["kill_fast"] and not kill_fast
     )
+    recovery_shield=bool(
+        adverse_event["classification"]=="THESIS_RECOVERY_CONFIRMED"
+    )
     runner_shield=bool(causal_exit and runner_active and not kill_fast)
     trend_shield=bool(
         causal_exit and (trend_context["active"] or classifier_shield)
         and not kill_fast
     )
+    if recovery_shield:
+        causal_exit=False
     exit_profile="HOLD"
     if causal_exit:
         confirmed=[k for k in adverse if k=="S1_price_acceptance" or k in
@@ -519,6 +619,10 @@ def assess(state,pos,now=None):
             decision,reason="EXIT","TIER_S_PRICE_PLUS_CAUSE_EXIT"
         else:
             decision,reason="DETERIORATING","TIER_S_PRICE_PLUS_CAUSE_CONVERGENCE"
+    elif recovery_shield:
+        decision,reason,hold="HOLD","THESIS_RECOVERY_SHIELD",0.0
+        exit_profile="THESIS_RECOVERY"
+        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
     elif raw_causal_exit and external_guard["blocks_binance_only_exit"]:
         decision,reason,hold="DETERIORATING","BINANCE_ONLY_ADVERSE_AWAITING_EXTERNAL_OR_OI",0.0
         pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
@@ -543,11 +647,11 @@ def assess(state,pos,now=None):
         decision,reason,hold="HOLD","NO_TIER_S_ADVERSE_CONVERGENCE",0.0
         pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
 
-    if decision=="HOLD" and len(supportive)==3:
+    if decision=="HOLD" and not recovery_shield and len(supportive)==3:
         reason="THREE_S_SUPPORTIVE"
-    elif decision=="HOLD" and len(supportive)>=2:
+    elif decision=="HOLD" and not recovery_shield and len(supportive)>=2:
         reason="MULTI_S_SUPPORTIVE"
-    elif decision=="HOLD" and s1["status"]=="SUPPORTIVE":
+    elif decision=="HOLD" and not recovery_shield and s1["status"]=="SUPPORTIVE":
         reason="PRICE_STILL_SUPPORTIVE"
 
     conf=sum(votes[k]["confidence"] for k in adverse)/max(1,len(adverse))
@@ -559,6 +663,7 @@ def assess(state,pos,now=None):
             "adverse_event":adverse_event,
             "exit_profile":exit_profile,"runner_shield_active":runner_shield,
             "trend_shield_active":trend_shield,"trend_context":trend_context,
+            "recovery_shield_active":recovery_shield,
             "kill_fast":kill_fast,"scout_since":float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0) or None,
             "deterioration_since":float(getattr(pos,"guardian_s_candidate_since",0.0) or 0.0) or None,
             "deterioration_elapsed_seconds":round(max(0.0,now-float(getattr(pos,"guardian_s_candidate_since",now) or now)),4) if causal_exit else 0.0,

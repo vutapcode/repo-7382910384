@@ -649,6 +649,27 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertTrue(early["trend_shield_active"])
         self.assertFalse(early["kill_fast"])
 
+    def test_post_entry_context_soft_promotes_abstain_without_rewriting_thesis(self):
+        state = self._state(100.0, 100.0, sell=True)
+        state.bias_council = {
+            "bias": "LONG", "direction_memory": {
+                "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+            },
+        }
+        frozen = {"context_side": "ABSTAIN", "phase": "WARMUP_OR_NEUTRAL"}
+        pos = SimpleNamespace(
+            position_cycle_id="post-entry-promotion", side="LONG", opened_at=90.0,
+            entry_causal_thesis={"bias_thesis": frozen},
+        )
+
+        shield = guardian._trend_context_shield(state, pos)
+
+        self.assertTrue(shield["active"])
+        self.assertTrue(shield["soft_promoted_after_entry"])
+        self.assertEqual(shield["promotion_source"], "CURRENT_CONFIRMED_CONTEXT")
+        self.assertFalse(shield["frozen_thesis_rewritten"])
+        self.assertEqual(frozen["context_side"], "ABSTAIN")
+
     def test_correlated_small_sweep_does_not_bypass_active_trend(self):
         state = self._state(100.0, 100.0, sell=True)
         state.bias_council = {
@@ -784,6 +805,81 @@ class GuardianDeteriorationTests(unittest.TestCase):
             classified["classification"], "THESIS_BREAK_CONFIRMED"
         )
         self.assertTrue(classified["kill_fast_eligible"])
+
+    def test_cash_adverse_futures_supportive_is_conflict_not_fast_break(self):
+        state = self._state(100.0, 100.0, sell=True)
+        pos = SimpleNamespace(
+            position_cycle_id="cross-conflict", side="LONG", opened_at=90.0,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot",
+                "cash_anchors": ["spot", "coinbase"],
+            },
+        )
+        s1 = guardian._vote(
+            "ADVERSE", 0.80, "CASH_ADVERSE_FUTURES_SUPPORTIVE",
+            horizons={"1.0": {
+                "moves": {"spot": -3.0, "coinbase": -3.0, "futures": 2.0},
+                "adverse": ["spot", "coinbase"],
+                "supportive": ["futures"],
+            }},
+        )
+        s2 = guardian._vote(
+            "ADVERSE", 0.80, "CASH_FLOW_ADVERSE_FUTURES_SUPPORTIVE",
+            signed_imbalances={"spot": -0.70, "coinbase": -0.70, "futures": 0.65},
+            venues=["spot", "coinbase"],
+        )
+        s3 = guardian._vote("NEUTRAL", 0.10, "NO_OPPOSITE_BUILD", oi_pct=0.0)
+
+        first = self._assess_with_votes(state, pos, 100.0, (s1, s2, s3))
+        later = self._assess_with_votes(state, pos, 100.26, (s1, s2, s3))
+
+        self.assertEqual(
+            later["adverse_event"]["classification"],
+            "CONFLICTED_CAUSAL_EVIDENCE",
+        )
+        self.assertTrue(later["adverse_event"]["cross_evidence"]["conflicted"])
+        self.assertFalse(first["kill_fast"])
+        self.assertFalse(later["kill_fast"])
+        self.assertEqual(later["decision"], "DETERIORATING")
+
+    def test_original_flow_and_price_reclaim_cancel_deterioration(self):
+        state = self._state(100.0, 100.0, sell=True)
+        pos = SimpleNamespace(
+            position_cycle_id="recovery", side="LONG", opened_at=90.0,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot",
+                "cash_anchors": ["spot", "coinbase"],
+            },
+        )
+        adverse = self._causal_votes(price=-3.0, flow=-0.70)
+        first = self._assess_with_votes(state, pos, 100.0, adverse)
+        self.assertEqual(first["decision"], "DETERIORATING")
+
+        reclaim_s1 = guardian._vote(
+            "SUPPORTIVE", 0.70, "PRICE_RECLAIM",
+            horizons={"1.0": {
+                "moves": {"spot": 1.8, "coinbase": 1.7, "futures": 1.5},
+                "adverse": [], "supportive": ["spot", "coinbase", "futures"],
+            }},
+        )
+        reclaim_s2 = guardian._vote(
+            "SUPPORTIVE", 0.70, "ORIGINAL_FLOW_RETURNED",
+            signed_imbalances={"spot": 0.35, "coinbase": 0.30, "futures": 0.25},
+            venues=[],
+        )
+        neutral_oi = guardian._vote("NEUTRAL", 0.10, "NO_OPPOSITE_BUILD", oi_pct=0.0)
+        recovered = self._assess_with_votes(
+            state, pos, 100.60, (reclaim_s1, reclaim_s2, neutral_oi)
+        )
+
+        self.assertEqual(recovered["decision"], "HOLD")
+        self.assertEqual(recovered["reason"], "THESIS_RECOVERY_SHIELD")
+        self.assertEqual(
+            recovered["adverse_event"]["classification"],
+            "THESIS_RECOVERY_CONFIRMED",
+        )
+        self.assertTrue(recovered["recovery_shield_active"])
+        self.assertIsNone(recovered["deterioration_since"])
 
     def test_adverse_flow_without_primary_cash_conversion_is_absorbed_pullback(self):
         state = self._state(100.0, 100.0, sell=True)
