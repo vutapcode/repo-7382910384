@@ -201,6 +201,20 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertFalse(payload["economic_miss_screen_passed"])
         self.assertTrue(payload["diagnostic_move_screen_passed"])
 
+    def test_persistent_candidate_keeps_long_horizon_outcomes(self):
+        self.tracker.observe(persistent_candidate_event())
+        self.tracker.observe(trade(901_000, 10, 98.0, high=100.0, low=97.0))
+        windows = [
+            payload["window_seconds"]
+            for stream, payload, _ in self.rows
+            if stream == "decision_counterfactual"
+        ]
+        self.assertEqual(windows, [5, 15, 30, 60, 180, 300, 900])
+        self.assertFalse(any(
+            stream == "decision_miss_adjudication"
+            for stream, _payload, _ in self.rows
+        ))
+
     def test_sequence_gap_invalidates_instead_of_bridging(self):
         self.tracker.observe(decision_event())
         self.tracker.observe(trade(2_000, 10, 100.0))

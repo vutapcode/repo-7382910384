@@ -9,6 +9,7 @@ from collections import deque, OrderedDict
 
 
 WINDOWS_MS = (5_000, 15_000, 30_000, 60_000)
+PERSISTENT_WINDOWS_MS = WINDOWS_MS + (180_000, 300_000, 900_000)
 MAX_PENDING = 512
 MAX_CLOSED = 2_048
 DIAGNOSTIC_WAVE_GAP_MS = 5_000
@@ -271,7 +272,9 @@ class DecisionOutcomeTracker:
                 "primary_wave_tracker": primary,
                 "strategy_code_version": tracker.get("strategy_code_version"),
                 "strategy_config_version": tracker.get("strategy_config_version"),
-                "adjudicated_at_seconds": 60,
+                "adjudicated_at_seconds": int(
+                    (tracker.get("windows_ms") or WINDOWS_MS)[-1] // 1000
+                ),
             },
             event_time_ms=int(event_ms),
         )
@@ -414,6 +417,15 @@ class DecisionOutcomeTracker:
             "low": reference,
             "last_price": reference,
             "completed": set(),
+            # Long-horizon waves are intentionally limited to the stable
+            # persistent-metaorder cohort. Keeping every 100 ms reject alive
+            # for 15 minutes would waste the host CPU budget and distort the
+            # dataset with repeated decision cycles.
+            "windows_ms": (
+                PERSISTENT_WINDOWS_MS
+                if sample_scope == "PERSISTENT_METAORDER_SHADOW"
+                else WINDOWS_MS
+            ),
         }
         if self.last_gap_event_ms >= start_ms:
             tracker = self.pending.pop(tracking_key)
@@ -525,7 +537,8 @@ class DecisionOutcomeTracker:
             tracker["low"] = min(float(tracker["low"]), low)
             tracker["last_price"] = price
             elapsed = event_ms - int(tracker["start_ms"])
-            for window in WINDOWS_MS:
+            windows = tracker.get("windows_ms") or WINDOWS_MS
+            for window in windows:
                 if elapsed < window or window in tracker["completed"]:
                     continue
                 direction = 1.0 if tracker["side"] == "LONG" else -1.0
@@ -616,9 +629,9 @@ class DecisionOutcomeTracker:
                     event_time_ms=event_ms,
                 )
                 tracker["completed"].add(window)
-                if window == WINDOWS_MS[-1]:
+                if window == windows[-1]:
                     self._emit_final_adjudication(tracker, event_ms)
-            if len(tracker["completed"]) == len(WINDOWS_MS):
+            if len(tracker["completed"]) == len(windows):
                 remove.append(tracking_key)
         for tracking_key in remove:
             self.pending.pop(tracking_key, None)

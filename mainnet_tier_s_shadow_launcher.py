@@ -600,7 +600,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
                 "minimum_net_edge_bps": cost_snapshot.get("minimum_net_edge_bps"),
                 "commission_verified": cost_snapshot.get("commission_verified"),
             },
-            "windows_seconds": [5, 15, 30, 60],
+            "windows_seconds": [5, 15, 30, 60, 180, 300, 900],
         },
     }
 
