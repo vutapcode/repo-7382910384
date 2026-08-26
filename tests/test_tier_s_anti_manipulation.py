@@ -457,9 +457,16 @@ class GuardianDeteriorationTests(unittest.TestCase):
 
         for key, value in vars(self._state(102.35, 99.94, sell=True)).items():
             setattr(state, key, value)
-        exited = guardian.assess(state, pos, now=102.35)
+        shielded = guardian.assess(state, pos, now=102.35)
+        self.assertEqual(shielded["decision"], "DETERIORATING")
+        self.assertEqual(
+            shielded["adverse_event"]["classification"], "UNCERTAIN"
+        )
+        for key, value in vars(self._state(104.2, 99.90, sell=True)).items():
+            setattr(state, key, value)
+        exited = guardian.assess(state, pos, now=104.2)
         self.assertEqual(exited["decision"], "EXIT")
-        self.assertGreaterEqual(exited["deterioration_elapsed_seconds"], 1.0)
+        self.assertGreaterEqual(exited["deterioration_elapsed_seconds"], 3.0)
 
     def test_dynamic_threshold_never_below_one_point_five_bps(self):
         state = SimpleNamespace(atr_1m=0.001)
@@ -516,7 +523,8 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertFalse(result["exchange_independence"]["blocks_binance_only_exit"])
 
     @staticmethod
-    def _causal_votes(price=-2.0, flow=-0.30, price_venues=None):
+    def _causal_votes(price=-2.0, flow=-0.30, price_venues=None,
+                      oi_status="NEUTRAL", oi_pct=0.0):
         price_venues = price_venues or ("spot", "coinbase", "futures")
         moves = {name: price for name in price_venues}
         s1 = guardian._vote(
@@ -532,7 +540,10 @@ class GuardianDeteriorationTests(unittest.TestCase):
             signed_imbalances={name: flow for name in price_venues},
             venues=list(price_venues),
         )
-        s3 = guardian._vote("NEUTRAL", 0.10, "TEST_OI")
+        s3 = guardian._vote(
+            oi_status, 0.80 if oi_status == "ADVERSE" else 0.10,
+            "TEST_OI", oi_pct=oi_pct,
+        )
         return s1, s2, s3
 
     def _assess_with_votes(self, state, pos, now, votes):
@@ -572,7 +583,9 @@ class GuardianDeteriorationTests(unittest.TestCase):
             position_cycle_id="fast-kill", side="LONG", opened_at=90.0,
             best_r=3.0, floor_r=1.0,
         )
-        votes = self._causal_votes(price=-3.0, flow=-0.80)
+        votes = self._causal_votes(
+            price=-3.0, flow=-0.80, oi_status="ADVERSE", oi_pct=0.03,
+        )
 
         first = self._assess_with_votes(state, pos, 100.0, votes)
         self.assertEqual(first["decision"], "DETERIORATING")
@@ -677,7 +690,9 @@ class GuardianDeteriorationTests(unittest.TestCase):
                 },
             },
         )
-        votes = self._causal_votes(price=-5.5, flow=-0.80)
+        votes = self._causal_votes(
+            price=-5.5, flow=-0.80, oi_status="ADVERSE", oi_pct=0.03,
+        )
         self._assess_with_votes(state, pos, 100.0, votes)
         exited = self._assess_with_votes(state, pos, 100.26, votes)
         self.assertEqual(exited["decision"], "EXIT")
@@ -726,6 +741,90 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertEqual(result["decision"], "DETERIORATING")
         self.assertEqual(result["reason"], "ENTRY_THESIS_NOT_BROKEN")
         self.assertFalse(result["entry_thesis"]["broken"])
+
+    def test_coinbase_led_oi_unwind_is_flush_not_fast_thesis_break(self):
+        state = self._state(100.0, 100.0, sell=True)
+        pos = SimpleNamespace(side="LONG")
+        s1, s2, s3 = self._causal_votes(
+            price=-5.7, flow=-0.80, oi_pct=-0.03,
+        )
+        # Coinbase is adverse, but materially less than the Binance echo. OI
+        # is falling, so this is forced closing flow rather than opposite build.
+        s1["metrics"]["horizons"]["1.0"]["moves"]["coinbase"] = -3.0
+        thesis = {
+            "broken": True, "reason": "ENTRY_CASH_THESIS_BROKEN",
+            "primary_cash_anchor": "coinbase",
+        }
+        classified = guardian._classify_adverse_event(
+            state, pos, 100.0, s1, s2, s3,
+            guardian._adverse_profile(s1, s2), thesis,
+        )
+        self.assertEqual(
+            classified["classification"], "TRANSIENT_LIQUIDATION_FLUSH"
+        )
+        self.assertFalse(classified["kill_fast_eligible"])
+        self.assertEqual(classified["oi"]["state"], "UNWIND")
+
+    def test_opposite_build_with_broken_primary_cash_confirms_fast_break(self):
+        state = self._state(100.0, 100.0, sell=True)
+        pos = SimpleNamespace(side="LONG")
+        s1, s2, s3 = self._causal_votes(
+            price=-5.5, flow=-0.80,
+            oi_status="ADVERSE", oi_pct=0.03,
+        )
+        thesis = {
+            "broken": True, "reason": "ENTRY_CASH_THESIS_BROKEN",
+            "primary_cash_anchor": "coinbase",
+        }
+        classified = guardian._classify_adverse_event(
+            state, pos, 100.0, s1, s2, s3,
+            guardian._adverse_profile(s1, s2), thesis,
+        )
+        self.assertEqual(
+            classified["classification"], "THESIS_BREAK_CONFIRMED"
+        )
+        self.assertTrue(classified["kill_fast_eligible"])
+
+    def test_adverse_flow_without_primary_cash_conversion_is_absorbed_pullback(self):
+        state = self._state(100.0, 100.0, sell=True)
+        pos = SimpleNamespace(side="LONG")
+        s1, s2, s3 = self._causal_votes(
+            price=-5.5, flow=-0.80,
+            price_venues=("spot", "futures"),
+        )
+        thesis = {
+            "broken": False, "reason": "ENTRY_CASH_THESIS_HOLDS",
+            "primary_cash_anchor": "coinbase",
+        }
+        classified = guardian._classify_adverse_event(
+            state, pos, 100.0, s1, s2, s3,
+            guardian._adverse_profile(s1, s2), thesis,
+        )
+        self.assertEqual(classified["classification"], "ABSORBED_PULLBACK")
+        self.assertEqual(
+            classified["liquidity_response"]["status"],
+            "PRICE_NON_CONVERSION",
+        )
+        self.assertFalse(classified["liquidity_response"]["depth_authority"])
+
+    def test_three_second_dual_cash_acceptance_confirms_break_without_oi_guess(self):
+        state = self._state(100.0, 100.0, sell=True)
+        pos = SimpleNamespace(side="LONG")
+        s1, s2, s3 = self._causal_votes(price=-3.0, flow=-0.80)
+        s1["metrics"]["horizons"]["3.0"] = dict(
+            s1["metrics"]["horizons"]["1.0"]
+        )
+        thesis = {
+            "broken": True, "reason": "ENTRY_CASH_THESIS_BROKEN",
+            "primary_cash_anchor": "spot",
+        }
+        classified = guardian._classify_adverse_event(
+            state, pos, 100.0, s1, s2, s3,
+            guardian._adverse_profile(s1, s2), thesis,
+        )
+        self.assertEqual(
+            classified["classification"], "THESIS_BREAK_CONFIRMED"
+        )
 
 
 if __name__ == "__main__":

@@ -104,7 +104,10 @@ class WavefrontCausalityTests(unittest.TestCase):
         entries = [row for row in h.rows if row[0] == "wavefront_virtual_entry"]
         self.assertEqual([row[1]["execution_twin"] for row in entries], ["TAKER_TWIN"])
         self.assertFalse(entries[0][1]["authority"])
-        self.assertEqual(h.engine.guardian.VERSION, "GUARDIAN_S_TIER_V6_SCOUT_CONFIRM_RUNNER_SHIELD")
+        self.assertEqual(
+            h.engine.guardian.VERSION,
+            "GUARDIAN_S_TIER_V7_ADVERSE_EVENT_CLASSIFIER",
+        )
 
     def test_maker_requires_real_trade_through_and_expires_without_it(self):
         h = WavefrontHarness()

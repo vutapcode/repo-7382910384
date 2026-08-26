@@ -2,7 +2,9 @@
 from collections import deque
 import time
 
-VERSION="GUARDIAN_S_TIER_V6_SCOUT_CONFIRM_RUNNER_SHIELD"
+from loi_he_thong import liquidation_context
+
+VERSION="GUARDIAN_S_TIER_V7_ADVERSE_EVENT_CLASSIFIER"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -338,6 +340,118 @@ def _trend_context_shield(state,pos):
         "policy":"SOFT_CAUSAL_HOLD_ONLY_HARD_RISK_UNCHANGED",
     }
 
+def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis):
+    """Separate a new opposing thesis from forced flow and pullback noise.
+
+    The classifier is intentionally narrower than Guardian itself. It may
+    grant fast-exit authority only to a confirmed break; every other state
+    falls back to the existing three-second causal deterioration path. Hard
+    Risk and critical feed handling run outside this classifier unchanged.
+    """
+    primary=str(thesis.get("primary_cash_anchor") or "").lower()
+    horizons=(s1.get("metrics") or {}).get("horizons") or {}
+    primary_horizons=[]; dual_cash_horizons=[]
+    for horizon,row in horizons.items():
+        adverse=set((row or {}).get("adverse") or ())
+        try: seconds=float(horizon)
+        except (TypeError,ValueError): continue
+        if primary in adverse: primary_horizons.append(seconds)
+        if {"spot","coinbase"}.issubset(adverse):
+            dual_cash_horizons.append(seconds)
+    dual_cash=bool(dual_cash_horizons)
+    generic_fallback=bool(
+        not primary and str(thesis.get("reason") or "")=="GENERIC_CAUSAL_FALLBACK"
+    )
+    primary_broken=bool(
+        (primary and primary_horizons) or (generic_fallback and dual_cash)
+    )
+    persistent_cash_acceptance=bool(
+        primary_broken and any(horizon>=3.0 for horizon in dual_cash_horizons)
+    )
+
+    flow_venues=set((s2.get("metrics") or {}).get("venues") or ())
+    adverse_cash_flow=bool(flow_venues&{"spot","coinbase"})
+    primary_flow=bool(primary and primary in flow_venues)
+
+    oi_metrics=s3.get("metrics") or {}
+    oi_pct=oi_metrics.get("oi_pct")
+    try: oi_pct=float(oi_pct)
+    except (TypeError,ValueError): oi_pct=None
+    if s3.get("status")=="ADVERSE":
+        oi_state="OPPOSITE_POSITION_BUILD"
+    elif oi_pct is not None and oi_pct<=-MIN_OI_RISE_PCT:
+        oi_state="UNWIND"
+    elif oi_pct is None:
+        oi_state="UNKNOWN"
+    else:
+        oi_state="NEUTRAL"
+
+    adverse_side="SHORT" if str(pos.side).upper()=="LONG" else "LONG"
+    liquidation=liquidation_context.snapshot(state,adverse_side,now)
+    liquidation_phase=str(liquidation.get("phase") or "UNKNOWN").upper()
+    liquidation_flush=bool(
+        oi_state=="UNWIND" and (
+            liquidation.get("burst") or dual_cash or profile.get("kill_fast")
+        )
+    )
+
+    price_stalled=bool(
+        adverse_cash_flow and (
+            not primary_broken
+            or (primary_horizons and max(primary_horizons)<1.0)
+        )
+    )
+    # Full executed depletion/refill lives in the recorder and remains
+    # authority=false. Do not pretend its cross-process output is available in
+    # Guardian; price non-conversion is the only hot-path absorption evidence.
+    liquidity={
+        "status":"PRICE_NON_CONVERSION" if price_stalled else "UNAVAILABLE",
+        "depth_authority":False,
+        "reason":"RECORDER_DEPTH_RESEARCH_NOT_GUARDIAN_AUTHORITY",
+    }
+
+    confirmed=bool(
+        primary_broken and dual_cash and adverse_cash_flow
+        and (
+            oi_state=="OPPOSITE_POSITION_BUILD"
+            or (persistent_cash_acceptance and oi_state!="UNWIND")
+        )
+    )
+    if confirmed:
+        classification="THESIS_BREAK_CONFIRMED"
+        reason="PRIMARY_CASH_PLUS_INDEPENDENT_ACCEPTANCE_AND_NEW_CAUSE"
+    elif liquidation_flush:
+        classification="TRANSIENT_LIQUIDATION_FLUSH"
+        reason="OI_UNWIND_WITH_FORCED_OR_CROSS_CASH_FLUSH"
+    elif price_stalled or (
+        liquidation_phase=="DECELERATING" and not persistent_cash_acceptance
+    ):
+        classification="ABSORBED_PULLBACK"
+        reason="ADVERSE_FLOW_NOT_ACCEPTED_BY_PRIMARY_CASH"
+    else:
+        classification="UNCERTAIN"
+        reason="ADVERSE_EVENT_LACKS_INDEPENDENT_CAUSAL_CONFIRMATION"
+    return {
+        "classification":classification,"reason":reason,
+        "primary_cash":{
+            "anchor":primary or None,"broken":primary_broken,
+            "generic_fallback":generic_fallback,
+            "adverse_horizons_seconds":sorted(primary_horizons),
+        },
+        "oi":{"state":oi_state,"change_pct":oi_pct},
+        "force_order":liquidation,
+        "cash_acceptance":{
+            "dual_cash_adverse":dual_cash,
+            "dual_cash_horizons_seconds":sorted(dual_cash_horizons),
+            "persistent_3s":persistent_cash_acceptance,
+            "adverse_flow_venues":sorted(flow_venues),
+            "primary_flow_adverse":primary_flow,
+        },
+        "liquidity_response":liquidity,
+        "kill_fast_eligible":classification=="THESIS_BREAK_CONFIRMED",
+        "policy":"CLASSIFY_BEFORE_KILL_FAST",
+    }
+
 def assess(state,pos,now=None):
     now=time.time() if now is None else float(now)
     p,ph,oh=_sample(state,pos,now)
@@ -367,15 +481,22 @@ def assess(state,pos,now=None):
         and getattr(pos,"floor_r",None) is not None
     )
     trend_context=_trend_context_shield(state,pos)
-    trend_fast_override=bool(
-        profile.get("trend_kill_price") or s3.get("status")=="ADVERSE"
+    adverse_event=_classify_adverse_event(
+        state,pos,now,s1,s2,s3,profile,thesis
     )
+    trend_fast_override=bool(adverse_event["kill_fast_eligible"])
     kill_fast=bool(
         causal_exit and profile["kill_fast"]
-        and (not trend_context["active"] or trend_fast_override)
+        and trend_fast_override
+    )
+    classifier_shield=bool(
+        causal_exit and profile["kill_fast"] and not kill_fast
     )
     runner_shield=bool(causal_exit and runner_active and not kill_fast)
-    trend_shield=bool(causal_exit and trend_context["active"] and not kill_fast)
+    trend_shield=bool(
+        causal_exit and (trend_context["active"] or classifier_shield)
+        and not kill_fast
+    )
     exit_profile="HOLD"
     if causal_exit:
         confirmed=[k for k in adverse if k=="S1_price_acceptance" or k in
@@ -435,6 +556,7 @@ def assess(state,pos,now=None):
             "supportive_count":len(supportive),"adverse_count":len(adverse),
             "exchange_independence":external_guard,
             "entry_thesis":thesis,"adverse_profile":profile,
+            "adverse_event":adverse_event,
             "exit_profile":exit_profile,"runner_shield_active":runner_shield,
             "trend_shield_active":trend_shield,"trend_context":trend_context,
             "kill_fast":kill_fast,"scout_since":float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0) or None,
