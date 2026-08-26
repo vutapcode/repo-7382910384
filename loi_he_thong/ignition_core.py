@@ -1084,6 +1084,34 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     oi = _oi_intent(state, side, now, frozen)
     if oi.get("fresh") and not oi.get("aligned_with_entry", True):
         return None
+    # A directional context without confirmation is not a trend.  Do not let
+    # one Binance cash impulse plus its correlated Futures echo turn it into a
+    # trade.  Keep a narrow transition path for genuine price discovery: both
+    # independent cash venues must sustain the wave and fresh OI must show new
+    # positions building in the frozen Bias direction.  Established trends
+    # and pullbacks retain the existing single-cash-anchor contract.
+    provisional_context = phase_name == "CONTEXT_WITHOUT_CONFIRMATION"
+    provisional_confirmed = bool(
+        set(cash) == CASH
+        and oi.get("fresh")
+        and oi.get("intent") == "POSITION_BUILD"
+        and oi.get("aligned_with_entry", True)
+    )
+    if provisional_context and not provisional_confirmed:
+        state._ignition_last_reject = (
+            "PROVISIONAL_CONTEXT_REQUIRES_DUAL_CASH_OI_BUILD"
+        )
+        return None
+    # Falling OI describes forced closure, not fresh directional commitment.
+    # It may continue as an economic wave, but only when both independent cash
+    # venues show persistent executed-flow conversion. One cash venue plus
+    # Futures is the common liquidation-aftershock shape and is not enough.
+    unwind_confirmed = bool(
+        oi.get("intent") != "UNWIND" or set(cash) == CASH
+    )
+    if not unwind_confirmed:
+        state._ignition_last_reject = "UNWIND_REQUIRES_DUAL_CASH_PERSISTENCE"
+        return None
 
     flow_by_venue = {
         name: {
@@ -1136,6 +1164,13 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "residual_edge_proxy_bps": 0.0,
         "residual_edge_source": "EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED",
         "oi_intent": oi,
+        "bias_context_quality": (
+            "PROVISIONAL_DUAL_CASH_OI_BUILD"
+            if provisional_context else "ESTABLISHED_OR_PULLBACK"
+        ),
+        "unwind_cash_independence": (
+            "DUAL_CASH" if oi.get("intent") == "UNWIND" else "NOT_REQUIRED"
+        ),
         "causal_class": (
             "CASH_LED_UNWIND" if oi.get("intent") == "UNWIND"
             else "ALIGNED_BUILD" if oi.get("intent") == "POSITION_BUILD"

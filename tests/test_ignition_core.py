@@ -312,6 +312,84 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(result["ignition"]["proposer"], "binance_spot")
         self.assertTrue(result["ignition"]["futures_follow_ok"])
 
+    def test_provisional_context_rejects_single_cash_neutral_oi(self):
+        """Regression: the 18:46-style correlated echo is not whale flow."""
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s)
+        s._ignition_bias_snapshots[-1]["direction_context"].update({
+            "phase": "CONTEXT_WITHOUT_CONFIRMATION",
+            "oi_regime": "NEUTRAL",
+        })
+        histories = self._persistent_histories()
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertEqual(
+            result["reason"],
+            "PROVISIONAL_CONTEXT_REQUIRES_DUAL_CASH_OI_BUILD",
+        )
+
+    def test_provisional_context_keeps_dual_cash_fresh_oi_transition(self):
+        """Anti-overfit: a real cash-led position build can still enter."""
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s)
+        s._ignition_bias_snapshots[-1]["direction_context"].update({
+            "phase": "CONTEXT_WITHOUT_CONFIRMATION",
+            "oi_regime": "NEUTRAL",
+        })
+        s.prev_open_interest = 1000.0
+        s.open_interest_change_pct = 0.03
+        s.open_interest_change_window_seconds = 3.0
+        s.open_interest_updated_at = 3.0
+        histories = dict(self._persistent_histories(cash="binance_spot"))
+        coinbase = self._persistent_histories(cash="coinbase_spot")
+        histories["coinbase_spot"] = coinbase["coinbase_spot"]
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(result["decision"], "GO")
+        self.assertEqual(
+            result["ignition"]["bias_context_quality"],
+            "PROVISIONAL_DUAL_CASH_OI_BUILD",
+        )
+
+    def test_unwind_rejects_single_cash_liquidation_aftershock(self):
+        """Falling OI plus one cash venue is closure, not whale commitment."""
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s)
+        s.prev_open_interest = 1000.0
+        s.open_interest_change_pct = -0.03
+        s.open_interest_change_window_seconds = 3.0
+        s.open_interest_updated_at = 3.0
+        histories = self._persistent_histories(cash="binance_spot")
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertEqual(
+            result["reason"], "UNWIND_REQUIRES_DUAL_CASH_PERSISTENCE",
+        )
+
+    def test_unwind_keeps_dual_cash_persistent_wave(self):
+        """Anti-overfit: independently converted cash unwind remains valid."""
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s)
+        s.prev_open_interest = 1000.0
+        s.open_interest_change_pct = -0.03
+        s.open_interest_change_window_seconds = 3.0
+        s.open_interest_updated_at = 3.0
+        histories = dict(self._persistent_histories(cash="binance_spot"))
+        coinbase = self._persistent_histories(cash="coinbase_spot")
+        histories["coinbase_spot"] = coinbase["coinbase_spot"]
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(result["decision"], "GO")
+        self.assertEqual(
+            result["ignition"]["unwind_cash_independence"], "DUAL_CASH",
+        )
+
     def test_persistent_wave_cannot_reset_same_wave_precursor_consumed(self):
         s = state(now=16.1)
         self._freeze_bias_before_wave(s, captured_at=12.0)
