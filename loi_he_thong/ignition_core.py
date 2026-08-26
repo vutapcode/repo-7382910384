@@ -1065,7 +1065,19 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "receive_time_ms": latest_evidence_ms,
         "price_conversion_bps": max((moves.get(name, 0.0) for name in cash), default=0.0),
     }
-    phase = _phase_measurement(state, side, cash, moves, latest, episode={})
+    # The slow lane must not reset an already-running cash wave back to phase
+    # zero.  Measure the same bounded 3/6/15s precursor used by fast Ignition
+    # at the persistent wave's immutable start.  Epoch matching inside the
+    # precursor measurement keeps reconnects/gaps fail-closed; an unavailable
+    # precursor remains diagnostic and cannot invent displacement.
+    precursor = _precursor_cash_progress(state, {
+        "receive_time_ms": wave_started_ms,
+        "side": side,
+    })
+    phase = _phase_measurement(
+        state, side, cash, moves, latest,
+        episode={"precursor_measurement": precursor},
+    )
     consumed = _f(phase.get("consumed_fraction"), 1.0)
     if not phase.get("valid") or consumed > MAX_CONSUMED_FRACTION:
         return None

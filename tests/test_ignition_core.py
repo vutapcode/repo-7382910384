@@ -312,6 +312,31 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(result["ignition"]["proposer"], "binance_spot")
         self.assertTrue(result["ignition"]["futures_follow_ok"])
 
+    def test_persistent_wave_cannot_reset_same_wave_precursor_consumed(self):
+        s = state(now=16.1)
+        self._freeze_bias_before_wave(s, captured_at=12.0)
+        s.atr_1m = 0.10
+        s.atr_1m_updated_at = 15.0
+        s.bias_price_buckets = {
+            10: {
+                "ts": 10.0, "spot": 100.0, "coinbase": 100.0,
+                "venue_epochs": {"spot": 1, "coinbase": 1},
+            },
+            13: {
+                "ts": 13.0, "spot": 100.08, "coinbase": 100.08,
+                "venue_epochs": {"spot": 1, "coinbase": 1},
+            },
+        }
+        histories = self._persistent_histories(start_ms=13_000)
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=16.1)
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertEqual(result["reason"], "WAIT_IGNITION")
+        self.assertEqual(
+            s.persistent_metaorder_shadow["candidate_side"], "LONG",
+        )
+
     def test_persistent_wave_id_bridges_lull_without_duplicate_episode(self):
         first_histories = self._persistent_histories()
         first = ignition_core._persistent_metaorder_snapshot(
