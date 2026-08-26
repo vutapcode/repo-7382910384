@@ -95,6 +95,24 @@ class ShadowStateGuardV3Tests(unittest.TestCase):
         })
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_v5_current_cost_repriced_nine_field_row_is_accepted(self):
+        result = self.run_guard({
+            "version": "SHADOW_RUNTIME_STATE_V5_VERIFIED_COST_PLAN",
+            "balance": 5.4, "realized_pnl": -0.1,
+            "trades": 1, "wins": 0, "losses": 1, "breakevens": 0,
+            "event_seq": 1, "decision_evaluations": 1,
+            "near_misses": 0, "decision_funnel": {"READY": 1},
+            "edge_calibration_rows": [[
+                "LONG", "PERSISTENT_METAORDER", "NORMAL",
+                "BOOTSTRAP_UNVERIFIED", "PERSISTENT_METAORDER",
+                "BINANCE_SPOT", "TAKER", -3.5, 12.25,
+            ]],
+            "edge_calibration_code_version": "code-v3",
+            "edge_calibration_config_version": "config-v3",
+            "position": None,
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -115,14 +115,22 @@ if version in {V3, V4, V5}:
     if not isinstance(calibration_rows, list) or len(calibration_rows) > 768:
         fail("edge_calibration_rows:invalid")
     for index, row in enumerate(calibration_rows):
-        # Five fields are the persisted legacy cohort; eight fields are the
-        # current causal cohort (side/mode/regime/edge/proof/proposer/execution/net).
-        if not isinstance(row, list) or len(row) not in (5, 8):
+        # Five fields are the legacy cohort; eight fields are the causal
+        # cohort; nine fields append the frozen execution cost used for
+        # current-cost repricing.
+        if not isinstance(row, list) or len(row) not in (5, 8, 9):
             fail(f"edge_calibration_rows.{index}:invalid")
-        for field in row[:-1]:
+        bucket_fields = row[:-2] if len(row) == 9 else row[:-1]
+        for field in bucket_fields:
             if not isinstance(field, str) or not field:
                 fail(f"edge_calibration_rows.{index}:invalid_bucket")
-        num(row[-1], f"edge_calibration_rows.{index}.net_bps")
+        net_index = 7 if len(row) == 9 else -1
+        num(row[net_index], f"edge_calibration_rows.{index}.net_bps")
+        if len(row) == 9 and row[8] is not None:
+            num(
+                row[8], f"edge_calibration_rows.{index}.execution_cost_bps",
+                nonnegative=True,
+            )
     if version in {V4, V5}:
         for name in (
             "edge_calibration_code_version",
