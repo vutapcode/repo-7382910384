@@ -11,6 +11,7 @@ SCOUT_PRICE_BPS=0.40
 SCOUT_FLOW_IMB=0.08
 STRONG_FLOW_IMB=0.55
 KILL_PRICE_BPS=2.50
+TREND_KILL_PRICE_BPS=KILL_PRICE_BPS*2.0
 FAST_KILL_HOLD_SECONDS=0.25
 MIN_DETERIORATION_SECONDS=0.55
 MAX_DETERIORATION_SECONDS=1.05
@@ -228,6 +229,7 @@ def _adverse_profile(s1,s2):
     """Reuse the old sensitive Guardian as a scout, never as exit authority."""
     price_rows=[]
     kill_price=False
+    trend_kill_price=False
     for horizon,payload in ((s1.get("metrics") or {}).get("horizons") or {}).items():
         moves=(payload or {}).get("moves") or {}
         adverse=[name for name,value in moves.items() if float(value or 0.0)<=-SCOUT_PRICE_BPS]
@@ -239,6 +241,14 @@ def _adverse_profile(s1,s2):
             kill_price=kill_price or any(
                 float(moves.get(name,0.0) or 0.0)<=-KILL_PRICE_BPS
                 for name in adverse
+            )
+            # A verified trend must not be cancelled by the same small
+            # arbitrage echo appearing on three venues.  Fast override remains
+            # available for a materially larger cash displacement; hard risk
+            # and feed safety are separate authorities and are unchanged.
+            trend_kill_price=trend_kill_price or any(
+                float(moves.get(name,0.0) or 0.0)<=-TREND_KILL_PRICE_BPS
+                for name in ("spot","coinbase")
             )
 
     signed=(s2.get("metrics") or {}).get("signed_imbalances") or {}
@@ -253,7 +263,7 @@ def _adverse_profile(s1,s2):
     return {
         "active":scout,"price_rows":price_rows,
         "flow_adverse":flow_adverse,"strong_flow_adverse":strong_flow,
-        "kill_fast":kill_fast,
+        "kill_fast":kill_fast,"trend_kill_price":trend_kill_price,
         "policy":"SENSITIVE_SCOUT_STRONG_CAUSAL_CONFIRM_ONLY",
     }
 
@@ -310,6 +320,16 @@ def _trend_context_shield(state,pos):
         and current_phase!="REVERSAL_CANDIDATE"
         and current_bias in (side,"ABSTAIN")
     )
+    # A transient neutral/ABSTAIN state is not an independently confirmed
+    # reversal.  Preserve the immutable entry thesis through that uncertainty;
+    # an opposing context or REVERSAL_CANDIDATE still disables the shield.
+    if (
+        not active and side in ("LONG","SHORT") and frozen_side==side
+        and frozen_phase in eligible_phases and current_side=="ABSTAIN"
+        and current_phase!="REVERSAL_CANDIDATE"
+        and current_bias in (side,"ABSTAIN")
+    ):
+        active=True
     return {
         "active":active,"side":side,"frozen_context_side":frozen_side,
         "frozen_phase":frozen_phase,"current_context_side":current_side,
@@ -345,9 +365,15 @@ def assess(state,pos,now=None):
         float(getattr(pos,"best_r",0.0) or 0.0)>=RUNNER_MIN_BEST_R
         and getattr(pos,"floor_r",None) is not None
     )
-    kill_fast=bool(causal_exit and profile["kill_fast"])
-    runner_shield=bool(causal_exit and runner_active and not kill_fast)
     trend_context=_trend_context_shield(state,pos)
+    trend_fast_override=bool(
+        profile.get("trend_kill_price") or s3.get("status")=="ADVERSE"
+    )
+    kill_fast=bool(
+        causal_exit and profile["kill_fast"]
+        and (not trend_context["active"] or trend_fast_override)
+    )
+    runner_shield=bool(causal_exit and runner_active and not kill_fast)
     trend_shield=bool(causal_exit and trend_context["active"] and not kill_fast)
     exit_profile="HOLD"
     if causal_exit:

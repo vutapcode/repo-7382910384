@@ -607,6 +607,79 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertEqual(exited["decision"], "EXIT")
         self.assertEqual(exited["exit_profile"], "TREND_SHIELD")
 
+    def test_transient_abstain_keeps_frozen_trend_shield(self):
+        state = self._state(100.0, 100.0, sell=True)
+        state.bias_council = {
+            "bias": "ABSTAIN", "direction_memory": {
+                "context_side": "ABSTAIN", "phase": "WARMUP_OR_NEUTRAL",
+            },
+        }
+        pos = SimpleNamespace(
+            position_cycle_id="trend-abstain", side="LONG", opened_at=90.0,
+            best_r=0.0, floor_r=None,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot", "cash_anchors": ["spot"],
+                "bias_thesis": {
+                    "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+                },
+            },
+        )
+        votes = self._causal_votes(price=-3.0, flow=-0.80)
+        first = self._assess_with_votes(state, pos, 100.0, votes)
+        self.assertEqual(first["decision"], "DETERIORATING")
+        early = self._assess_with_votes(state, pos, 100.26, votes)
+        self.assertEqual(early["decision"], "DETERIORATING")
+        self.assertTrue(early["trend_shield_active"])
+        self.assertFalse(early["kill_fast"])
+
+    def test_correlated_small_sweep_does_not_bypass_active_trend(self):
+        state = self._state(100.0, 100.0, sell=True)
+        state.bias_council = {
+            "bias": "LONG", "direction_memory": {
+                "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+            },
+        }
+        pos = SimpleNamespace(
+            position_cycle_id="trend-sweep", side="LONG", opened_at=90.0,
+            best_r=0.0, floor_r=None,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot", "cash_anchors": ["spot"],
+                "bias_thesis": {
+                    "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+                },
+            },
+        )
+        votes = self._causal_votes(price=-3.0, flow=-0.80)
+        self._assess_with_votes(state, pos, 100.0, votes)
+        early = self._assess_with_votes(state, pos, 100.26, votes)
+        self.assertEqual(early["decision"], "DETERIORATING")
+        self.assertTrue(early["trend_shield_active"])
+        self.assertFalse(early["kill_fast"])
+
+    def test_material_cash_break_still_bypasses_trend_shield(self):
+        state = self._state(100.0, 100.0, sell=True)
+        state.bias_council = {
+            "bias": "LONG", "direction_memory": {
+                "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+            },
+        }
+        pos = SimpleNamespace(
+            position_cycle_id="trend-break", side="LONG", opened_at=90.0,
+            best_r=0.0, floor_r=None,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot", "cash_anchors": ["spot"],
+                "bias_thesis": {
+                    "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+                },
+            },
+        )
+        votes = self._causal_votes(price=-5.5, flow=-0.80)
+        self._assess_with_votes(state, pos, 100.0, votes)
+        exited = self._assess_with_votes(state, pos, 100.26, votes)
+        self.assertEqual(exited["decision"], "EXIT")
+        self.assertTrue(exited["kill_fast"])
+        self.assertFalse(exited["trend_shield_active"])
+
     def test_reversal_candidate_disables_trend_shield(self):
         state = self._state(100.0, 100.0, sell=True)
         state.bias_council = {
