@@ -16,6 +16,7 @@ FAST_KILL_HOLD_SECONDS=0.25
 MIN_DETERIORATION_SECONDS=0.55
 MAX_DETERIORATION_SECONDS=1.05
 RUNNER_DETERIORATION_SECONDS=1.80
+TREND_DETERIORATION_SECONDS=3.00
 RUNNER_MIN_BEST_R=1.0
 COINBASE_STRICT_AGE_SECONDS=2.5
 
@@ -382,8 +383,10 @@ def assess(state,pos,now=None):
         conf=sum(votes[k]["confidence"] for k in confirmed)/len(confirmed)
         base_hold=max(MIN_DETERIORATION_SECONDS,min(MAX_DETERIORATION_SECONDS,1.20-0.65*conf))
         hold=(FAST_KILL_HOLD_SECONDS if kill_fast else
+              max(TREND_DETERIORATION_SECONDS,base_hold)
+              if trend_shield else
               max(RUNNER_DETERIORATION_SECONDS,base_hold)
-              if (runner_shield or trend_shield) else base_hold)
+              if runner_shield else base_hold)
         exit_profile=("KILL_FAST" if kill_fast else "RUNNER_SHIELD" if runner_shield
                       else "TREND_SHIELD" if trend_shield else "CAUSAL_CONFIRM")
         sig=tuple(sorted(confirmed))+(exit_profile,)

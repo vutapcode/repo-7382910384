@@ -603,7 +603,11 @@ class GuardianDeteriorationTests(unittest.TestCase):
         shielded = self._assess_with_votes(state, pos, 101.2, votes)
         self.assertEqual(shielded["decision"], "DETERIORATING")
         self.assertTrue(shielded["trend_shield_active"])
-        exited = self._assess_with_votes(state, pos, 101.81, votes)
+        still_holding = self._assess_with_votes(state, pos, 101.81, votes)
+        self.assertEqual(still_holding["decision"], "DETERIORATING")
+        # The slow whale-flow lane is deliberately not governed by a sub-2s
+        # HFT echo. A continuous three-second causal reversal still exits.
+        exited = self._assess_with_votes(state, pos, 103.01, votes)
         self.assertEqual(exited["decision"], "EXIT")
         self.assertEqual(exited["exit_profile"], "TREND_SHIELD")
 
