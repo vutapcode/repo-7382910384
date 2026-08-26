@@ -427,6 +427,7 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
     impact = (edge_report or {}).get("price_impact") or {}
     basis = (edge_report or {}).get("spot_perp_basis") or {}
     liquidation = (edge_report or {}).get("liquidation_context") or {}
+    thesis_audit = (edge_report or {}).get("entry_thesis_audit") or {}
     would_enter = (result or {}).get("decision") == "GO"
     failed = []
     if "STALE" in reason or "FEED_NOT_READY" in reason:
@@ -459,6 +460,8 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         failed.append("PERP_LED_VETO")
     if would_enter and bool(liquidation.get("tail_veto")):
         failed.append("LIQUIDATION_TAIL_VETO")
+    if would_enter:
+        failed.extend(thesis_audit.get("blocking_reasons") or ())
     if reason == "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS":
         failed.append("BIAS_ALIGNMENT_FAIL")
     elif "BIAS" in reason or str((result or {}).get("side", "")).upper() not in ("LONG", "SHORT"):
@@ -488,9 +491,11 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         "WAIT_IGNITION_PROOF", "WAIT_CAUSAL_PERSISTENCE", "WAIT_OI_REFRESH",
         "WAIT_OI_CLOSING_CONTEXT",
         "ABSORPTION_VETO", "PERP_LED_VETO", "LIQUIDATION_TAIL_VETO",
+        "UNWIND_TAIL_VETO", "EXCHANGE_INDEPENDENCE_FAIL",
         "EMPIRICAL_ALPHA_NOT_READY",
         "EDGE_COST_FAIL",
-        "BIAS_ALIGNMENT_FAIL", "BIAS_NOT_READY", "PRICE_QUORUM_FAIL", "FLOW_QUORUM_FAIL",
+        "BIAS_THESIS_FAIL", "BIAS_ALIGNMENT_FAIL", "BIAS_NOT_READY",
+        "PRICE_QUORUM_FAIL", "FLOW_QUORUM_FAIL",
     )
     unique = list(dict.fromkeys(failed))
     primary = next((name for name in priority if name in unique), None)

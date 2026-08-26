@@ -46,6 +46,23 @@ class MissTaxonomyTests(unittest.TestCase):
         }
         self.assertEqual(launcher._miss_taxonomy(result, edge, True), (None, []))
 
+    def test_unwind_tail_audit_is_visible_as_first_blocking_gate(self):
+        result = {
+            "decision": "GO", "reason": "IGNITION_PERSISTENT_METAORDER",
+            "side": "SHORT", "s_votes": {},
+        }
+        edge = {
+            "cost_ok": False, "bootstrap_shadow_allowed": False,
+            "live_empirical_ok": False, "price_impact": {},
+            "spot_perp_basis": {},
+            "entry_thesis_audit": {
+                "blocking_reasons": ["UNWIND_TAIL_VETO"],
+            },
+        }
+        primary, failed = launcher._miss_taxonomy(result, edge, True)
+        self.assertEqual(primary, "UNWIND_TAIL_VETO")
+        self.assertIn("UNWIND_TAIL_VETO", failed)
+
 
     def test_proximity_cluster_does_not_dedupe_distinct_causal_episodes(self):
         tracker = DecisionOutcomeTracker(lambda *args, **kwargs: None)

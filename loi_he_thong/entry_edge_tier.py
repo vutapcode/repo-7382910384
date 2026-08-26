@@ -8,12 +8,13 @@ trades; real money additionally requires persisted empirical expectancy/LCB.
 import time
 
 from loi_he_thong import edge_calibration_v2
+from loi_he_thong import entry_thesis_gate
 from loi_he_thong import entry_microstructure as micro
 from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
 from loi_he_thong import verified_cost_model
 
-VERSION = "IGNITION_RESIDUAL_EDGE_V1"
+VERSION = "IGNITION_RESIDUAL_EDGE_V2_THESIS_AUDIT"
 EDGE_BPS = {
     "LOW_EDGE": 0.0, "NORMAL_EDGE": 13.0,
     "HIGH_EDGE": 20.0, "RUNNER_EDGE": 35.0,
@@ -72,11 +73,6 @@ def classify(result, state):
     if perp_lead > 3.0:
         basis = dict(basis, status="PERP_EXPANSION", perp_expansion=True,
                      lead_bps=round(perp_lead, 6), limit_bps=3.0)
-    # A qualified Ignition bucket already requires cash price conversion. Keep
-    # old microstructure output as metadata, but never infer absorption merely
-    # because compatibility vote names differ from the retired Council.
-    if impact.get("absorbed") and max(cash_moves or [0.0]) >= 0.15:
-        impact = dict(impact, status="PASS", absorbed=False, efficient=True)
     hard_vetoes = []
     if candidate and not contract_ok:
         hard_vetoes.append("IGNITION_CONTRACT_FAIL")
@@ -88,11 +84,12 @@ def classify(result, state):
     liquidation = liquidation_context.assess_entry(
         state, result, _f((result or {}).get("ts"), time.time())
     )
-    # New liquidation evidence is deliberately shadow-only until outcomes
-    # prove value. It cannot alter any armed-money authorization.
     live = bool(getattr(state, "wstrade_live_armed", False))
-    if candidate and liquidation.get("tail_veto") and not live:
-        hard_vetoes.append("LIQUIDATION_TAIL_VETO")
+    thesis_audit = entry_thesis_gate.evaluate(
+        state, result, impact, basis, liquidation
+    )
+    if candidate:
+        hard_vetoes.extend(thesis_audit.get("blocking_reasons") or ())
 
     regime = regime_engine.classify(state, side)
     costs = verified_cost_model.estimate(result, state)
@@ -104,6 +101,10 @@ def classify(result, state):
     reserve = max(0.0, _f(costs.get("minimum_net_edge_bps")))
     expected_net = residual - cost_budget
     economic_ok = bool(not hard_vetoes and expected_net >= reserve)
+    thesis_audit = entry_thesis_gate.attach_economics(
+        thesis_audit, total_cost_bps=cost_budget,
+        reserve_bps=reserve, economic_ok=economic_ok,
+    )
 
     if not candidate:
         edge_class = "NOT_CANDIDATE"
@@ -178,6 +179,7 @@ def classify(result, state):
     state.tier_s_entry_regime = regime
     state.tier_s_entry_calibration = calibration
     state.tier_s_liquidation_context = liquidation
+    state.tier_s_entry_thesis_audit = thesis_audit
     return {
         "version": VERSION, "edge_class": edge_class,
         "entry_mode": mode, "execution_style": costs.get("execution_style"),
@@ -208,6 +210,7 @@ def classify(result, state):
         "fast_contract_ok": False, "hard_vetoes": hard_vetoes,
         "price_impact": impact, "spot_perp_basis": basis,
         "liquidation_context": liquidation,
+        "entry_thesis_audit": thesis_audit,
         "micro_regime": regime, "empirical_calibration": calibration,
         "empirical_alpha": {
             "samples": samples, "mean_net_bps": empirical_mean,

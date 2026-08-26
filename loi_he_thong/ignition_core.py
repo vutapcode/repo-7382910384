@@ -855,6 +855,29 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
         raw_imbalance = (
             (total_buy - total_sell) / total_qty if total_qty > 0.0 else 0.0
         )
+        recent_rows = [
+            row for row in rows
+            if int(row.get("receive_time_ms", 0) or 0) >= int(now_ms) - 1_000
+        ]
+        recent_buy = sum(_f(row.get("buy_qty")) for row in recent_rows)
+        recent_sell = sum(_f(row.get("sell_qty")) for row in recent_rows)
+        recent_qty = recent_buy + recent_sell
+        recent_imbalance = (
+            sign * (recent_buy - recent_sell) / recent_qty
+            if recent_qty > 0.0 else 0.0
+        )
+        recent_first = next(
+            (_f(row.get("first_price")) for row in recent_rows
+             if _f(row.get("first_price")) > 0.0), 0.0
+        )
+        recent_last = next(
+            (_f(row.get("price")) for row in reversed(recent_rows)
+             if _f(row.get("price")) > 0.0), 0.0
+        )
+        recent_progress = (
+            sign * _bps(recent_last, recent_first)
+            if recent_first > 0.0 and recent_last > 0.0 else 0.0
+        )
         venues[venue] = {
             "observed_seconds": observed, "aligned_seconds": aligned,
             "opposed_seconds": opposed,
@@ -867,6 +890,9 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
             "structural_candidate": structural,
             "volume_btc": round(total_qty, 8),
             "signed_imbalance": round(sign * raw_imbalance, 6),
+            "recent_1s_volume_btc": round(recent_qty, 8),
+            "recent_1s_signed_imbalance": round(recent_imbalance, 6),
+            "recent_1s_price_progress_bps": round(recent_progress, 6),
             "first_price": first_price or None,
             "last_price": last_price or None,
             "first_receive_ms": first_receive_ms or None,
@@ -1119,6 +1145,19 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
             "volume_btc": _f((venue_reports.get(name) or {}).get("volume_btc")),
             "surprise_ratio": None,
             "flow_acceleration": None,
+            "recent_1s_signed_imbalance": _f(
+                (venue_reports.get(name) or {}).get(
+                    "recent_1s_signed_imbalance"
+                )
+            ),
+            "recent_1s_price_progress_bps": _f(
+                (venue_reports.get(name) or {}).get(
+                    "recent_1s_price_progress_bps"
+                )
+            ),
+            "recent_1s_volume_btc": _f(
+                (venue_reports.get(name) or {}).get("recent_1s_volume_btc")
+            ),
         }
         for name in names
     }
@@ -1429,6 +1468,10 @@ def _result_from_episode(state, episode, histories, freshness, now):
             "volume_btc": _f(row.get("total_qty")),
             "surprise_ratio": _f(row.get("surprise_ratio")),
             "flow_acceleration": _f(row.get("flow_acceleration")),
+            "price_conversion_bps": round(
+                _sign(side) * _f(row.get("price_conversion_bps")), 6
+            ),
+            "receive_time_ms": int(row.get("receive_time_ms", 0) or 0),
         } for row in episode["signals"][-3:]},
         "venue_moves_bps": venue_moves,
         "venue_anchor_prices": venue_anchors,
