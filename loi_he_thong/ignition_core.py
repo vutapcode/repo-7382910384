@@ -802,6 +802,7 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
             and all(b - a == 1 for a, b in zip(second_keys, second_keys[1:]))
         )
         aligned = opposed = observed = 0
+        material_aligned = material_opposed = material_observed = 0
         first_price = last_price = 0.0
         first_receive_ms = last_receive_ms = 0
         first_aligned_ms = last_aligned_ms = 0
@@ -816,6 +817,10 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
             imbalance = sign * (cell["buy"] - cell["sell"]) / total
             aligned += int(imbalance >= 0.20)
             opposed += int(imbalance <= -0.20)
+            if total >= ignition_signals.MIN_QTY[venue]:
+                material_observed += 1
+                material_aligned += int(imbalance >= 0.20)
+                material_opposed += int(imbalance <= -0.20)
             if first_price <= 0.0 and cell["first"] > 0.0:
                 first_price = cell["first"]
             if cell["last"] > 0.0:
@@ -841,9 +846,9 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
         progress = sign * _bps(last_price, first_price) if first_price > 0.0 else 0.0
         persistence = aligned / observed if observed else 0.0
         structural = bool(
-            contiguous and observed >= 3 and aligned >= 2
-            and persistence >= (2.0 / 3.0)
-            and opposed == 0 and progress >= 0.15
+            contiguous and material_observed >= 3 and material_aligned >= 2
+            and material_aligned / material_observed >= (2.0 / 3.0)
+            and material_opposed == 0 and progress >= 0.15
             and clock_valid and len(epochs) == 1
         )
         total_qty = total_buy + total_sell
@@ -853,6 +858,9 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
         venues[venue] = {
             "observed_seconds": observed, "aligned_seconds": aligned,
             "opposed_seconds": opposed,
+            "material_observed_seconds": material_observed,
+            "material_aligned_seconds": material_aligned,
+            "material_opposed_seconds": material_opposed,
             "contiguous_seconds": contiguous,
             "persistence_ratio": round(persistence, 6),
             "price_progress_bps": round(progress, 6),
@@ -871,7 +879,8 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
     cash = [name for name in CASH if venues[name]["structural_candidate"]]
     futures_follow = venues["futures"]["structural_candidate"]
     opposing_cash = [
-        name for name in CASH if venues[name]["opposed_seconds"] >= 2
+        name for name in CASH
+        if venues[name]["material_opposed_seconds"] >= 2
     ]
     cash = [name for name in cash if name not in opposing_cash]
     cash.sort(key=lambda name: (
@@ -1018,6 +1027,17 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     ):
         return None
     context = dict(frozen.get("direction_context") or {})
+    phase_name = str(context.get("phase") or "UNKNOWN").upper()
+    context_side = str(context.get("context_side") or "ABSTAIN").upper()
+    if (
+        context_side != side
+        or phase_name not in {
+            "ESTABLISHED_TREND",
+            "PULLBACK_AGAINST_CONTEXT",
+            "CONTEXT_WITHOUT_CONFIRMATION",
+        }
+    ):
+        return None
     if bool(context.get("flow_price_trap")):
         return None
     if (

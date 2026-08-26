@@ -199,7 +199,9 @@ class IgnitionCoreTests(unittest.TestCase):
             for index in range(3):
                 row = evidence_row((index + 1) * 1_000, "LONG", 100.0 + index * 0.01)
                 row["venue"] = venue
-                row["buy_qty"], row["sell_qty"] = 0.08, 0.02
+                row["buy_qty"], row["sell_qty"] = (
+                    (0.16, 0.04) if venue == "futures" else (0.08, 0.02)
+                )
                 rows.append(row)
             histories[venue] = rows
         histories["coinbase_spot"] = []
@@ -217,7 +219,10 @@ class IgnitionCoreTests(unittest.TestCase):
             for index in range(3):
                 row = evidence_row((index + 1) * 1_000, "LONG", 100.0 + index * 0.01,
                                    strong=False)
-                row.update({"venue": venue, "buy_qty": 0.08, "sell_qty": 0.02})
+                buy, sell = (
+                    (0.16, 0.04) if venue == "futures" else (0.08, 0.02)
+                )
+                row.update({"venue": venue, "buy_qty": buy, "sell_qty": sell})
                 rows.append(row)
             histories[venue] = tuple(rows)
         histories["coinbase_spot"] = ()
@@ -249,9 +254,13 @@ class IgnitionCoreTests(unittest.TestCase):
                     start_ms + index * 1_000, side,
                     100.0 + sign * index * 0.01, strong=False,
                 )
+                total = 0.20 if venue == "futures" else 0.10
+                aligned = total * 0.80
+                residual = total - aligned
                 row.update({
-                    "venue": venue, "buy_qty": 0.08 if side == "LONG" else 0.02,
-                    "sell_qty": 0.02 if side == "LONG" else 0.08,
+                    "venue": venue,
+                    "buy_qty": aligned if side == "LONG" else residual,
+                    "sell_qty": residual if side == "LONG" else aligned,
                 })
                 histories[venue].append(row)
         if opposing_cash:
@@ -283,6 +292,7 @@ class IgnitionCoreTests(unittest.TestCase):
             "updated_at": captured_at,
             "direction_context": {
                 "phase": "ESTABLISHED_TREND",
+                "context_side": side,
                 "candidate_side": "ABSTAIN",
                 "flow_price_trap": False,
             },
@@ -348,6 +358,18 @@ class IgnitionCoreTests(unittest.TestCase):
         self._freeze_bias_before_wave(s)
         opposed = self._persistent_histories(opposing_cash=True)
         with patch.object(ignition_signals, "snapshot", return_value=opposed), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            blocked = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(blocked["decision"], "WAIT")
+
+    def test_persistent_lane_rejects_warmup_context_from_smoke_loss(self):
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s)
+        s._ignition_bias_snapshots[-1]["direction_context"].update({
+            "phase": "WARMUP_OR_NEUTRAL", "context_side": "ABSTAIN",
+        })
+        histories = self._persistent_histories(cash="coinbase_spot")
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
              patch.object(ignition_core, "_new_signals", return_value=[]):
             blocked = ignition_core.evaluate(s, now=3.1)
         self.assertEqual(blocked["decision"], "WAIT")
