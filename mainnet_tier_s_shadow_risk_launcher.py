@@ -130,7 +130,8 @@ def _entry_quorum_ok(result, state, now):
         ignition.get("state") == "PROVE"
         and ignition.get("cash_venues")
         and ignition.get("proof_type") in (
-            "METAORDER_CONTINUATION", "FAILED_REVERSION"
+            "METAORDER_CONTINUATION", "FAILED_REVERSION",
+            "PERSISTENT_METAORDER",
         )
         and (
             ignition.get("proposer") != "futures"

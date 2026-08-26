@@ -192,7 +192,7 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(result["ignition"]["research_side"], "SHORT")
         self.assertFalse(result["ignition"]["authority"])
 
-    def test_persistent_metaorder_is_shadow_telemetry_only(self):
+    def test_persistent_metaorder_measurement_has_no_direct_authority(self):
         histories = {}
         for venue in ("binance_spot", "futures"):
             rows = []
@@ -206,7 +206,9 @@ class IgnitionCoreTests(unittest.TestCase):
         report = ignition_core._persistent_metaorder_shadow(histories, "LONG", 3_100)
         self.assertEqual(report["status"], "PERSISTENT_METAORDER_CANDIDATE")
         self.assertFalse(report["authority"])
-        self.assertEqual(report["policy"], "TELEMETRY_ONLY_NEVER_OPENS_OR_VETOES")
+        self.assertEqual(
+            report["policy"], "MEASUREMENT_ONLY_AUTHORITY_CHECKS_DOWNSTREAM"
+        )
 
     def test_persistent_metaorder_is_observed_without_ignition_episode(self):
         histories = {}
@@ -227,12 +229,153 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertIsNone(getattr(s, "_ignition_episode", None))
         self.assertEqual(s.persistent_metaorder_shadow["candidate_side"], "LONG")
         self.assertEqual(
-            s.persistent_metaorder_shadow["candidate_id"], "pmeta:LONG:3100",
+            s.persistent_metaorder_shadow["candidate_id"], "pmeta:LONG:1000",
         )
         self.assertEqual(
-            s.persistent_metaorder_shadow["candidate_started_at_ms"], 3_100,
+            s.persistent_metaorder_shadow["candidate_started_at_ms"], 1_000,
         )
         self.assertFalse(s.persistent_metaorder_shadow["authority"])
+
+    @staticmethod
+    def _persistent_histories(side="LONG", cash="binance_spot", start_ms=1_000,
+                              opposing_cash=False):
+        histories = {name: [] for name in (
+            "binance_spot", "coinbase_spot", "futures"
+        )}
+        sign = 1.0 if side == "LONG" else -1.0
+        for venue in (cash, "futures"):
+            for index in range(3):
+                row = evidence_row(
+                    start_ms + index * 1_000, side,
+                    100.0 + sign * index * 0.01, strong=False,
+                )
+                row.update({
+                    "venue": venue, "buy_qty": 0.08 if side == "LONG" else 0.02,
+                    "sell_qty": 0.02 if side == "LONG" else 0.08,
+                })
+                histories[venue].append(row)
+        if opposing_cash:
+            other = "coinbase_spot" if cash == "binance_spot" else "binance_spot"
+            oppose = "SHORT" if side == "LONG" else "LONG"
+            for index in range(3):
+                row = evidence_row(
+                    start_ms + index * 1_000, oppose,
+                    100.0 - sign * index * 0.01, strong=False,
+                )
+                row.update({
+                    "venue": other,
+                    "buy_qty": 0.02 if side == "LONG" else 0.08,
+                    "sell_qty": 0.08 if side == "LONG" else 0.02,
+                })
+                histories[other].append(row)
+        return {name: tuple(rows) for name, rows in histories.items()}
+
+    @staticmethod
+    def _freeze_bias_before_wave(s, side="LONG", captured_at=0.0):
+        s.bias_state = side
+        s.bias_confidence = 0.80
+        s._ignition_bias_snapshots = __import__("collections").deque([{
+            "direction": side,
+            "confidence": 0.80,
+            "raw_direction": side,
+            "raw_confidence": 0.80,
+            "captured_at": captured_at,
+            "updated_at": captured_at,
+            "direction_context": {
+                "phase": "ESTABLISHED_TREND",
+                "candidate_side": "ABSTAIN",
+                "flow_price_trap": False,
+            },
+            "s_votes": {},
+        }], maxlen=40)
+
+    def test_persistent_cash_wave_becomes_shadow_entry_candidate(self):
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s)
+        histories = self._persistent_histories()
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(result["decision"], "GO")
+        self.assertEqual(result["entry_mode"], "PERSISTENT_METAORDER")
+        self.assertEqual(result["ignition"]["proof_type"], "PERSISTENT_METAORDER")
+        self.assertEqual(result["ignition"]["proposer"], "binance_spot")
+        self.assertTrue(result["ignition"]["futures_follow_ok"])
+
+    def test_persistent_wave_id_bridges_lull_without_duplicate_episode(self):
+        first_histories = self._persistent_histories()
+        first = ignition_core._persistent_metaorder_snapshot(
+            first_histories, 3_100,
+        )
+        lull = ignition_core._persistent_metaorder_snapshot(
+            {name: () for name in first_histories}, 4_500, first,
+        )
+        resumed = ignition_core._persistent_metaorder_snapshot(
+            self._persistent_histories(start_ms=3_000), 5_500, lull,
+        )
+        self.assertTrue(lull["wave_bridge_active"])
+        self.assertEqual(first["candidate_id"], resumed["candidate_id"])
+        self.assertEqual(resumed["wave_started_at_ms"], 1_000)
+
+    def test_continuous_wave_expires_without_becoming_a_second_episode(self):
+        first = ignition_core._persistent_metaorder_snapshot(
+            self._persistent_histories(), 3_100,
+        )
+        carried = dict(first, wave_last_confirmed_at_ms=16_000)
+        continuous = ignition_core._persistent_metaorder_snapshot(
+            self._persistent_histories(start_ms=16_000), 18_100, carried,
+        )
+        self.assertEqual(first["candidate_id"], continuous["candidate_id"])
+        self.assertTrue(continuous["wave_expired"])
+
+    def test_captured_persistent_wave_cannot_open_twice(self):
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s)
+        histories = self._persistent_histories()
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=3.1)
+            ignition_core.capture_episode(
+                s, result["causal_episode_id"], side="LONG",
+                last_evidence_ms=result["ignition"]["last_evidence_ms"],
+            )
+            later = ignition_core.evaluate(s, now=3.2)
+        self.assertEqual(result["decision"], "GO")
+        self.assertEqual(later["decision"], "WAIT")
+
+    def test_persistent_lane_rejects_opposing_cash_and_hindsight_flip(self):
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s)
+        opposed = self._persistent_histories(opposing_cash=True)
+        with patch.object(ignition_signals, "snapshot", return_value=opposed), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            blocked = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(blocked["decision"], "WAIT")
+
+        # The 15:03-style case is not allowed to rewrite a frozen SHORT Bias
+        # merely because a later LONG move became visible in hindsight.
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s, side="SHORT")
+        long_wave = self._persistent_histories(side="LONG")
+        with patch.object(ignition_signals, "snapshot", return_value=long_wave), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            blocked = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(blocked["decision"], "WAIT")
+
+    def test_persistent_shadow_bootstrap_live_still_requires_empirical_cohort(self):
+        s = state(now=3.1)
+        self._freeze_bias_before_wave(s)
+        histories = self._persistent_histories()
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=3.1)
+        allowed, report = entry_edge_tier.authorize(result, s)
+        self.assertTrue(allowed)
+        self.assertTrue(report["bootstrap_shadow_allowed"])
+        s.wstrade_live_armed = True
+        allowed, report = entry_edge_tier.authorize(result, s)
+        self.assertFalse(allowed)
+        self.assertFalse(report["live_empirical_ok"])
 
     def test_persistent_metaorder_does_not_bridge_empty_seconds(self):
         histories = {}

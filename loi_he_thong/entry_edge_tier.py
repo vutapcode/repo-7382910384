@@ -28,12 +28,18 @@ def _ignition_contract(result):
     ignition = (result or {}).get("ignition") or {}
     proposer = str(ignition.get("proposer") or "")
     proof = str(ignition.get("proof_type") or "")
+    persistent = str((result or {}).get("entry_mode") or "").upper() == "PERSISTENT_METAORDER"
+    accepted_proofs = (
+        ("PERSISTENT_METAORDER",) if persistent
+        else ("METAORDER_CONTINUATION", "FAILED_REVERSION")
+    )
     return bool(
         (result or {}).get("decision") == "GO"
         and ignition.get("state") == "PROVE"
-        and proof in ("METAORDER_CONTINUATION", "FAILED_REVERSION")
+        and proof in accepted_proofs
         and ignition.get("cash_venues")
         and _f(ignition.get("consumed_fraction"), 1.0) <= 0.35
+        and (not persistent or proposer in ("binance_spot", "coinbase_spot"))
         and (proposer != "futures" or ignition.get("futures_cash_response_ok"))
         and (proposer == "futures" or ignition.get("futures_follow_ok"))
     )

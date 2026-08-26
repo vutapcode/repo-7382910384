@@ -20,6 +20,8 @@ EVAL_THROTTLE = 0.10
 FOLLOW_MAX_MS = 600
 EVIDENCE_GAP_MS = 300
 EPISODE_MAX_MS = 5_000
+PERSISTENT_WAVE_GAP_MS = 3_000
+PERSISTENT_WAVE_MAX_MS = 15_000
 LEAD_FLOOR_MS = 100.0
 MAX_CONSUMED_FRACTION = 0.35
 MIN_ACCEPTANCE_MS = 400
@@ -765,10 +767,12 @@ def _cash_discovery(episode):
 
 
 def _persistent_metaorder_shadow(histories, side, now_ms):
-    """Bounded 1-6 s persistence measurement; never Entry authority.
+    """Bounded 1-6 s persistence measurement for the slow Entry lane.
 
     It deliberately reuses exact executed-flow buckets instead of inventing a
     second signal stack.  The fixed-size history keeps hot-path work bounded.
+    This function only measures evidence; ``_persistent_entry_result`` owns
+    the Bias/freshness/OI/phase authority checks.
     """
     cutoff = int(now_ms) - 6_000
     sign = _sign(side)
@@ -799,6 +803,11 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
         )
         aligned = opposed = observed = 0
         first_price = last_price = 0.0
+        first_receive_ms = last_receive_ms = 0
+        first_aligned_ms = last_aligned_ms = 0
+        total_buy = total_sell = 0.0
+        epochs = set()
+        clock_valid = True
         for cell in ordered:
             total = cell["buy"] + cell["sell"]
             if total <= 0.0:
@@ -811,12 +820,35 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
                 first_price = cell["first"]
             if cell["last"] > 0.0:
                 last_price = cell["last"]
+        for row in rows:
+            receive_ms = int(row.get("receive_time_ms", 0) or 0)
+            if receive_ms <= 0:
+                continue
+            first_receive_ms = first_receive_ms or receive_ms
+            last_receive_ms = max(last_receive_ms, receive_ms)
+            total_buy += _f(row.get("buy_qty"))
+            total_sell += _f(row.get("sell_qty"))
+            epochs.add(int(row.get("epoch", 0) or 0))
+            clock_valid = bool(clock_valid and row.get("clock_valid"))
+            total = _f(row.get("buy_qty")) + _f(row.get("sell_qty"))
+            imbalance = (
+                sign * (_f(row.get("buy_qty")) - _f(row.get("sell_qty"))) / total
+                if total > 0.0 else 0.0
+            )
+            if imbalance >= 0.20:
+                first_aligned_ms = first_aligned_ms or receive_ms
+                last_aligned_ms = max(last_aligned_ms, receive_ms)
         progress = sign * _bps(last_price, first_price) if first_price > 0.0 else 0.0
         persistence = aligned / observed if observed else 0.0
         structural = bool(
             contiguous and observed >= 3 and aligned >= 2
             and persistence >= (2.0 / 3.0)
             and opposed == 0 and progress >= 0.15
+            and clock_valid and len(epochs) == 1
+        )
+        total_qty = total_buy + total_sell
+        raw_imbalance = (
+            (total_buy - total_sell) / total_qty if total_qty > 0.0 else 0.0
         )
         venues[venue] = {
             "observed_seconds": observed, "aligned_seconds": aligned,
@@ -825,28 +857,48 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
             "persistence_ratio": round(persistence, 6),
             "price_progress_bps": round(progress, 6),
             "structural_candidate": structural,
+            "volume_btc": round(total_qty, 8),
+            "signed_imbalance": round(sign * raw_imbalance, 6),
+            "first_price": first_price or None,
+            "last_price": last_price or None,
+            "first_receive_ms": first_receive_ms or None,
+            "last_receive_ms": last_receive_ms or None,
+            "first_aligned_ms": first_aligned_ms or None,
+            "last_aligned_ms": last_aligned_ms or None,
+            "clock_valid": clock_valid,
+            "epoch": next(iter(epochs)) if len(epochs) == 1 else None,
         }
     cash = [name for name in CASH if venues[name]["structural_candidate"]]
     futures_follow = venues["futures"]["structural_candidate"]
+    opposing_cash = [
+        name for name in CASH if venues[name]["opposed_seconds"] >= 2
+    ]
+    cash = [name for name in cash if name not in opposing_cash]
+    cash.sort(key=lambda name: (
+        int(venues[name].get("first_aligned_ms") or now_ms), name
+    ))
     status = (
         "PERSISTENT_METAORDER_CANDIDATE" if cash and futures_follow else
         "WAIT_PERSISTENT_FUTURES_FOLLOW" if cash else "OBSERVING"
     )
     return {
         "version": "PERSISTENT_METAORDER_SHADOW_V1", "status": status,
-        "cash_candidates": sorted(cash), "futures_follow": futures_follow,
+        "cash_candidates": cash, "futures_follow": futures_follow,
+        "opposing_cash_venues": sorted(opposing_cash),
+        "proposer": cash[0] if cash else None,
         "venues": venues, "authority": False,
         "calibration_status": "BOOTSTRAP_UNVERIFIED",
-        "policy": "TELEMETRY_ONLY_NEVER_OPENS_OR_VETOES",
+        "policy": "MEASUREMENT_ONLY_AUTHORITY_CHECKS_DOWNSTREAM",
     }
 
 
 def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
-    """Observe slow cash persistence independently from 100 ms ignition.
+    """Observe one stable slow causal wave independently from fast Ignition.
 
-    This is deliberately recorder-only.  Evaluating both sides here makes a
-    1-6 second metaorder visible even when no two-deviation proposer ever
-    creates an Ignition episode.
+    A brief evidence lull does not create a second opportunity.  The wave ID
+    survives at most three seconds without structural confirmation and never
+    exceeds fifteen seconds.  This is lifecycle identity, not permission to
+    trade through a lull.
     """
     sides = {
         side: _persistent_metaorder_shadow(histories, side, now_ms)
@@ -866,31 +918,220 @@ def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
         str((previous or {}).get("status", "")),
         str((previous or {}).get("candidate_side", "")),
     )
+    previous = dict(previous or {})
+    previous_wave_side = str(previous.get("wave_side") or "ABSTAIN")
+    previous_started = int(previous.get("wave_started_at_ms", 0) or 0)
+    previous_confirmed = int(previous.get("wave_last_confirmed_at_ms", 0) or 0)
+    bridge_previous = bool(
+        previous_wave_side in ("LONG", "SHORT")
+        and previous_started > 0 and previous_confirmed > 0
+        and 0 <= now_ms - previous_confirmed <= PERSISTENT_WAVE_GAP_MS
+    )
     candidate_started_at_ms = None
     candidate_id = None
+    wave_side = previous_wave_side if bridge_previous else "ABSTAIN"
+    wave_started_at_ms = previous_started if bridge_previous else 0
+    wave_last_confirmed_at_ms = previous_confirmed if bridge_previous else 0
+    captured = bool(previous.get("captured", False)) if bridge_previous else False
+    wave_expired = bool(
+        bridge_previous
+        and now_ms - previous_started > PERSISTENT_WAVE_MAX_MS
+    )
     if candidate_side != "ABSTAIN":
-        if (
-            candidate_side == str((previous or {}).get("candidate_side", ""))
-            and (previous or {}).get("candidate_started_at_ms")
-        ):
-            candidate_started_at_ms = int(
-                previous.get("candidate_started_at_ms")
-            )
-        else:
-            candidate_started_at_ms = int(now_ms)
+        report = sides[candidate_side]
+        evidence_start = min(
+            (
+                int((report.get("venues") or {}).get(name, {}).get("first_aligned_ms") or now_ms)
+                for name in list(report.get("cash_candidates") or ()) + ["futures"]
+            ),
+            default=int(now_ms),
+        )
+        if not (bridge_previous and previous_wave_side == candidate_side):
+            wave_side = candidate_side
+            wave_started_at_ms = evidence_start
+            captured = False
+            wave_expired = False
+        wave_last_confirmed_at_ms = int(now_ms)
+        candidate_started_at_ms = wave_started_at_ms
         candidate_id = "pmeta:%s:%d" % (
             candidate_side, candidate_started_at_ms,
         )
+    elif bridge_previous:
+        candidate_started_at_ms = wave_started_at_ms
+        candidate_id = "pmeta:%s:%d" % (wave_side, wave_started_at_ms)
     return {
         "version": "PERSISTENT_METAORDER_SHADOW_V2",
         "status": status,
         "candidate_side": candidate_side,
         "candidate_id": candidate_id,
         "candidate_started_at_ms": candidate_started_at_ms,
+        "wave_side": wave_side,
+        "wave_started_at_ms": wave_started_at_ms or None,
+        "wave_last_confirmed_at_ms": wave_last_confirmed_at_ms or None,
+        "wave_bridge_active": bool(candidate_side == "ABSTAIN" and bridge_previous),
+        "wave_expired": wave_expired,
+        "captured": captured,
         "sides": sides,
         "authority": False,
-        "policy": "RECORDER_ONLY_NEVER_OPENS_OR_VETOES",
+        "policy": "SHADOW_BOOTSTRAP_LIVE_EMPIRICAL_ONLY",
         "transition": identity != previous_identity,
+    }
+
+
+def _persistent_entry_result(state, snapshot, histories, freshness, now):
+    """Convert a coherent slow wave into the same guarded Entry contract.
+
+    This lane never changes Bias and never lets Futures propose direction.  It
+    is bootstrap-authorized only in shadow; ``entry_edge_tier`` keeps future
+    real execution behind exact-cohort empirical promotion.
+    """
+    side = str((snapshot or {}).get("candidate_side") or "ABSTAIN").upper()
+    candidate_id = str((snapshot or {}).get("candidate_id") or "")
+    if side not in ("LONG", "SHORT") or not candidate_id:
+        return None
+    if bool((snapshot or {}).get("captured")):
+        return None
+    if bool((snapshot or {}).get("wave_expired")):
+        return None
+    report = dict(((snapshot.get("sides") or {}).get(side)) or {})
+    cash = list(report.get("cash_candidates") or ())
+    proposer = str(report.get("proposer") or "")
+    if not cash or not report.get("futures_follow") or proposer not in CASH:
+        return None
+    if report.get("opposing_cash_venues"):
+        return None
+    if not freshness.get("binance_spot_ready") or not freshness.get("futures_ready"):
+        return None
+    if freshness.get("coinbase_mode") == "STALE":
+        return None
+    if freshness.get("coinbase_mode") == "DEGRADED" and proposer != "binance_spot":
+        return None
+
+    wave_started_ms = int(snapshot.get("wave_started_at_ms") or 0)
+    frozen = _bias_snapshot(state, {"receive_time_ms": wave_started_ms})
+    current_side = str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
+    if (
+        current_side != side
+        or _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF
+        or str(frozen.get("direction") or "ABSTAIN").upper() != side
+        or _f(frozen.get("confidence")) < BIAS_MIN_CONF
+    ):
+        return None
+    context = dict(frozen.get("direction_context") or {})
+    if bool(context.get("flow_price_trap")):
+        return None
+    if (
+        str(context.get("phase") or "").upper() == "REVERSAL_CANDIDATE"
+        and str(context.get("candidate_side") or "ABSTAIN").upper() not in (
+            "ABSTAIN", side,
+        )
+    ):
+        return None
+
+    venue_reports = report.get("venues") or {}
+    names = set(cash) | {"futures"}
+    moves = {
+        name: _f((venue_reports.get(name) or {}).get("price_progress_bps"))
+        for name in names
+    }
+    latest_evidence_ms = max(
+        (
+            int((venue_reports.get(name) or {}).get("last_receive_ms") or 0)
+            for name in names
+        ),
+        default=int(now * 1000.0),
+    )
+    latest = {
+        "receive_time_ms": latest_evidence_ms,
+        "price_conversion_bps": max((moves.get(name, 0.0) for name in cash), default=0.0),
+    }
+    phase = _phase_measurement(state, side, cash, moves, latest, episode={})
+    consumed = _f(phase.get("consumed_fraction"), 1.0)
+    if not phase.get("valid") or consumed > MAX_CONSUMED_FRACTION:
+        return None
+    oi = _oi_intent(state, side, now, frozen)
+    if oi.get("fresh") and not oi.get("aligned_with_entry", True):
+        return None
+
+    flow_by_venue = {
+        name: {
+            "signed_imbalance": _f((venue_reports.get(name) or {}).get("signed_imbalance")),
+            "volume_btc": _f((venue_reports.get(name) or {}).get("volume_btc")),
+            "surprise_ratio": None,
+            "flow_acceleration": None,
+        }
+        for name in names
+    }
+    clock_quality = {
+        name: {
+            "uncertainty_ms": rows[-1].get("clock_uncertainty_ms"),
+            "valid": rows[-1].get("clock_valid"),
+            "epoch": rows[-1].get("epoch"),
+        }
+        for name, rows in histories.items() if rows and name in names
+    }
+    payload = {
+        "causal_episode_id": candidate_id,
+        "state": "PROVE",
+        "side": side,
+        "proposer": proposer,
+        "leader": "COHERENT_CASH_WAVE",
+        "lead_lower_bound_ms": None,
+        "bias_snapshot": frozen,
+        "proof_type": "PERSISTENT_METAORDER",
+        "proof_venue": proposer,
+        "cash_venues": cash,
+        "cash_opponents": [],
+        "supporting_venues": sorted(names),
+        "futures_response": True,
+        "futures_response_ms": int(
+            (venue_reports.get("futures") or {}).get("first_aligned_ms") or 0
+        ) or None,
+        "futures_follow_ok": True,
+        "futures_follow_invalidated": False,
+        "futures_cash_response_ok": True,
+        "last_evidence_ms": latest_evidence_ms,
+        "flow_by_venue": flow_by_venue,
+        "venue_moves_bps": moves,
+        "venue_anchor_prices": {
+            name: (venue_reports.get(name) or {}).get("first_price")
+            for name in names
+        },
+        "venue_anchor_policy": "PERSISTENT_WAVE_FIRST_EXECUTED_PRICE",
+        "impulse_phase": "EARLY",
+        "consumed_fraction": consumed,
+        "phase_measurement": phase,
+        "residual_edge_proxy_bps": 0.0,
+        "residual_edge_source": "EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED",
+        "oi_intent": oi,
+        "causal_class": (
+            "CASH_LED_UNWIND" if oi.get("intent") == "UNWIND"
+            else "ALIGNED_BUILD" if oi.get("intent") == "POSITION_BUILD"
+            else "PERSISTENT_CASH_WAVE"
+        ),
+        "persistent_evidence": report,
+        "clock_quality": clock_quality,
+    }
+    confidence = min(0.90, 0.64 + 0.04 * len(payload["supporting_venues"]))
+    state._ignition_pending_capture_id = candidate_id
+    return {
+        "version": VERSION,
+        "decision": "GO",
+        "entry_mode": "PERSISTENT_METAORDER",
+        "execution_policy": "TAKER",
+        "phase": "RELEASE",
+        "confidence": round(confidence, 6),
+        "reason": "PERSISTENT_METAORDER_PROVED",
+        "price_threshold_bps": MATERIAL_PRICE_BPS,
+        "side": side,
+        "bias_confidence": _f(frozen.get("confidence")),
+        "s_quorum": 2,
+        "ignition": payload,
+        "causal": _causal(payload),
+        "s_votes": _compat_votes(True, payload),
+        "freshness": freshness,
+        "ts": now,
+        "causal_episode_id": candidate_id,
     }
 
 
@@ -1237,6 +1478,10 @@ def capture_episode(state, causal_episode_id, side=None, last_evidence_ms=None):
     state._ignition_cooldown_until_ms = evidence_ms + 5_000
     if isinstance(episode, dict) and str(episode.get("causal_episode_id") or "") == episode_id:
         state._ignition_episode = None
+    persistent = dict(getattr(state, "persistent_metaorder_shadow", {}) or {})
+    if str(persistent.get("candidate_id") or "") == episode_id:
+        persistent["captured"] = True
+        state.persistent_metaorder_shadow = persistent
     if not pending or pending == episode_id:
         state._ignition_pending_capture_id = None
     return True
@@ -1352,6 +1597,11 @@ def evaluate(state, now=None, side=None):
 
     if episode is None:
         _remember_bias(state, now)
+        persistent_result = _persistent_entry_result(
+            state, persistent_snapshot, histories, freshness, now,
+        )
+        if persistent_result is not None:
+            return persistent_result
         reason = str(getattr(state, "_ignition_last_reject", "WAIT_IGNITION") or "WAIT_IGNITION")
         research = _research_payload(state)
         return _wait(
@@ -1364,7 +1614,13 @@ def evaluate(state, now=None, side=None):
             now, side, "IGNITION_EVIDENCE_DECAYED", "INVALID",
             {"causal_episode_id": episode.get("causal_episode_id")}, freshness,
         )
-    return _result_from_episode(state, episode, histories, freshness, now)
+    result = _result_from_episode(state, episode, histories, freshness, now)
+    if result.get("decision") == "GO":
+        return result
+    persistent_result = _persistent_entry_result(
+        state, persistent_snapshot, histories, freshness, now,
+    )
+    return persistent_result if persistent_result is not None else result
 
 
 def update_state(state, now=None):
