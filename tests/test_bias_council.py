@@ -3,6 +3,7 @@ from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 def _load():
@@ -153,6 +154,26 @@ class BiasCouncilTests(unittest.TestCase):
         self.assertEqual(side, "LONG")
         self.assertGreaterEqual(confidence, 0.35)
         self.assertEqual(reason, "HOLD_CONTEXT_THROUGH_ABSTAIN")
+
+    def test_confirmed_flip_exports_non_authoritative_reversal_latch(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "LONG", 0.80
+        s._bias_flip_candidate = "SHORT"
+        s._bias_flip_since = 97.0
+        raw = {
+            "ts": 100.0, "bias": "SHORT", "confidence": 0.80,
+            "quorum": 3, "story": {"name": "NEW_SHORT_BUILD_CONFIRMED"},
+            "direction_memory": {
+                "context_side": "LONG", "phase": "REVERSAL_CANDIDATE",
+            },
+        }
+        with patch.object(council, "evaluate", return_value=raw):
+            report = council.update_state(s, now=100.0)
+        latch = report["reversal_latch"]
+        self.assertEqual(latch["status"], "CONFIRMED")
+        self.assertEqual(latch["candidate_side"], "SHORT")
+        self.assertEqual(latch["started_at"], 97.0)
+        self.assertFalse(latch["authority"])
 
 
 

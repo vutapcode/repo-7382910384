@@ -6,6 +6,8 @@ is evidence state only; this module never sizes or submits an order.
 """
 
 from collections import deque
+import hashlib
+import json
 import time
 
 from loi_he_thong import ignition_signals
@@ -546,6 +548,208 @@ def _episode_id(signal):
     )
 
 
+def _pending_reversal_identity(signal, bias):
+    """Hash only immutable onset identity; later evidence cannot rewrite it."""
+    onset = {
+        "episode_id": _episode_id(signal),
+        "side": str(signal.get("side") or "ABSTAIN").upper(),
+        "start_receive_ms": int(signal.get("receive_time_ms", 0) or 0),
+        "bucket_start_ms": int(signal.get("bucket_start_ms", 0) or 0),
+        "proposer": str(signal.get("venue") or "UNKNOWN"),
+        "epoch": int(signal.get("epoch", 0) or 0),
+        "event_time_ms": int(signal.get("event_time_ms", 0) or 0),
+        "price": round(_f(signal.get("price")), 10),
+        "total_qty": round(_f(signal.get("total_qty")), 10),
+        "imbalance": round(_f(signal.get("imbalance")), 8),
+        "price_conversion_bps": round(
+            _f(signal.get("price_conversion_bps")), 8
+        ),
+        "frozen_bias_direction": str(
+            (bias or {}).get("direction") or "ABSTAIN"
+        ).upper(),
+        "frozen_bias_updated_at": _f((bias or {}).get("updated_at")),
+    }
+    encoded = json.dumps(
+        onset, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return onset, hashlib.sha256(encoded).hexdigest()
+
+
+def _start_pending_reversal(state, signal, bias, histories):
+    """Remember counter-Bias onset without granting direction or Entry."""
+    side = str(signal.get("side") or "ABSTAIN").upper()
+    frozen_side = str((bias or {}).get("direction") or "ABSTAIN").upper()
+    if (
+        side not in ("LONG", "SHORT")
+        or frozen_side not in ("LONG", "SHORT")
+        or side == frozen_side
+        or _f((bias or {}).get("confidence")) < BIAS_MIN_CONF
+        or not signal.get("strong")
+        or not signal.get("clock_valid")
+    ):
+        return None
+    onset, identity_hash = _pending_reversal_identity(signal, bias)
+    receive_ms = int(signal.get("receive_time_ms", 0) or 0)
+    proposer = str(signal.get("venue") or "UNKNOWN")
+    cash = [proposer] if proposer in CASH else []
+    precursor = _precursor_cash_progress(state, signal)
+    histories_at_onset = {
+        name: tuple(
+            row for row in rows
+            if int(row.get("receive_time_ms", 0) or 0) <= receive_ms
+        )
+        for name, rows in (histories or {}).items()
+    }
+    pending = {
+        "causal_episode_id": onset["episode_id"],
+        "episode_id": onset["episode_id"],
+        "episode_hash": identity_hash,
+        "side": side,
+        "start_ts": receive_ms / 1000.0,
+        "last_ts": receive_ms / 1000.0,
+        "started_receive_ms": receive_ms,
+        "last_evidence_ms": receive_ms,
+        "proposer": proposer,
+        "leader": proposer,
+        "signals": [dict(signal)],
+        "epochs": {proposer: int(signal.get("epoch", 0) or 0)},
+        "pre_impulse_bias_snapshot": dict(bias or {}),
+        "bias_snapshot": dict(bias or {}),
+        "onset_evidence": onset,
+        "executed_flow_evidence": [dict(signal)],
+        "flow_efficiency_at_onset": _flow_efficiency_snapshot(
+            histories_at_onset, side, cash,
+        ),
+        "precursor_measurement": precursor,
+        "displacement_onset": dict(precursor),
+        "oi_before_snapshot": _oi_state_snapshot(state),
+        "status": "PENDING_BIAS_FLIP",
+        "authority": False,
+        "policy": "SAME_EPISODE_BIAS_FLIP_NO_BUCKET_REPLAY_NO_LOOKAHEAD",
+    }
+    state._ignition_pending_reversal_episode = pending
+    state._ignition_last_reject = "PENDING_REVERSAL_BIAS_CONFIRMATION"
+    state._ignition_last_reject_payload = dict(pending)
+    return pending
+
+
+def _observe_pending_reversal(state, rows, histories):
+    """Append only newly received, same-side material evidence."""
+    handled = set()
+    pending = getattr(state, "_ignition_pending_reversal_episode", None)
+    for row in rows:
+        token = (str(row.get("venue") or ""), int(row.get("bucket_start_ms", -1)))
+        if isinstance(pending, dict):
+            if (
+                str(row.get("side") or "").upper() == pending.get("side")
+                and _material_flow(row)
+            ):
+                pending["signals"].append(dict(row))
+                pending["executed_flow_evidence"].append(dict(row))
+                receive_ms = int(row.get("receive_time_ms", 0) or 0)
+                pending["last_evidence_ms"] = receive_ms
+                pending["last_ts"] = receive_ms / 1000.0
+                pending["epochs"][str(row.get("venue") or "")] = int(
+                    row.get("epoch", 0) or 0
+                )
+                handled.add(token)
+            continue
+        if not row.get("strong") or not row.get("clock_valid"):
+            continue
+        frozen = _bias_snapshot(state, row)
+        pending = _start_pending_reversal(state, row, frozen, histories)
+        if pending is not None:
+            handled.add(token)
+    return handled
+
+
+def _current_bias_confirmation(state, side, now_s, onset_ms):
+    """Capture current Bias at decision time; never manufacture past state."""
+    updated_at = _f(getattr(state, "bias_updated_at", 0.0))
+    if (
+        str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
+        != str(side).upper()
+        or _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF
+        or updated_at <= 0.0
+        or updated_at * 1000.0 < int(onset_ms)
+        or updated_at > float(now_s) + 1e-6
+    ):
+        return None
+    _remember_bias(state, now_s)
+    history = getattr(state, "_ignition_bias_snapshots", None)
+    if not isinstance(history, deque) or not history:
+        return None
+    current = dict(history[-1])
+    if (
+        str(current.get("direction") or "ABSTAIN").upper() != str(side).upper()
+        or _f(current.get("confidence")) < BIAS_MIN_CONF
+        or _f(current.get("updated_at")) * 1000.0 < int(onset_ms)
+    ):
+        return None
+    return current
+
+
+def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
+    """Expire invalid onset or promote the exact object after a real Bias flip."""
+    pending = getattr(state, "_ignition_pending_reversal_episode", None)
+    if not isinstance(pending, dict):
+        return None
+    current_epochs = {
+        name: int(rows[-1].get("epoch", 0) or 0)
+        for name, rows in (histories or {}).items() if rows
+    }
+    epoch_changed = any(
+        name in current_epochs and current_epochs[name] != int(epoch)
+        for name, epoch in (pending.get("epochs") or {}).items()
+    )
+    clock_invalid = any(
+        not bool(row.get("clock_valid"))
+        for row in pending.get("executed_flow_evidence") or ()
+    )
+    age = int(now_ms) - int(pending.get("started_receive_ms", 0) or 0)
+    gap = int(now_ms) - int(pending.get("last_evidence_ms", 0) or 0)
+    if epoch_changed or clock_invalid or age > EPISODE_MAX_MS or gap > EVIDENCE_GAP_MS:
+        reason = (
+            "PENDING_REVERSAL_EPOCH_RESET" if epoch_changed else
+            "PENDING_REVERSAL_CLOCK_INVALID" if clock_invalid else
+            "PENDING_REVERSAL_TTL_EXPIRED" if age > EPISODE_MAX_MS else
+            "PENDING_REVERSAL_EVIDENCE_GAP"
+        )
+        state._ignition_pending_reversal_episode = None
+        state._ignition_last_reject = reason
+        state._ignition_last_reject_payload = {
+            "expired_episode_id": pending.get("episode_id"),
+            "expired_episode_hash": pending.get("episode_hash"),
+            "research_reject_reason": reason,
+            "authority": False,
+        }
+        return None
+    if not allow_promotion:
+        state._ignition_last_reject_payload = dict(pending)
+        return None
+    confirmation = _current_bias_confirmation(
+        state, pending.get("side"), now_ms / 1000.0,
+        pending.get("started_receive_ms", 0),
+    )
+    if confirmation is None:
+        state._ignition_last_reject = "PENDING_REVERSAL_BIAS_CONFIRMATION"
+        state._ignition_last_reject_payload = dict(pending)
+        return None
+    # Keep identity, onset, signals, OI-before and hash untouched. Only attach
+    # the later confirmation that makes the existing episode eligible.
+    pending["bias_confirmation_snapshot"] = confirmation
+    pending["bias_snapshot"] = confirmation
+    pending["pending_reversal_promoted"] = True
+    pending["status"] = "BIAS_FLIP_CONFIRMED"
+    pending["promotion_ts"] = now_ms / 1000.0
+    pending["flow_efficiency_at_promotion"] = _flow_efficiency_snapshot(
+        histories, pending.get("side"), CASH,
+    )
+    state._ignition_pending_reversal_episode = None
+    state._ignition_episode = pending
+    return pending
+
+
 def _bias_bucket_at(buckets, target, max_age=2.0):
     """Return one receive-time snapshot with a bounded direct lookup."""
     if not isinstance(buckets, dict):
@@ -721,10 +925,12 @@ def _research_payload(state):
     return dict(getattr(state, "_ignition_last_reject_payload", {}) or {})
 
 
-def _start_episode(state, signal):
+def _start_episode(state, signal, histories=None):
     bias = _bias_snapshot(state, signal)
     side = str(signal.get("side") or "NEUTRAL").upper()
     if side != bias.get("direction") or _f(bias.get("confidence")) < BIAS_MIN_CONF:
+        if _start_pending_reversal(state, signal, bias, histories or {}) is not None:
+            return None
         state._ignition_last_reject = "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS"
         _research_reject_context(
             state, signal, bias, "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS"
@@ -1791,6 +1997,19 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "oi_intent": oi,
         "oi_verification_state": oi_verification,
         "economic_contract_version": ECONOMIC_CONTRACT_VERSION,
+        "pending_reversal_promoted": bool(
+            episode.get("pending_reversal_promoted")
+        ),
+        "pending_reversal_episode_hash": episode.get("episode_hash"),
+        "pending_reversal_original_onset": dict(
+            episode.get("onset_evidence") or {}
+        ),
+        "pre_impulse_bias_snapshot": dict(
+            episode.get("pre_impulse_bias_snapshot") or {}
+        ),
+        "bias_confirmation_snapshot": dict(
+            episode.get("bias_confirmation_snapshot") or {}
+        ),
         "clock_quality": {name: {
             "uncertainty_ms": rows[-1].get("clock_uncertainty_ms"),
             "valid": rows[-1].get("clock_valid"), "epoch": rows[-1].get("epoch"),
@@ -1930,6 +2149,12 @@ def evaluate(state, now=None, side=None):
     state._ignition_last_reject_payload = {}
     _tee_borderline_pre_bias(state, rows)
     episode = getattr(state, "_ignition_episode", None)
+    pending_handled = _observe_pending_reversal(state, rows, histories)
+    promoted = _resolve_pending_reversal(
+        state, histories, now_ms, allow_promotion=episode is None,
+    )
+    if promoted is not None:
+        episode = promoted
 
     if episode is not None:
         live_venues = ignition_signals.engine(state).venues
@@ -1977,6 +2202,12 @@ def evaluate(state, now=None, side=None):
             state._ignition_last_reject = reason
 
     for row in rows:
+        token = (
+            str(row.get("venue") or ""),
+            int(row.get("bucket_start_ms", -1)),
+        )
+        if token in pending_handled:
+            continue
         if not row.get("clock_valid"):
             state._ignition_episode = None
             episode = None
@@ -2012,7 +2243,7 @@ def evaluate(state, now=None, side=None):
             if str(row.get("side")) == cooldown_side and int(row.get("receive_time_ms", 0)) <= cooldown_until:
                 state._ignition_last_reject = "CAUSAL_EPISODE_ALREADY_CAPTURED"
                 continue
-            episode = _start_episode(state, row)
+            episode = _start_episode(state, row, histories)
             continue
         if not appended and str(row.get("side")) == str(episode.get("side")):
             if int(row.get("receive_time_ms", 0)) - int(episode.get("started_receive_ms", 0)) <= EPISODE_MAX_MS:

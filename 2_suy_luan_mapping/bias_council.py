@@ -1,7 +1,7 @@
 """Tier-S direction estimator only. LONG/SHORT/ABSTAIN; never entry timing."""
 import time
 
-VERSION="BIAS_COUNCIL_V7_DIRECTION_MEMORY"
+VERSION="BIAS_COUNCIL_V8_REVERSAL_LATCH_TELEMETRY"
 LOOKBACK=60.; TRIGGER=15.; CONTEXT=180.; FAST=4.; OI_CONTEXT=300.; HMAX=1536
 SPOT_AGE=3.; CB_AGE=5.; FUT_AGE=5.; OI_AGE=12.
 # OI is causal context, not an entry vote.  The 60-second build floor is kept
@@ -350,8 +350,21 @@ def _hyst(s,r):
  return old,oc*.72,"PENDING_FLIP"
 
 def update_state(s,now=None,force_full=False):
+ prior_candidate=str(getattr(s,"_bias_flip_candidate","") or "").upper()
+ prior_since=float(getattr(s,"_bias_flip_since",0) or 0)
  raw=evaluate(s,now,force_full);sd,cf,hy=_hyst(s,raw);out=dict(raw)
  out.update(raw_bias=raw["bias"],raw_confidence=raw["confidence"],bias=sd,confidence=round(C(cf),6),hysteresis=hy)
+ current_candidate=str(getattr(s,"_bias_flip_candidate","") or "").upper()
+ current_since=float(getattr(s,"_bias_flip_since",0) or 0)
+ confirmed=hy in ("CONTEXT_REVERSAL_CONFIRMED","CONTEXT_REVERSAL_ACQUIRED","FAST_CONFIRMED_FLIP","CONFIRMED_FLIP")
+ out["reversal_latch"]={
+  "status":"CONFIRMED" if confirmed else "PENDING" if current_candidate in ("LONG","SHORT") else "INACTIVE",
+  "candidate_side":sd if confirmed else current_candidate if current_candidate in ("LONG","SHORT") else "ABSTAIN",
+  "started_at":prior_since if confirmed and prior_candidate==sd else current_since if current_since>0 else None,
+  "confirmed_at":float(out["ts"]) if confirmed else None,
+  "authority":False,
+  "policy":"BIAS_CONTEXT_TELEMETRY_IGNITION_OWNS_CAUSAL_EPISODE",
+ }
  if sd in ("LONG","SHORT") and raw["bias"]==sd:s._bias_last_supported_at=float(out["ts"])
  s.bias_state=sd;s.bias_confidence=out["confidence"];s.bias_council=out;s.bias_updated_at=out["ts"];s.bias_version=VERSION;s.macro_bias="NEUTRAL"
  return out

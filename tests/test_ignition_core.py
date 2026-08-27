@@ -272,6 +272,91 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(payload["authority"])
         self.assertTrue(payload["research_candidate_transition"])
 
+    def test_counter_bias_impulse_creates_pending_episode_without_trade(self):
+        s = state(now=3.2)
+        self._freeze_bias_before_wave(s, side="LONG", captured_at=2.0)
+        signal = evidence_row(3_200, "SHORT", 99.99)
+        histories = {
+            "binance_spot": (signal,), "coinbase_spot": (), "futures": (),
+        }
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[signal]):
+            result = ignition_core.evaluate(s, now=3.2)
+        pending = s._ignition_pending_reversal_episode
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertIsNone(getattr(s, "_ignition_episode", None))
+        self.assertEqual(pending["side"], "SHORT")
+        self.assertFalse(pending["authority"])
+        self.assertEqual(
+            result["reason"], "PENDING_REVERSAL_BIAS_CONFIRMATION"
+        )
+
+    def test_bias_flip_promotes_same_pending_episode_and_hash(self):
+        s = state(now=3.2)
+        self._freeze_bias_before_wave(s, side="LONG", captured_at=2.0)
+        first = evidence_row(3_200, "SHORT", 99.99)
+        histories = {
+            "binance_spot": (first,), "coinbase_spot": (), "futures": (),
+        }
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[first]):
+            ignition_core.evaluate(s, now=3.2)
+        pending = s._ignition_pending_reversal_episode
+        episode_id, episode_hash = pending["episode_id"], pending["episode_hash"]
+        onset_ms = pending["started_receive_ms"]
+
+        second = evidence_row(3_300, "SHORT", 99.987)
+        histories["binance_spot"] = (first, second)
+        s.bias_state = "SHORT"
+        s.bias_confidence = 0.80
+        s.bias_updated_at = 3.3
+        s.bias_council = {"s_votes": {}, "hysteresis": "CONFIRMED_FLIP"}
+        ignition_signals.engine(s).venues["binance_spot"].epoch = 1
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[second]):
+            result = ignition_core.evaluate(s, now=3.3)
+        self.assertEqual(result["causal_episode_id"], episode_id)
+        self.assertEqual(
+            result["ignition"]["pending_reversal_episode_hash"], episode_hash
+        )
+        self.assertTrue(result["ignition"]["pending_reversal_promoted"])
+        self.assertEqual(
+            result["ignition"]["pending_reversal_original_onset"][
+                "start_receive_ms"
+            ], onset_ms,
+        )
+        self.assertEqual(
+            result["ignition"]["pre_impulse_bias_snapshot"]["direction"],
+            "LONG",
+        )
+        self.assertEqual(
+            result["ignition"]["bias_confirmation_snapshot"]["direction"],
+            "SHORT",
+        )
+
+    def test_late_bias_flip_cannot_reuse_expired_pending_episode(self):
+        s = state(now=3.2)
+        self._freeze_bias_before_wave(s, side="LONG", captured_at=2.0)
+        signal = evidence_row(3_200, "SHORT", 99.99)
+        histories = {
+            "binance_spot": (signal,), "coinbase_spot": (), "futures": (),
+        }
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[signal]):
+            ignition_core.evaluate(s, now=3.2)
+        expired_id = s._ignition_pending_reversal_episode["episode_id"]
+        s.bias_state = "SHORT"
+        s.bias_confidence = 0.80
+        s.bias_updated_at = 9.0
+        with patch.object(ignition_signals, "snapshot", return_value=histories), \
+             patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=9.0)
+        self.assertIsNone(s._ignition_pending_reversal_episode)
+        self.assertNotEqual(result.get("causal_episode_id"), expired_id)
+        self.assertEqual(
+            result["reason"], "PENDING_REVERSAL_TTL_EXPIRED"
+        )
+
     def test_borderline_onset_is_teed_before_low_bias_early_return(self):
         s = state(now=3.2)
         s.bias_confidence = 0.52
@@ -386,6 +471,12 @@ class IgnitionCoreTests(unittest.TestCase):
                     "venue": venue,
                     "buy_qty": aligned if side == "LONG" else residual,
                     "sell_qty": residual if side == "LONG" else aligned,
+                    "buy_quote": (
+                        aligned if side == "LONG" else residual
+                    ) * row["price"],
+                    "sell_quote": (
+                        residual if side == "LONG" else aligned
+                    ) * row["price"],
                 })
                 histories[venue].append(row)
         if opposing_cash:
