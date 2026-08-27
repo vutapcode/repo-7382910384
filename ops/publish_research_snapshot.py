@@ -108,6 +108,7 @@ def _compact_event(row):
             "impulse_phase": thesis.get("impulse_phase"),
             "bias_thesis": thesis.get("bias_thesis"),
             "oi_intent": thesis.get("oi_intent"),
+            "execution_urgency": thesis.get("execution_urgency"),
         })
     elif event == "EXIT":
         guardian = _dict(row.get("guardian_state") or row.get("guardian"))
@@ -169,6 +170,7 @@ def _closed_trade_history(cutoff):
         "economic_contract_version", "flow_efficiency_state",
         "oi_verification_status", "consumed_band",
         "time_to_positive_net_seconds", "flow_efficiency",
+        "execution_urgency_status", "execution_urgency_authority",
     )
     rows = []
     try:
@@ -194,6 +196,7 @@ def _closed_trade_history(cutoff):
                 oi = _dict(thesis.get("oi_intent"))
                 oi_verification = _dict(thesis.get("oi_verification_state"))
                 economics = _dict(thesis.get("economic_feature_snapshot"))
+                urgency = _dict(thesis.get("execution_urgency"))
                 guardian = _dict(nested_exit.get("guardian"))
                 row = {
                     "schema_version": source.get("schema_version"),
@@ -236,6 +239,8 @@ def _closed_trade_history(cutoff):
                     "oi_verification_status": oi_verification.get("status"),
                     "consumed_band": economics.get("consumed_band"),
                     "flow_efficiency": thesis.get("flow_efficiency"),
+                    "execution_urgency_status": urgency.get("status"),
+                    "execution_urgency_authority": urgency.get("authority"),
                     "exit_reason": nested_exit.get("reason"),
                     "guardian_exit_profile": guardian.get("exit_profile"),
                     "guardian_trend_shield_active": guardian.get("trend_shield_active"),

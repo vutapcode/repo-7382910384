@@ -549,6 +549,7 @@ def _entry_causal_thesis(result):
             ),
             "forward_edge":dict(edge.get("forward_edge") or {}),
             "time_to_edge":dict(edge.get("time_to_edge") or {}),
+            "execution_urgency":dict(edge.get("execution_urgency") or {}),
             "flow_efficiency":dict(ignition.get("flow_efficiency") or {}),
             "oi_verification_state":dict(
                 ignition.get("oi_verification_state") or {}

@@ -170,6 +170,32 @@ class IgnitionCoreTests(unittest.TestCase):
             report["venues"]["coinbase_spot"]["state"], "EXHAUSTED"
         )
 
+    def test_persistent_sparse_flow_uses_explicit_one_second_fallback(self):
+        rows = []
+        price = 100.0
+        for bucket_start in (1_000, 1_400, 2_000, 2_400, 3_000, 3_400):
+            next_price = price * (1.0 + 0.50 / 10_000.0)
+            rows.append({
+                "venue": "binance_spot",
+                "bucket_start_ms": bucket_start,
+                "receive_time_ms": bucket_start + 100,
+                "epoch": 1, "clock_valid": True,
+                "buy_quote": 25_000.0, "sell_quote": 0.0,
+                "buy_qty": 0.25, "sell_qty": 0.0,
+                "first_price": price, "price": next_price,
+            })
+            price = next_price
+        report = ignition_core._flow_efficiency_snapshot(
+            {"binance_spot": rows}, "LONG", ("binance_spot",)
+        )["venues"]["binance_spot"]
+        self.assertEqual(report["state"], "CONTINUING")
+        self.assertEqual(report["window_resolution_ms"], 1_000)
+        self.assertEqual(
+            report["measurement_source"],
+            "PERSISTENT_1S_EXECUTED_FLOW_FALLBACK",
+        )
+        self.assertGreater(report["marginal_conversion_now_bps"], 0.0)
+
     def test_bias_wait_reasons_are_diagnostic_only(self):
         abstain = state(now=3.0)
         abstain.bias_state = "ABSTAIN"

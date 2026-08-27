@@ -6,7 +6,7 @@ unwind tail cannot look like fresh whale commitment merely because sell/buy
 market orders are large.
 """
 
-VERSION = "ENTRY_THESIS_GATE_V2_FLOW_EFFICIENCY"
+VERSION = "ENTRY_THESIS_GATE_V3_MARGINAL_FLOW_EFFICIENCY"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -118,6 +118,9 @@ def _flow_question(result, ignition, impact):
     primary_state = str(
         (venue_efficiency.get(primary) or {}).get("state") or "UNKNOWN"
     ).upper()
+    primary_efficiency = dict(venue_efficiency.get(primary) or {})
+    marginal_now = primary_efficiency.get("marginal_conversion_now_bps")
+    marginal_previous = primary_efficiency.get("previous_conversion_bps")
     other_states = {
         name: str((venue_efficiency.get(name) or {}).get("state") or "UNKNOWN").upper()
         for name in cash if name != primary
@@ -129,9 +132,11 @@ def _flow_question(result, ignition, impact):
         primary_state in ("ABSORBED", "EXHAUSTED")
         and not independent_continuation
     )
+    # Episode progress is maturity diagnostics only. It must never authorize
+    # present-tense conversion after the executed-flow window went quiet.
     converts = bool(
         not composite_veto
-        and max(cash_move, recent_cash_progress) >= threshold
+        and (primary_state == "CONTINUING" or independent_continuation)
     )
     if composite_veto:
         status = primary_state
@@ -140,13 +145,15 @@ def _flow_question(result, ignition, impact):
     elif primary_state == "DECAYING" or "DECAYING" in other_states.values():
         status = "DECAYING"
     else:
-        status = "CONTINUING" if converts else "UNKNOWN"
+        status = "UNKNOWN"
     return {
         "question": "EXECUTED_FLOW_CONVERTS_TO_PRICE",
         "status": status,
         "cash_flow_strength": round(flow_strength, 6),
         "recent_cash_progress_bps": round(recent_cash_progress, 6),
         "episode_cash_progress_bps": round(cash_move, 6),
+        "marginal_conversion_now_bps": marginal_now,
+        "marginal_conversion_previous_bps": marginal_previous,
         "material_price_bps": round(threshold, 6),
         "price_impact": dict(impact or {}),
         "legacy_absorption_observed": legacy_absorption,
@@ -157,7 +164,7 @@ def _flow_question(result, ignition, impact):
         "composite_veto": composite_veto,
         "converts": converts,
         "flow_efficiency": efficiency,
-        "policy": "PRIMARY_CASH_DECAY_PLUS_NO_INDEPENDENT_CONTINUATION",
+        "policy": "MARGINAL_EXECUTED_FLOW_CONVERSION_NO_EPISODE_PROGRESS_AUTHORITY",
     }
 
 
@@ -252,7 +259,7 @@ def evaluate(state, result, impact, basis, liquidation):
         getattr(state, "entry_economics_v3_replay_approved", False)
     )
     if replay_approved and q3.get("composite_veto"):
-        blockers.append("FLOW_EFFICIENCY_V2_VETO")
+        blockers.append("FLOW_EFFICIENCY_V3_VETO")
     if forced_tail_veto:
         blockers.append("UNWIND_TAIL_VETO")
     return {

@@ -32,7 +32,7 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
         "venue_moves_bps": {venue: 0.50 for venue in cash} | {"futures": 0.40},
         "flow_by_venue": flow,
         "flow_efficiency": {
-            "version": "FLOW_EFFICIENCY_V2",
+            "version": "FLOW_EFFICIENCY_V3_MARGINAL_CONVERSION",
             "venues": {
                 venue: {
                     "state": (flow_states or {}).get(
@@ -112,7 +112,7 @@ class EntryThesisGateTests(unittest.TestCase):
             PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
         )
         self.assertEqual(audit["decision"], "PASS")
-        self.assertNotIn("FLOW_EFFICIENCY_V2_VETO", audit["blocking_reasons"])
+        self.assertNotIn("FLOW_EFFICIENCY_V3_VETO", audit["blocking_reasons"])
 
     def test_primary_absorption_without_independent_continuation_vetoes(self):
         audit = entry_thesis_gate.evaluate(
@@ -127,9 +127,25 @@ class EntryThesisGateTests(unittest.TestCase):
             PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
         )
         self.assertEqual(audit["decision"], "WAIT")
-        self.assertIn("FLOW_EFFICIENCY_V2_VETO", audit["blocking_reasons"])
+        self.assertIn("FLOW_EFFICIENCY_V3_VETO", audit["blocking_reasons"])
 
-    def test_v2_absorption_is_telemetry_until_canonical_replay_is_approved(self):
+    def test_old_episode_progress_cannot_claim_current_conversion(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20, recent_progress=0.20,
+            flow_states={
+                "binance_spot": "UNKNOWN", "coinbase_spot": "UNKNOWN",
+            },
+        )
+        audit = entry_thesis_gate.evaluate(
+            SimpleNamespace(), candidate,
+            PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
+        )
+        flow = audit["questions"]["q3_flow_efficiency"]
+        self.assertEqual(flow["status"], "UNKNOWN")
+        self.assertFalse(flow["converts"])
+        self.assertGreater(flow["episode_cash_progress_bps"], 0.0)
+
+    def test_v3_absorption_is_telemetry_until_canonical_replay_is_approved(self):
         audit = entry_thesis_gate.evaluate(
             SimpleNamespace(entry_economics_v3_replay_approved=False),
             result(
@@ -142,7 +158,7 @@ class EntryThesisGateTests(unittest.TestCase):
             PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
         )
         self.assertEqual(audit["decision"], "PASS")
-        self.assertNotIn("FLOW_EFFICIENCY_V2_VETO", audit["blocking_reasons"])
+        self.assertNotIn("FLOW_EFFICIENCY_V3_VETO", audit["blocking_reasons"])
 
     def test_position_build_is_not_relabelled_forced_unwind(self):
         audit = entry_thesis_gate.evaluate(
@@ -200,6 +216,11 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("UNWIND_TAIL_VETO", report["hard_vetoes"])
         self.assertEqual(report["entry_thesis_audit"]["decision"], "WAIT")
+        self.assertEqual(
+            report["execution_urgency"]["status"],
+            "EXECUTION_URGENCY_UNVERIFIED",
+        )
+        self.assertFalse(report["execution_urgency"]["authority"])
 
 
 if __name__ == "__main__":

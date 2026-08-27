@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 
-SCHEMA = "WSTRADE_SANITIZED_SHADOW_TRADE_V2_ENTRY_ECONOMICS"
+SCHEMA = "WSTRADE_SANITIZED_SHADOW_TRADE_V3_MARGINAL_FLOW"
 
 
 def _utc(ts):
@@ -26,6 +26,7 @@ def _compact(entry, exit_row):
     oi_verification = thesis.get("oi_verification_state") or {}
     economic = thesis.get("economic_feature_snapshot") or {}
     flow_efficiency = thesis.get("flow_efficiency") or {}
+    execution_urgency = thesis.get("execution_urgency") or {}
     costs = exit_row.get("execution_cost_model") or {}
     guardian = exit_row.get("guardian_state") or exit_row.get("guardian") or {}
     return {
@@ -61,6 +62,8 @@ def _compact(entry, exit_row):
         "economic_contract_version": thesis.get("economic_contract_version"),
         "flow_efficiency_state": economic.get("flow_efficiency_state"),
         "flow_efficiency": flow_efficiency,
+        "execution_urgency_status": execution_urgency.get("status"),
+        "execution_urgency_authority": execution_urgency.get("authority"),
         "oi_verification_status": oi_verification.get("status"),
         "consumed_band": economic.get("consumed_band"),
         "exit_reason": exit_row.get("risk_reason") or guardian.get("reason"),

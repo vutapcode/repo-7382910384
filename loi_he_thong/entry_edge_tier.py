@@ -201,6 +201,15 @@ def classify(result, state):
     bootstrap_shadow_allowed = bool(contract_ok and not hard_vetoes and not live)
     research_probe_allowed = bool(bootstrap_shadow_allowed)
     ledger_type = "LIVE_LIKE_SHADOW" if live_empirical_ok else "RESEARCH_PROBE"
+    execution_urgency = {
+        "status": "EXECUTION_URGENCY_UNVERIFIED",
+        "authority": False,
+        "selected_style": costs.get("execution_style"),
+        "alternative_outcomes_required": (
+            "TAKER_NOW_VS_MAKER_IF_EXECUTABLE_VS_SHORT_DELAY"
+        ),
+        "reason": "NO_MATCHED_EMPIRICAL_ALTERNATIVE_COHORT",
+    }
 
     state.tier_s_entry_regime = regime
     state.tier_s_entry_calibration = calibration
@@ -250,6 +259,7 @@ def classify(result, state):
             ),
             "policy": "DETERIORATION_EVIDENCE_NEVER_HARD_TIMEOUT",
         },
+        "execution_urgency": execution_urgency,
         "cost_components": costs, "normal_contract_ok": contract_ok,
         "fast_contract_ok": False, "hard_vetoes": hard_vetoes,
         "price_impact": impact, "spot_perp_basis": basis,

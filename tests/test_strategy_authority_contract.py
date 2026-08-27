@@ -80,7 +80,7 @@ class StrategyAuthorityContractTests(unittest.TestCase):
         ):
             self.assertIn(marker, active)
         self.assertIn('_append_event("ENTRY_SKIPPED"', active)
-        self.assertIn('"FLOW_EFFICIENCY_V2_VETO"', active)
+        self.assertIn('"FLOW_EFFICIENCY_V3_VETO"', active)
         edge = self.text("loi_he_thong/entry_edge_tier.py")
         self.assertIn("not v3_replay_approved", edge)
         self.assertIn('hard_vetoes.append("ABSORPTION_VETO")', edge)

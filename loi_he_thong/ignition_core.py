@@ -55,57 +55,76 @@ def _bps(current, reference):
     return (current - reference) / reference * 10_000.0 if current > 0.0 and reference > 0.0 else 0.0
 
 
-def _efficiency_window(rows, side):
-    """Summarize one contiguous 500 ms receive-time window.
+def _efficiency_window(rows, side, start_ms, end_ms):
+    """Summarize one bounded receive-time executed-flow window.
 
     Quote volume is directional aggressive volume, while price progress is
-    measured from the first executable trade to the last.  Missing buckets,
-    epoch changes and invalid clocks make the window UNKNOWN instead of
-    manufacturing absorption from incomplete data.
+    measured from the last observed trade before the window (when available)
+    to the final trade inside it. Missing 100 ms rows mean no executed trade,
+    not a fabricated feed gap; epoch/clock guards still fail the measurement.
     """
-    if len(rows) != 5:
+    # SignalEngine history is append-only receive-time order. Avoid sorting in
+    # the hot evaluator; bounded scans over at most 64 rows preserve O(1).
+    ordered = [
+        row for row in rows if row.get("bucket_start_ms") is not None
+    ]
+    selected = [
+        row for row in ordered
+        if int(start_ms) <= int(row.get("bucket_start_ms", 0) or 0) < int(end_ms)
+    ]
+    if not selected:
         return None
-    epochs = {int(row.get("epoch", -1) or -1) for row in rows}
-    starts = [int(row.get("bucket_start_ms", 0) or 0) for row in rows]
-    if (
-        len(epochs) != 1
-        or any(not row.get("clock_valid") for row in rows)
-        or any(b - a != ignition_signals.BUCKET_MS for a, b in zip(starts, starts[1:]))
-    ):
+    epochs = {int(row.get("epoch", -1) or -1) for row in selected}
+    if len(epochs) != 1 or any(not row.get("clock_valid") for row in selected):
         return None
+    epoch = next(iter(epochs))
+    anchor = next((
+        row for row in reversed(ordered)
+        if int(row.get("bucket_start_ms", 0) or 0) < int(start_ms)
+        and int(row.get("epoch", -1) or -1) == epoch
+        and row.get("clock_valid")
+        and _f(row.get("price")) > 0.0
+    ), None)
     sign = _sign(side)
-    buy_quote = sum(_f(row.get("buy_quote")) for row in rows)
-    sell_quote = sum(_f(row.get("sell_quote")) for row in rows)
+    buy_quote = sum(_f(row.get("buy_quote")) for row in selected)
+    sell_quote = sum(_f(row.get("sell_quote")) for row in selected)
     directional_quote = buy_quote if sign > 0.0 else sell_quote
-    total_qty = sum(_f(row.get("buy_qty")) + _f(row.get("sell_qty")) for row in rows)
+    total_qty = sum(
+        _f(row.get("buy_qty")) + _f(row.get("sell_qty")) for row in selected
+    )
     aligned_qty = sum(
         _f(row.get("buy_qty")) if sign > 0.0 else _f(row.get("sell_qty"))
-        for row in rows
+        for row in selected
     )
     imbalance = (
         sign * (
-            sum(_f(row.get("buy_qty")) for row in rows)
-            - sum(_f(row.get("sell_qty")) for row in rows)
+            sum(_f(row.get("buy_qty")) for row in selected)
+            - sum(_f(row.get("sell_qty")) for row in selected)
         ) / total_qty
         if total_qty > 0.0 else 0.0
     )
-    first = next(
-        (_f(row.get("first_price")) for row in rows if _f(row.get("first_price")) > 0.0),
-        0.0,
-    )
+    first = _f((anchor or {}).get("price"))
+    if first <= 0.0:
+        first = next((
+            _f(row.get("first_price")) for row in selected
+            if _f(row.get("first_price")) > 0.0
+        ), 0.0)
     last = next(
-        (_f(row.get("price")) for row in reversed(rows) if _f(row.get("price")) > 0.0),
+        (_f(row.get("price")) for row in reversed(selected)
+         if _f(row.get("price")) > 0.0),
         0.0,
     )
     progress = sign * _bps(last, first) if first > 0.0 and last > 0.0 else 0.0
     material = bool(
-        total_qty >= 2.0 * ignition_signals.MIN_QTY[str(rows[-1].get("venue"))]
+        total_qty >= ignition_signals.MIN_QTY[str(selected[-1].get("venue"))]
         and aligned_qty > 0.0 and imbalance >= 0.20 and directional_quote > 0.0
     )
     efficiency = progress / max(directional_quote / 1_000_000.0, 1e-9)
     return {
-        "start_ms": starts[0], "end_ms": starts[-1] + ignition_signals.BUCKET_MS,
-        "epoch": next(iter(epochs)), "material": material,
+        "start_ms": int(start_ms), "end_ms": int(end_ms),
+        "epoch": epoch, "material": material,
+        "observed_trade_buckets": len(selected),
+        "expected_buckets": max(1, int((end_ms - start_ms) / ignition_signals.BUCKET_MS)),
         "directional_quote": round(directional_quote, 6),
         "total_qty": round(total_qty, 8), "imbalance": round(imbalance, 6),
         "price_progress_bps": round(progress, 6),
@@ -114,15 +133,48 @@ def _efficiency_window(rows, side):
 
 
 def _flow_efficiency_snapshot(histories, side, cash_venues):
-    """Return bounded three-window conversion evidence for each cash venue."""
+    """Return current marginal conversion without reusing episode progress.
+
+    Prefer three sliding 500 ms windows. Persistent metaorders with sparse
+    trades may use three contiguous 1 s windows from the same exact 100 ms
+    executed-flow rows; the lower resolution is explicit in telemetry.
+    """
     venues = {}
     for venue in sorted(set(cash_venues or ()) & CASH):
         rows = list(histories.get(venue, ()))
-        windows = []
-        for offset in (15, 10, 5):
-            window = _efficiency_window(rows[-offset:-offset + 5] if offset > 5 else rows[-5:], side)
-            windows.append(window)
+        latest_end_ms = max(
+            (int(row.get("receive_time_ms", 0) or 0) for row in rows),
+            default=0,
+        )
+        resolution_ms = 500
+        windows = [
+            _efficiency_window(
+                rows, side,
+                latest_end_ms - resolution_ms * (3 - index),
+                latest_end_ms - resolution_ms * (2 - index),
+            )
+            for index in range(3)
+        ] if latest_end_ms > 0 else [None, None, None]
         valid = [row for row in windows if row is not None and row.get("material")]
+        source = "SLIDING_500MS_EXECUTED_FLOW"
+        if len(valid) != 3 and latest_end_ms > 0:
+            fallback_resolution_ms = 1_000
+            fallback = [
+                _efficiency_window(
+                    rows, side,
+                    latest_end_ms - fallback_resolution_ms * (3 - index),
+                    latest_end_ms - fallback_resolution_ms * (2 - index),
+                )
+                for index in range(3)
+            ]
+            fallback_valid = [
+                row for row in fallback
+                if row is not None and row.get("material")
+            ]
+            if len(fallback_valid) == 3:
+                windows, valid = fallback, fallback_valid
+                resolution_ms = fallback_resolution_ms
+                source = "PERSISTENT_1S_EXECUTED_FLOW_FALLBACK"
         if len(valid) != 3:
             state = "UNKNOWN"
         else:
@@ -145,15 +197,28 @@ def _flow_efficiency_snapshot(histories, side, cash_venues):
                 progress_decay_1 and efficiency_decay_1
             ):
                 state = "DECAYING"
-            else:
+            elif (
+                current["price_progress_bps"] >= MATERIAL_PRICE_BPS * 0.70
+                and current["efficiency_bps_per_million"] > 0.0
+            ):
                 state = "CONTINUING"
+            else:
+                state = "UNKNOWN"
         venues[venue] = {
             "state": state,
             "windows": windows,
-            "policy": "THREE_CONTIGUOUS_500MS_WINDOWS_NO_DEPTH_AUTHORITY",
+            "window_resolution_ms": resolution_ms,
+            "measurement_source": source,
+            "previous_conversion_bps": (
+                valid[-2]["price_progress_bps"] if len(valid) == 3 else None
+            ),
+            "marginal_conversion_now_bps": (
+                valid[-1]["price_progress_bps"] if len(valid) == 3 else None
+            ),
+            "policy": "THREE_CONTIGUOUS_WINDOWS_EXACT_EXECUTED_FLOW_NO_EPISODE_FALLBACK",
         }
     return {
-        "version": "FLOW_EFFICIENCY_V2",
+        "version": "FLOW_EFFICIENCY_V3_MARGINAL_CONVERSION",
         "side": side,
         "venues": venues,
         "authority": "ENTRY_COMPOSITE_ONLY",
