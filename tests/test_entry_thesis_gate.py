@@ -183,6 +183,51 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertEqual(report["soft_wait_reasons"], [])
 
+    def test_confirmed_fast_transition_bypasses_only_bias_alignment(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "CONTINUING_CONFIRMED",
+                "coinbase_spot": "CONTINUING_CONFIRMED",
+            },
+        )
+        candidate["side"] = "LONG"
+        candidate["ignition"]["bias_snapshot"]["direction"] = "SHORT"
+        candidate["ignition"]["transition_confirmed"] = True
+        candidate["ignition"]["transition_authority"] = {
+            "status": "REVERSAL_CONFIRMED", "side": "LONG",
+            "cash_synchronous_transition": True,
+            "hard_contradiction": False,
+        }
+        audit = entry_thesis_gate.evaluate(
+            SimpleNamespace(), candidate,
+            PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
+        )
+        self.assertEqual(audit["decision"], "PASS")
+        q1 = audit["questions"]["q1_bias"]
+        self.assertTrue(q1["conflict"])
+        self.assertTrue(q1["transition_confirmed"])
+        self.assertEqual(
+            q1["authority"], "FAST_TRANSITION_BIAS_ALIGNMENT_BYPASS"
+        )
+
+    def test_incomplete_transition_cannot_bypass_bias_alignment(self):
+        candidate = result(intent="POSITION_BUILD", consumed=0.20)
+        candidate["side"] = "LONG"
+        candidate["ignition"]["bias_snapshot"]["direction"] = "SHORT"
+        candidate["ignition"]["transition_confirmed"] = True
+        candidate["ignition"]["transition_authority"] = {
+            "status": "NEW_SIDE_CONVERTS", "side": "LONG",
+            "cash_synchronous_transition": False,
+            "hard_contradiction": False,
+        }
+        audit = entry_thesis_gate.evaluate(
+            SimpleNamespace(), candidate,
+            PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
+        )
+        self.assertEqual(audit["decision"], "WAIT")
+        self.assertIn("BIAS_THESIS_FAIL", audit["blocking_reasons"])
+
     def test_persistent_fading_soft_waits_without_hard_veto(self):
         candidate = result(
             intent="POSITION_BUILD", consumed=0.20,

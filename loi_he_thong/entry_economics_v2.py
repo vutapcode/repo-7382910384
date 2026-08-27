@@ -49,6 +49,13 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
     questions = dict((thesis_audit or {}).get("questions") or {})
     composite_flow = dict(questions.get("q3_flow_efficiency") or {})
     composite_state = _u(composite_flow.get("status"), primary_state)
+    transition = dict(ignition.get("transition_authority") or {})
+    transition_class = (
+        "FAST_REVERSAL_CONFIRMED"
+        if ignition.get("transition_confirmed")
+        and transition.get("status") == "REVERSAL_CONFIRMED"
+        else "BACKGROUND_ALIGNED"
+    )
     oi = dict(ignition.get("oi_verification_state") or {})
     if not oi:
         raw_oi = dict(ignition.get("oi_intent") or {})
@@ -74,6 +81,7 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
         "flow_confirmation_source": _u(
             composite_flow.get("confirmation_source"), "NONE"
         ),
+        "transition_class": transition_class,
         "independent_flow_witnesses": tuple(
             sorted(composite_flow.get("independent_witness_venues") or ())
         ),
@@ -98,7 +106,7 @@ def _exact_key(snapshot):
     names = (
         "side", "entry_mode", "regime", "proof_type", "proposer",
         "execution_style", "bias_phase", "consumed_band", "oi_quality",
-        "flow_efficiency_state",
+        "flow_efficiency_state", "transition_class",
     )
     return tuple(_u(snapshot.get(name)) for name in names)
 
@@ -106,7 +114,7 @@ def _exact_key(snapshot):
 def _parent_key(snapshot):
     return tuple(_u(snapshot.get(name)) for name in (
         "side", "proof_type", "proposer", "execution_style",
-        "flow_efficiency_state",
+        "flow_efficiency_state", "transition_class",
     ))
 
 

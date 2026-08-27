@@ -22,6 +22,8 @@ EVAL_THROTTLE = 0.10
 FOLLOW_MAX_MS = 600
 EVIDENCE_GAP_MS = 300
 EPISODE_MAX_MS = 5_000
+TRANSITION_LOOKBACK_MS = 2_500
+TRANSITION_EVIDENCE_GAP_MS = FOLLOW_MAX_MS * 2
 PERSISTENT_WAVE_GAP_MS = 3_000
 PERSISTENT_WAVE_MAX_MS = 15_000
 LEAD_FLOOR_MS = 100.0
@@ -637,6 +639,185 @@ def _pending_reversal_identity(signal, bias):
     return onset, hashlib.sha256(encoded).hexdigest()
 
 
+def _transition_snapshot(pending, histories, now_ms):
+    """Classify a counter-Bias cash transition without manufacturing direction.
+
+    The transition lane is deliberately stricter than a price bounce.  It
+    requires an earlier material cash impulse in the frozen Bias direction,
+    a material executed-flow reclaim in the new direction, and both cash
+    venues accepting that new direction inside one follower window.  Futures,
+    OI and depth never create the transition side here.
+    """
+    side = str((pending or {}).get("side") or "ABSTAIN").upper()
+    frozen = dict((pending or {}).get("pre_impulse_bias_snapshot") or {})
+    background = str(frozen.get("direction") or "ABSTAIN").upper()
+    started_ms = int((pending or {}).get("started_receive_ms", 0) or 0)
+    if (
+        side not in ("LONG", "SHORT")
+        or background not in ("LONG", "SHORT")
+        or side == background
+        or started_ms <= 0
+    ):
+        return {
+            "status": "BACKGROUND_ALIGNED", "confirmed": False,
+            "side": side, "background_side": background,
+            "authority": False,
+        }
+
+    sign = _sign(side)
+    reports = {}
+    old_impulse_venues = []
+    accepted_venues = []
+    first_accept_ms = []
+    opposing_return_venues = []
+    old_flow = dict((pending or {}).get("opposing_flow_efficiency_at_onset") or {})
+    old_states = {
+        name: str((row or {}).get("state") or "UNKNOWN").upper()
+        for name, row in dict(old_flow.get("venues") or {}).items()
+    }
+
+    for venue in sorted(CASH):
+        rows = [
+            row for row in histories.get(venue, ())
+            if row.get("clock_valid")
+            and started_ms - TRANSITION_LOOKBACK_MS
+            <= int(row.get("receive_time_ms", 0) or 0) <= int(now_ms)
+        ]
+        old_rows = [
+            row for row in rows
+            if int(row.get("receive_time_ms", 0) or 0) < started_ms
+            and str(row.get("side") or "").upper() == background
+            and _material_flow(row)
+        ]
+        pre_rows = [
+            row for row in rows
+            if int(row.get("receive_time_ms", 0) or 0) < started_ms
+            and _f(row.get("price")) > 0.0
+        ]
+        new_rows = [
+            row for row in rows
+            if int(row.get("receive_time_ms", 0) or 0) >= started_ms
+            and str(row.get("side") or "").upper() == side
+            and _material_flow(row)
+        ]
+        old_extreme = None
+        anchor_source = "UNAVAILABLE"
+        if old_rows:
+            if side == "LONG":
+                old_extreme = min(
+                    _f(row.get("low"), _f(row.get("price"))) for row in old_rows
+                )
+            else:
+                old_extreme = max(
+                    _f(row.get("high"), _f(row.get("price"))) for row in old_rows
+                )
+            old_impulse_venues.append(venue)
+            anchor_source = "OPPOSING_IMPULSE_EXTREME"
+        elif pre_rows:
+            old_extreme = _f(pre_rows[-1].get("price"))
+            anchor_source = "PRE_TRANSITION_CASH_CLOSE"
+        latest_new = new_rows[-1] if new_rows else None
+        reclaim_bps = (
+            sign * _bps(_f(latest_new.get("price")), old_extreme)
+            if latest_new is not None and _f(old_extreme) > 0.0 else 0.0
+        )
+        accepted = bool(
+            latest_new is not None
+            and reclaim_bps >= MATERIAL_PRICE_BPS
+            and sign * _f(latest_new.get("imbalance")) >= 0.20
+            and sign * _f(latest_new.get("price_conversion_bps"))
+                >= MATERIAL_PRICE_BPS
+        )
+        if accepted:
+            accepted_venues.append(venue)
+            first_accept_ms.append(min(
+                int(row.get("receive_time_ms", 0) or 0) for row in new_rows
+            ))
+        latest_new_ms = max((
+            int(row.get("receive_time_ms", 0) or 0) for row in new_rows
+        ), default=0)
+        returned = [
+            row for row in rows
+            if latest_new_ms > 0
+            and int(row.get("receive_time_ms", 0) or 0) > latest_new_ms
+            and str(row.get("side") or "").upper() == background
+            and _material_flow(row)
+        ]
+        if returned:
+            opposing_return_venues.append(venue)
+        reports[venue] = {
+            "opposing_material_buckets": len(old_rows),
+            "new_side_material_buckets": len(new_rows),
+            "old_extreme": round(_f(old_extreme), 10) if old_extreme else None,
+            "reclaim_anchor_source": anchor_source,
+            "reclaim_bps": round(reclaim_bps, 6),
+            "new_side_converts": accepted,
+            "first_accept_ms": (
+                min(int(row.get("receive_time_ms", 0) or 0) for row in new_rows)
+                if new_rows else None
+            ),
+            "opposing_flow_state_at_onset": old_states.get(venue, "UNKNOWN"),
+        }
+
+    dual_cash = set(accepted_venues) == set(CASH)
+    acceptance_span_ms = (
+        max(first_accept_ms) - min(first_accept_ms)
+        if len(first_accept_ms) == len(CASH) else None
+    )
+    synchronous = bool(
+        dual_cash and acceptance_span_ms is not None
+        and acceptance_span_ms <= FOLLOW_MAX_MS
+    )
+    old_failure_state = any(
+        state in {
+            "FADING", "DECAYING", "ABSORBED", "EXHAUSTED",
+            "REACCELERATION_UNCONFIRMED",
+        }
+        for state in old_states.values()
+    )
+    failed_continuation = bool(
+        old_impulse_venues
+        and (old_failure_state or synchronous)
+    )
+    hard_contradiction = set(opposing_return_venues) == set(CASH)
+    confirmed = bool(
+        failed_continuation and synchronous and not hard_contradiction
+    )
+    if hard_contradiction:
+        status = "TRANSITION_FAILED"
+    elif confirmed:
+        status = "REVERSAL_CONFIRMED"
+    elif dual_cash:
+        status = "CROSS_CASH_ACCEPTED"
+    elif accepted_venues:
+        status = "NEW_SIDE_CONVERTS"
+    elif failed_continuation:
+        status = "FAILED_CONTINUATION"
+    elif old_impulse_venues:
+        status = "OPPOSING_IMPULSE"
+    else:
+        status = "TRANSITION_WATCH"
+    return {
+        "version": "FAST_TRANSITION_V1",
+        "status": status, "confirmed": confirmed,
+        "side": side, "background_side": background,
+        "failed_continuation": failed_continuation,
+        "old_failure_state_observed": old_failure_state,
+        "old_impulse_venues": sorted(old_impulse_venues),
+        "accepted_cash_venues": sorted(accepted_venues),
+        "cash_acceptance_span_ms": acceptance_span_ms,
+        "cash_synchronous_transition": synchronous,
+        "opposing_return_venues": sorted(opposing_return_venues),
+        "hard_contradiction": hard_contradiction,
+        "venues": reports,
+        "authority": "BIAS_ALIGNMENT_BYPASS_ONLY" if confirmed else False,
+        "policy": (
+            "OPPOSING_CASH_FAILURE_THEN_DUAL_CASH_EXECUTED_FLOW_RECLAIM_"
+            "NO_FUTURES_DIRECTION"
+        ),
+    }
+
+
 def _start_pending_reversal(state, signal, bias, histories):
     """Remember counter-Bias onset without granting direction or Entry."""
     side = str(signal.get("side") or "ABSTAIN").upper()
@@ -682,10 +863,14 @@ def _start_pending_reversal(state, signal, bias, histories):
         "flow_efficiency_at_onset": _flow_efficiency_snapshot(
             histories_at_onset, side, cash,
         ),
+        "opposing_flow_efficiency_at_onset": _flow_efficiency_snapshot(
+            histories_at_onset, frozen_side, CASH,
+        ),
         "precursor_measurement": precursor,
         "displacement_onset": dict(precursor),
         "oi_before_snapshot": _oi_state_snapshot(state),
         "status": "PENDING_BIAS_FLIP",
+        "transition_phase": "TRANSITION_WATCH",
         "authority": False,
         "policy": "SAME_EPISODE_BIAS_FLIP_NO_BUCKET_REPLAY_NO_LOOKAHEAD",
     }
@@ -752,7 +937,7 @@ def _current_bias_confirmation(state, side, now_s, onset_ms):
 
 
 def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
-    """Expire invalid onset or promote the exact object after a real Bias flip."""
+    """Promote the same onset after Bias flip or a strict cash transition."""
     pending = getattr(state, "_ignition_pending_reversal_episode", None)
     if not isinstance(pending, dict):
         return None
@@ -770,7 +955,18 @@ def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
     )
     age = int(now_ms) - int(pending.get("started_receive_ms", 0) or 0)
     gap = int(now_ms) - int(pending.get("last_evidence_ms", 0) or 0)
-    if epoch_changed or clock_invalid or age > EPISODE_MAX_MS or gap > EVIDENCE_GAP_MS:
+    transition = _transition_snapshot(pending, histories, now_ms)
+    pending["transition_phase"] = transition.get("status")
+    pending["transition_authority"] = transition
+    if transition.get("hard_contradiction"):
+        state._ignition_pending_reversal_episode = None
+        state._ignition_last_reject = "PENDING_REVERSAL_TRANSITION_FAILED"
+        state._ignition_last_reject_payload = dict(pending)
+        return None
+    if (
+        epoch_changed or clock_invalid or age > EPISODE_MAX_MS
+        or gap > TRANSITION_EVIDENCE_GAP_MS
+    ):
         reason = (
             "PENDING_REVERSAL_EPOCH_RESET" if epoch_changed else
             "PENDING_REVERSAL_CLOCK_INVALID" if clock_invalid else
@@ -793,16 +989,27 @@ def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
         state, pending.get("side"), now_ms / 1000.0,
         pending.get("started_receive_ms", 0),
     )
-    if confirmation is None:
+    transition_confirmed = bool(transition.get("confirmed"))
+    if confirmation is None and not transition_confirmed:
         state._ignition_last_reject = "PENDING_REVERSAL_BIAS_CONFIRMATION"
         state._ignition_last_reject_payload = dict(pending)
         return None
-    # Keep identity, onset, signals, OI-before and hash untouched. Only attach
-    # the later confirmation that makes the existing episode eligible.
-    pending["bias_confirmation_snapshot"] = confirmation
-    pending["bias_snapshot"] = confirmation
+    # Keep identity, onset, signals, OI-before and hash untouched.  A Bias flip
+    # may replace only the eligibility context.  A fast transition deliberately
+    # leaves the frozen background Bias unchanged and records its narrow bypass.
+    pending["bias_confirmation_snapshot"] = dict(confirmation or {})
+    if confirmation is not None:
+        pending["bias_snapshot"] = confirmation
     pending["pending_reversal_promoted"] = True
-    pending["status"] = "BIAS_FLIP_CONFIRMED"
+    pending["transition_confirmed"] = transition_confirmed
+    pending["status"] = (
+        "BIAS_FLIP_CONFIRMED" if confirmation is not None
+        else "REVERSAL_CONFIRMED"
+    )
+    pending["authority"] = (
+        "BIAS_FLIP" if confirmation is not None
+        else "BIAS_ALIGNMENT_BYPASS_ONLY"
+    )
     pending["promotion_ts"] = now_ms / 1000.0
     pending["flow_efficiency_at_promotion"] = _flow_efficiency_snapshot(
         histories, pending.get("side"), CASH,
@@ -2072,6 +2279,12 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "bias_confirmation_snapshot": dict(
             episode.get("bias_confirmation_snapshot") or {}
         ),
+        "transition_authority": dict(
+            episode.get("transition_authority") or {}
+        ),
+        "transition_confirmed": bool(
+            episode.get("transition_confirmed")
+        ),
         "clock_quality": {name: {
             "uncertainty_ms": rows[-1].get("clock_uncertainty_ms"),
             "valid": rows[-1].get("clock_valid"), "epoch": rows[-1].get("epoch"),
@@ -2122,7 +2335,17 @@ def _result_from_episode(state, episode, histories, freshness, now):
         )
     if not proposer_is_futures and not futures_follow_ok:
         return _wait(now, side, "WAIT_CASH_IGNITION_FUTURES_RESPONSE", "PROBE", payload, freshness)
-    if leader == "SIMULTANEOUS" and proof_type != "FAILED_REVERSION":
+    synchronous_transition = bool(
+        payload.get("transition_confirmed")
+        and (payload.get("transition_authority") or {}).get(
+            "cash_synchronous_transition"
+        )
+    )
+    if (
+        leader == "SIMULTANEOUS"
+        and proof_type != "FAILED_REVERSION"
+        and not synchronous_transition
+    ):
         return _wait(now, side, "WAIT_CAUSAL_LEADER_UNCERTAIN", "PROBE", payload, freshness)
     if proof_type is None:
         return _wait(now, side, "WAIT_IGNITION_PROOF", "PROBE", payload, freshness)

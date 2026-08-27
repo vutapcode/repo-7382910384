@@ -57,6 +57,45 @@ class EntryEconomicsV2Tests(unittest.TestCase):
         self.assertEqual(
             row["flow_confirmation_source"], "INDEPENDENT_CASH_WITNESS"
         )
+        self.assertEqual(row["transition_class"], "BACKGROUND_ALIGNED")
+
+    def test_fast_transition_uses_isolated_empirical_cohort(self):
+        candidate = {
+            "side": "LONG", "entry_mode": "IGNITION",
+            "ignition": {
+                "proposer": "binance_spot",
+                "proof_type": "METAORDER_CONTINUATION",
+                "consumed_fraction": 0.20,
+                "flow_efficiency": {"venues": {
+                    "binance_spot": {"state": "CONTINUING_CONFIRMED"},
+                    "coinbase_spot": {"state": "CONTINUING_CONFIRMED"},
+                }},
+                "bias_snapshot": {"direction_context": {
+                    "phase": "ESTABLISHED_TREND"
+                }},
+                "transition_confirmed": True,
+                "transition_authority": {
+                    "status": "REVERSAL_CONFIRMED", "side": "LONG",
+                    "cash_synchronous_transition": True,
+                },
+            },
+        }
+        row = entry_economics_v2.feature_snapshot(
+            candidate, {"regime": "NORMAL"}, "TAKER",
+            {"questions": {"q3_flow_efficiency": {
+                "status": "CONTINUING_CONFIRMED"
+            }}},
+        )
+        background = dict(row, transition_class="BACKGROUND_ALIGNED")
+        self.assertEqual(row["transition_class"], "FAST_REVERSAL_CONFIRMED")
+        self.assertNotEqual(
+            entry_economics_v2._exact_key(row),
+            entry_economics_v2._exact_key(background),
+        )
+        self.assertNotEqual(
+            entry_economics_v2._parent_key(row),
+            entry_economics_v2._parent_key(background),
+        )
 
     def test_insufficient_data_never_invents_forward_edge(self):
         report = entry_economics_v2.estimate(SimpleNamespace(), snapshot())

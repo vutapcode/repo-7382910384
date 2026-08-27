@@ -6,7 +6,7 @@ unwind tail cannot look like fresh whale commitment merely because sell/buy
 market orders are large.
 """
 
-VERSION = "ENTRY_THESIS_GATE_V4_FLOW_SURVIVAL"
+VERSION = "ENTRY_THESIS_GATE_V5_FAST_TRANSITION"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -33,15 +33,31 @@ def _bias_question(result, ignition):
         direction not in (side, "ABSTAIN")
         or (phase == "REVERSAL_CANDIDATE" and candidate_side not in (side, "ABSTAIN"))
     )
+    transition = dict(ignition.get("transition_authority") or {})
+    transition_confirmed = bool(
+        ignition.get("transition_confirmed")
+        and transition.get("status") == "REVERSAL_CONFIRMED"
+        and str(transition.get("side") or "ABSTAIN").upper() == side
+        and transition.get("cash_synchronous_transition")
+        and not transition.get("hard_contradiction")
+    )
     verified = bool(frozen)
-    passed = bool(not conflict and (not verified or confidence >= BIAS_MIN_CONF))
+    passed = bool(
+        transition_confirmed
+        or (not conflict and (not verified or confidence >= BIAS_MIN_CONF))
+    )
     return {
         "question": "BACKGROUND_DIRECTION_REAL",
         "status": "PASS" if passed else "FAIL",
         "frozen_snapshot": verified, "direction": direction,
         "confidence": round(confidence, 6), "phase": phase,
         "candidate_side": candidate_side, "conflict": conflict,
-        "authority": "FROZEN_PRE_IMPULSE_BIAS",
+        "transition_confirmed": transition_confirmed,
+        "transition_authority": transition,
+        "authority": (
+            "FAST_TRANSITION_BIAS_ALIGNMENT_BYPASS"
+            if transition_confirmed else "FROZEN_PRE_IMPULSE_BIAS"
+        ),
     }
 
 

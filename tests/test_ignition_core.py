@@ -404,6 +404,172 @@ class IgnitionCoreTests(unittest.TestCase):
             "SHORT",
         )
 
+    def test_dual_cash_failed_continuation_promotes_without_bias_flip(self):
+        s = state(now=3.6)
+        self._freeze_bias_before_wave(s, side="SHORT", captured_at=2.0)
+        old_binance = evidence_row(3_000, "SHORT", 99.90)
+        # Coinbase did not originate the flush; it only supplies an independent
+        # pre-transition anchor and later accepts the reclaim.
+        old_coinbase = evidence_row(
+            3_050, "SHORT", 99.91, strong=False, material=False,
+        )
+        old_coinbase["venue"] = "coinbase_spot"
+        first = evidence_row(3_200, "LONG", 99.94)
+        histories = {
+            "binance_spot": (old_binance, first),
+            "coinbase_spot": (old_coinbase,), "futures": (),
+        }
+        pending = ignition_core._start_pending_reversal(
+            s, first, s._ignition_bias_snapshots[-1], histories,
+        )
+        episode_id = pending["episode_id"]
+        episode_hash = pending["episode_hash"]
+
+        binance_follow = evidence_row(3_300, "LONG", 99.96)
+        coinbase_follow = evidence_row(3_400, "LONG", 99.95)
+        coinbase_follow["venue"] = "coinbase_spot"
+        futures_follow = evidence_row(3_500, "LONG", 99.94)
+        futures_follow["venue"] = "futures"
+        futures_follow["total_qty"] = 0.20
+        histories = {
+            "binance_spot": (old_binance, first, binance_follow),
+            "coinbase_spot": (old_coinbase, coinbase_follow),
+            "futures": (futures_follow,),
+        }
+        ignition_core._observe_pending_reversal(
+            s, [binance_follow, coinbase_follow, futures_follow], histories,
+        )
+        promoted = ignition_core._resolve_pending_reversal(
+            s, histories, 3_550, allow_promotion=True,
+        )
+        self.assertIsNotNone(promoted)
+        self.assertEqual(promoted["episode_id"], episode_id)
+        self.assertEqual(promoted["episode_hash"], episode_hash)
+        self.assertEqual(promoted["status"], "REVERSAL_CONFIRMED")
+        self.assertTrue(promoted["transition_confirmed"])
+        self.assertEqual(
+            promoted["transition_authority"]["accepted_cash_venues"],
+            ["binance_spot", "coinbase_spot"],
+        )
+        self.assertTrue(
+            promoted["transition_authority"]["cash_synchronous_transition"]
+        )
+        self.assertEqual(promoted["bias_snapshot"]["direction"], "SHORT")
+        self.assertEqual(promoted["side"], "LONG")
+
+    def test_single_cash_reclaim_cannot_bypass_frozen_bias(self):
+        s = state(now=3.6)
+        self._freeze_bias_before_wave(s, side="SHORT", captured_at=2.0)
+        old_binance = evidence_row(3_000, "SHORT", 99.90)
+        first = evidence_row(3_200, "LONG", 99.94)
+        histories = {
+            "binance_spot": (old_binance, first),
+            "coinbase_spot": (), "futures": (),
+        }
+        pending = ignition_core._start_pending_reversal(
+            s, first, s._ignition_bias_snapshots[-1], histories,
+        )
+        transition = ignition_core._transition_snapshot(
+            pending, histories, 3_300,
+        )
+        self.assertFalse(transition["confirmed"])
+        self.assertNotEqual(transition["status"], "REVERSAL_CONFIRMED")
+        self.assertIsNone(ignition_core._resolve_pending_reversal(
+            s, histories, 3_300, allow_promotion=True,
+        ))
+        self.assertIsNotNone(s._ignition_pending_reversal_episode)
+
+    def test_dual_cash_opposing_return_invalidates_transition(self):
+        s = state(now=3.8)
+        self._freeze_bias_before_wave(s, side="SHORT", captured_at=2.0)
+        old_binance = evidence_row(3_000, "SHORT", 99.90)
+        old_coinbase = evidence_row(3_050, "SHORT", 99.91)
+        old_coinbase["venue"] = "coinbase_spot"
+        first = evidence_row(3_200, "LONG", 99.94)
+        new_coinbase = evidence_row(3_300, "LONG", 99.95)
+        new_coinbase["venue"] = "coinbase_spot"
+        back_binance = evidence_row(3_500, "SHORT", 99.89)
+        back_coinbase = evidence_row(3_550, "SHORT", 99.90)
+        back_coinbase["venue"] = "coinbase_spot"
+        histories = {
+            "binance_spot": (old_binance, first, back_binance),
+            "coinbase_spot": (
+                old_coinbase, new_coinbase, back_coinbase,
+            ),
+            "futures": (),
+        }
+        pending = ignition_core._start_pending_reversal(
+            s, first, s._ignition_bias_snapshots[-1], histories,
+        )
+        transition = ignition_core._transition_snapshot(
+            pending, histories, 3_600,
+        )
+        self.assertEqual(transition["status"], "TRANSITION_FAILED")
+        self.assertTrue(transition["hard_contradiction"])
+        self.assertFalse(transition["confirmed"])
+
+    def test_synchronous_dual_cash_transition_resolves_leader_uncertainty(self):
+        s = state(now=10.0)
+        first = evidence_row(9_600, "LONG", 100.01)
+        second = evidence_row(9_700, "LONG", 100.02)
+        second["venue"] = "coinbase_spot"
+        futures = evidence_row(9_800, "LONG", 100.02)
+        futures["venue"] = "futures"
+        futures["total_qty"] = 0.20
+        episode = {
+            "causal_episode_id": "ign:binance_spot:LONG:9500",
+            "side": "LONG", "proposer": "binance_spot",
+            "started_receive_ms": 9_600, "last_evidence_ms": 9_800,
+            "bias_snapshot": {
+                "direction": "SHORT", "confidence": 0.80,
+                "direction_context": {"phase": "ESTABLISHED_TREND"},
+            },
+            "signals": [first, second, futures],
+            "epochs": {
+                "binance_spot": 1, "coinbase_spot": 1, "futures": 1,
+            },
+            "precursor_measurement": {"valid": False},
+            "oi_before_snapshot": {},
+            "transition_confirmed": True,
+            "transition_authority": {
+                "status": "REVERSAL_CONFIRMED", "side": "LONG",
+                "cash_synchronous_transition": True,
+                "hard_contradiction": False,
+            },
+        }
+        histories = {
+            "binance_spot": (first,),
+            "coinbase_spot": (second,), "futures": (futures,),
+        }
+        freshness = {
+            "coinbase_mode": "FRESH", "binance_spot_ready": True,
+            "futures_ready": True,
+        }
+        phase = {
+            "valid": True, "source": "TEST", "phase_scale_bps": 10.0,
+            "cash_displacement_bps": 2.0,
+            "episode_cash_displacement_bps": 2.0,
+            "precursor_cash_displacement_bps": 0.0,
+            "consumed_fraction": 0.20,
+        }
+        with patch.object(
+            ignition_core, "_proof",
+            return_value=("METAORDER_CONTINUATION", first, "binance_spot"),
+        ), patch.object(
+            ignition_core, "_leader", return_value=("SIMULTANEOUS", -5.0),
+        ), patch.object(
+            ignition_core, "_phase_measurement", return_value=phase,
+        ), patch.object(
+            ignition_core, "_oi_verification",
+            return_value={"status": "UNCHANGED_UNKNOWN", "intent": "NEUTRAL"},
+        ):
+            result = ignition_core._result_from_episode(
+                s, episode, histories, freshness, 10.0,
+            )
+        self.assertEqual(result["decision"], "GO")
+        self.assertTrue(result["ignition"]["transition_confirmed"])
+        self.assertEqual(result["ignition"]["leader"], "SIMULTANEOUS")
+
     def test_late_bias_flip_cannot_reuse_expired_pending_episode(self):
         s = state(now=3.2)
         self._freeze_bias_before_wave(s, side="LONG", captured_at=2.0)
