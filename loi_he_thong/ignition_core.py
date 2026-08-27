@@ -36,7 +36,7 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V2"
+ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V3"
 
 
 def _f(value, default=0.0):
@@ -180,37 +180,89 @@ def _oi_state_snapshot(state):
     }
 
 
-def _oi_verification(oi, before=None, after=None):
+def _oi_verification(
+    oi, before=None, after=None, *, episode_started_ms=None, decision_time=None
+):
+    """Verify that OI actually refreshed inside this causal episode.
+
+    A REST sample can be young while still predating the impulse.  Such a
+    sample is useful context, but it is not causal confirmation.  Timestamps
+    received after ``decision_time`` are also forbidden from retroactively
+    changing the decision.
+    """
     oi = dict(oi or {})
     before, after = dict(before or {}), dict(after or {})
     intent = str(oi.get("intent") or "NEUTRAL").upper()
-    fresh = bool(oi.get("fresh"))
-    status = (
-        "FRESH_POSITION_BUILD" if fresh and intent == "POSITION_BUILD" else
-        "FRESH_UNWIND" if fresh and intent == "UNWIND" else
-        "FRESH_NEUTRAL" if fresh else "UNKNOWN"
+    before_ts = _f(before.get("updated_at"))
+    after_ts = _f(after.get("updated_at"))
+    started_s = _f(episode_started_ms) / 1000.0
+    decision_s = _f(decision_time)
+    available = bool(
+        before_ts > 0.0 and after_ts > 0.0
+        and before.get("value") is not None and after.get("value") is not None
     )
+    no_lookahead = bool(decision_s <= 0.0 or after_ts <= decision_s + 1e-6)
+    refreshed = bool(available and after_ts > before_ts and no_lookahead)
+    inside_episode = bool(
+        refreshed
+        and (started_s <= 0.0 or after_ts >= started_s)
+        and (started_s <= 0.0 or after_ts - started_s <= OI_SAMPLE_MAX_SECONDS)
+    )
+    age = decision_s - after_ts if decision_s > 0.0 and after_ts > 0.0 else None
+    timely = bool(
+        inside_episode and age is not None
+        and 0.0 <= age <= OI_SAMPLE_MAX_SECONDS
+    )
+    aligned = bool(oi.get("aligned_with_entry", True))
+    if not available or not no_lookahead:
+        status = "UNAVAILABLE"
+    elif after_ts == before_ts:
+        status = "UNCHANGED_UNKNOWN"
+    elif not timely:
+        status = "STALE_UNKNOWN"
+    elif not aligned:
+        status = "FRESH_CONFLICT"
+    elif intent == "POSITION_BUILD":
+        status = "FRESH_POSITION_BUILD"
+    elif intent == "UNWIND":
+        status = "FRESH_UNWIND"
+    else:
+        status = "UNCHANGED_UNKNOWN"
+    verified = status.startswith("FRESH_")
     return {
-        "version": "OI_EPISODE_VERIFICATION_V1",
+        "version": "OI_EPISODE_VERIFICATION_V2_CAUSAL_REFRESH",
         "status": status,
-        "fresh": fresh,
+        "fresh": verified,
+        "market_snapshot_fresh": bool(oi.get("fresh")),
         "intent": intent,
         "intent_source": oi.get("intent_source"),
         "frozen_updated_at": oi.get("frozen_oi_updated_at"),
         "live_updated_at": oi.get("live_oi_updated_at"),
         "live_age_seconds": oi.get("live_oi_age_seconds"),
         "sample_window_seconds": oi.get("sample_window_seconds"),
+        "episode_started_ms": episode_started_ms,
+        "decision_time": decision_time,
         "episode_before": before,
         "episode_after": after,
-        "refresh_observed": bool(
-            _f(after.get("updated_at")) > _f(before.get("updated_at")) > 0.0
-        ),
-        "same_snapshot": bool(
-            _f(after.get("updated_at")) > 0.0
-            and _f(after.get("updated_at")) == _f(before.get("updated_at"))
-        ),
-        "policy": "STALE_IS_UNKNOWN_NEVER_SYNTHETIC_BUILD",
+        "refresh_observed": refreshed,
+        "inside_causal_window": inside_episode,
+        "no_lookahead": no_lookahead,
+        "same_snapshot": bool(available and after_ts == before_ts),
+        "policy": "EPISODE_REFRESH_REQUIRED_STALE_OR_UNCHANGED_IS_UNKNOWN",
     }
+
+
+def _persistent_oi_before_snapshot(state, candidate_id):
+    """Bind the first visible OI sample to one persistent causal candidate."""
+    binding = dict(getattr(state, "_persistent_oi_episode_binding", {}) or {})
+    if binding.get("candidate_id") == candidate_id:
+        return dict(binding.get("before") or {})
+    before = _oi_state_snapshot(state)
+    state._persistent_oi_episode_binding = {
+        "candidate_id": candidate_id,
+        "before": before,
+    }
+    return before
 
 
 def _wait(now, side, reason, phase="ARMED", episode=None, freshness=None):
@@ -1268,7 +1320,15 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     if not phase.get("valid") or consumed > MAX_CONSUMED_FRACTION:
         return None
     oi = _oi_intent(state, side, now, frozen)
-    if oi.get("fresh") and not oi.get("aligned_with_entry", True):
+    oi_verification = _oi_verification(
+        oi,
+        _persistent_oi_before_snapshot(state, candidate_id),
+        _oi_state_snapshot(state),
+        episode_started_ms=wave_started_ms,
+        decision_time=now,
+    )
+    oi_status = str(oi_verification.get("status") or "UNAVAILABLE")
+    if oi_status == "FRESH_CONFLICT":
         return None
     # A directional context without confirmation is not a trend.  Do not let
     # one Binance cash impulse plus its correlated Futures echo turn it into a
@@ -1279,9 +1339,7 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     provisional_context = phase_name == "CONTEXT_WITHOUT_CONFIRMATION"
     provisional_confirmed = bool(
         set(cash) == CASH
-        and oi.get("fresh")
-        and oi.get("intent") == "POSITION_BUILD"
-        and oi.get("aligned_with_entry", True)
+        and oi_status == "FRESH_POSITION_BUILD"
     )
     if provisional_context and not provisional_confirmed:
         state._ignition_last_reject = (
@@ -1293,7 +1351,7 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     # venues show persistent executed-flow conversion. One cash venue plus
     # Futures is the common liquidation-aftershock shape and is not enough.
     unwind_confirmed = bool(
-        oi.get("intent") != "UNWIND" or set(cash) == CASH
+        oi_status != "FRESH_UNWIND" or set(cash) == CASH
     )
     if not unwind_confirmed:
         state._ignition_last_reject = "UNWIND_REQUIRES_DUAL_CASH_PERSISTENCE"
@@ -1364,20 +1422,18 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "residual_edge_proxy_bps": 0.0,
         "residual_edge_source": "EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED",
         "oi_intent": oi,
-        "oi_verification_state": _oi_verification(
-            oi, None, _oi_state_snapshot(state),
-        ),
+        "oi_verification_state": oi_verification,
         "economic_contract_version": ECONOMIC_CONTRACT_VERSION,
         "bias_context_quality": (
             "PROVISIONAL_DUAL_CASH_OI_BUILD"
             if provisional_context else "ESTABLISHED_OR_PULLBACK"
         ),
         "unwind_cash_independence": (
-            "DUAL_CASH" if oi.get("intent") == "UNWIND" else "NOT_REQUIRED"
+            "DUAL_CASH" if oi_status == "FRESH_UNWIND" else "NOT_REQUIRED"
         ),
         "causal_class": (
-            "CASH_LED_UNWIND" if oi.get("intent") == "UNWIND"
-            else "ALIGNED_BUILD" if oi.get("intent") == "POSITION_BUILD"
+            "CASH_LED_UNWIND" if oi_status == "FRESH_UNWIND"
+            else "ALIGNED_BUILD" if oi_status == "FRESH_POSITION_BUILD"
             else "PERSISTENT_CASH_WAVE"
         ),
         "persistent_evidence": report,
@@ -1611,6 +1667,13 @@ def _result_from_episode(state, episode, histories, freshness, now):
     # Completed Guardian outcomes are the only promotion authority.
     residual_proxy = 0.0
     oi = _oi_intent(state, side, now, episode.get("bias_snapshot"))
+    oi_verification = _oi_verification(
+        oi,
+        episode.get("oi_before_snapshot"),
+        _oi_state_snapshot(state),
+        episode_started_ms=episode.get("started_receive_ms"),
+        decision_time=now,
+    )
     payload = {
         "causal_episode_id": episode["causal_episode_id"], "state": "PROBE",
         "side": side, "proposer": episode["proposer"], "leader": leader,
@@ -1661,9 +1724,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "residual_edge_proxy_bps": round(residual_proxy, 6),
         "residual_edge_source": "EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED",
         "oi_intent": oi,
-        "oi_verification_state": _oi_verification(
-            oi, episode.get("oi_before_snapshot"), _oi_state_snapshot(state),
-        ),
+        "oi_verification_state": oi_verification,
         "economic_contract_version": ECONOMIC_CONTRACT_VERSION,
         "clock_quality": {name: {
             "uncertainty_ms": rows[-1].get("clock_uncertainty_ms"),
@@ -1689,19 +1750,30 @@ def _result_from_episode(state, episode, histories, freshness, now):
         return _wait(now, side, "WAIT_STALE_COINBASE", "PROBE", payload, freshness)
     if not freshness["binance_spot_ready"] or not freshness["futures_ready"]:
         return _wait(now, side, "WAIT_FEED_GROUP_NOT_READY", "PROBE", payload, freshness)
-    if proposer_is_futures and not oi.get("fresh"):
+    oi_status = str(oi_verification.get("status") or "UNAVAILABLE")
+    strong_independent_cash_proof = bool(
+        cash_venues and futures_cash_ok and proof_type is not None
+    )
+    if proposer_is_futures and not futures_cash_ok:
+        return _wait(
+            now, side, "WAIT_FUTURES_ALERT_CASH_RESPONSE",
+            "PROBE", payload, freshness,
+        )
+    if (
+        proposer_is_futures
+        and oi_status not in {"FRESH_POSITION_BUILD", "FRESH_UNWIND"}
+        and not strong_independent_cash_proof
+    ):
         return _wait(
             now, side, "WAIT_FUTURES_PROPOSER_OI_REFRESH",
             "PRESSURE_BUILDING", payload, freshness,
         )
-    if proposer_is_futures and oi.get("intent") == "UNWIND":
+    if proposer_is_futures and oi_status == "FRESH_UNWIND":
         state._ignition_episode = None
         return _wait(
             now, side, "WAIT_FUTURES_PROPOSER_OI_UNWIND",
             "INVALID", payload, freshness,
         )
-    if proposer_is_futures and not futures_cash_ok:
-        return _wait(now, side, "WAIT_FUTURES_ALERT_CASH_RESPONSE", "PROBE", payload, freshness)
     if not proposer_is_futures and not futures_follow_ok:
         return _wait(now, side, "WAIT_CASH_IGNITION_FUTURES_RESPONSE", "PROBE", payload, freshness)
     if leader == "SIMULTANEOUS" and proof_type != "FAILED_REVERSION":
@@ -1719,7 +1791,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
         )
     if not phase_measurement.get("valid"):
         return _wait(now, side, "WAIT_PHASE_SCALE_UNAVAILABLE", "PROBE", payload, freshness)
-    if oi.get("fresh") and not oi.get("aligned_with_entry", True):
+    if oi_status == "FRESH_CONFLICT":
         state._ignition_episode = None
         return _wait(now, side, "OI_INTENT_DIRECTION_CONFLICT", "INVALID", payload, freshness)
     if consumed > MAX_CONSUMED_FRACTION:

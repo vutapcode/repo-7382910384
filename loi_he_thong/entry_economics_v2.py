@@ -1,4 +1,4 @@
-"""Version-bound empirical Guardian economics for Entry Economics V2.
+"""Version-bound empirical Guardian economics for Entry Economics V3.
 
 The model never converts MFE into alpha.  It learns only executable shadow
 positions closed by the active Guardian and stores net bps after the frozen
@@ -8,8 +8,8 @@ execution cost.  Unknown cohorts remain bootstrap telemetry.
 import math
 
 
-VERSION = "ENTRY_ECONOMICS_V2_GUARDIAN_NET"
-CONTRACT_VERSION = "ENTRY_ECONOMICS_V2"
+VERSION = "ENTRY_ECONOMICS_V3_ISOLATED_COHORT_GUARDIAN_NET"
+CONTRACT_VERSION = "ENTRY_ECONOMICS_V3"
 MAX_ROWS = 1024
 EXACT_MIN = 30
 PARENT_MIN = 50
@@ -92,7 +92,8 @@ def _exact_key(snapshot):
 
 def _parent_key(snapshot):
     return tuple(_u(snapshot.get(name)) for name in (
-        "proof_type", "execution_style", "flow_efficiency_state",
+        "side", "proof_type", "proposer", "execution_style",
+        "flow_efficiency_state",
     ))
 
 
@@ -192,7 +193,7 @@ def estimate(state, snapshot):
         }
     report = _stats(selected)
     replay_approved = bool(
-        getattr(state, "entry_economics_v2_replay_approved", False)
+        getattr(state, "entry_economics_v3_replay_approved", False)
     )
     report.update({
         "version": VERSION,

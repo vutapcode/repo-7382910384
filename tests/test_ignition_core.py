@@ -85,12 +85,55 @@ class IgnitionCoreTests(unittest.TestCase):
         s.open_interest_change_pct = 0.20
         after = ignition_core._oi_state_snapshot(s)
         report = ignition_core._oi_verification(
-            {"fresh": True, "intent": "POSITION_BUILD"}, before, after
+            {"fresh": True, "intent": "POSITION_BUILD"}, before, after,
+            episode_started_ms=3100, decision_time=3.4,
         )
         self.assertEqual(report["episode_before"]["value"], 1000.0)
         self.assertEqual(report["episode_after"]["value"], 1002.0)
         self.assertTrue(report["refresh_observed"])
         self.assertFalse(report["same_snapshot"])
+        self.assertEqual(report["status"], "FRESH_POSITION_BUILD")
+
+    def test_oi_young_snapshot_without_episode_refresh_is_unknown(self):
+        sample = {"value": 1000.0, "updated_at": 3.0}
+        report = ignition_core._oi_verification(
+            {"fresh": True, "intent": "POSITION_BUILD"}, sample, sample,
+            episode_started_ms=3100, decision_time=3.2,
+        )
+        self.assertEqual(report["status"], "UNCHANGED_UNKNOWN")
+        self.assertFalse(report["fresh"])
+
+    def test_oi_refresh_after_decision_cannot_confirm_with_lookahead(self):
+        report = ignition_core._oi_verification(
+            {"fresh": True, "intent": "POSITION_BUILD"},
+            {"value": 1000.0, "updated_at": 3.0},
+            {"value": 1002.0, "updated_at": 3.5},
+            episode_started_ms=3100, decision_time=3.4,
+        )
+        self.assertEqual(report["status"], "UNAVAILABLE")
+        self.assertFalse(report["no_lookahead"])
+
+    def test_oi_old_refresh_is_stale_unknown(self):
+        report = ignition_core._oi_verification(
+            {"fresh": True, "intent": "POSITION_BUILD"},
+            {"value": 1000.0, "updated_at": 1.0},
+            {"value": 1002.0, "updated_at": 2.0},
+            episode_started_ms=1500, decision_time=23.0,
+        )
+        self.assertEqual(report["status"], "STALE_UNKNOWN")
+        self.assertFalse(report["fresh"])
+
+    def test_oi_fresh_opposite_build_is_causal_conflict(self):
+        report = ignition_core._oi_verification(
+            {
+                "fresh": True, "intent": "POSITION_BUILD",
+                "aligned_with_entry": False,
+            },
+            {"value": 1000.0, "updated_at": 3.0},
+            {"value": 1002.0, "updated_at": 3.3},
+            episode_started_ms=3100, decision_time=3.4,
+        )
+        self.assertEqual(report["status"], "FRESH_CONFLICT")
 
     def test_flow_efficiency_requires_composite_cash_exhaustion(self):
         histories = {"binance_spot": [], "coinbase_spot": []}
@@ -390,28 +433,34 @@ class IgnitionCoreTests(unittest.TestCase):
             "PROVISIONAL_CONTEXT_REQUIRES_DUAL_CASH_OI_BUILD",
         )
 
-    def test_provisional_context_keeps_dual_cash_fresh_oi_transition(self):
-        """Anti-overfit: a real cash-led position build can still enter."""
+    def test_provisional_context_waits_then_accepts_causal_oi_refresh(self):
+        """A young pre-wave OI sample cannot masquerade as causal build."""
         s = state(now=3.1)
         self._freeze_bias_before_wave(s)
         s._ignition_bias_snapshots[-1]["direction_context"].update({
             "phase": "CONTEXT_WITHOUT_CONFIRMATION",
             "oi_regime": "NEUTRAL",
         })
-        s.prev_open_interest = 1000.0
+        s.open_interest = 1000.0
+        s.prev_open_interest = 999.0
         s.open_interest_change_pct = 0.03
         s.open_interest_change_window_seconds = 3.0
-        s.open_interest_updated_at = 3.0
+        s.open_interest_updated_at = 0.9
         histories = dict(self._persistent_histories(cash="binance_spot"))
         coinbase = self._persistent_histories(cash="coinbase_spot")
         histories["coinbase_spot"] = coinbase["coinbase_spot"]
         with patch.object(ignition_signals, "snapshot", return_value=histories), \
              patch.object(ignition_core, "_new_signals", return_value=[]):
             result = ignition_core.evaluate(s, now=3.1)
-        self.assertEqual(result["decision"], "GO")
+            self.assertEqual(result["decision"], "WAIT")
+            s.prev_open_interest = 1000.0
+            s.open_interest = 1002.0
+            s.open_interest_updated_at = 3.15
+            confirmed = ignition_core.evaluate(s, now=3.2)
+        self.assertEqual(confirmed["decision"], "GO")
         self.assertEqual(
-            result["ignition"]["bias_context_quality"],
-            "PROVISIONAL_DUAL_CASH_OI_BUILD",
+            confirmed["ignition"]["oi_verification_state"]["status"],
+            "FRESH_POSITION_BUILD",
         )
 
     def test_unwind_rejects_single_cash_liquidation_aftershock(self):
@@ -422,6 +471,11 @@ class IgnitionCoreTests(unittest.TestCase):
         s.open_interest_change_pct = -0.03
         s.open_interest_change_window_seconds = 3.0
         s.open_interest_updated_at = 3.0
+        s.open_interest = 970.0
+        s._persistent_oi_episode_binding = {
+            "candidate_id": "pmeta:LONG:1000",
+            "before": {"value": 1000.0, "updated_at": 0.9},
+        }
         histories = self._persistent_histories(cash="binance_spot")
         with patch.object(ignition_signals, "snapshot", return_value=histories), \
              patch.object(ignition_core, "_new_signals", return_value=[]):
@@ -439,6 +493,11 @@ class IgnitionCoreTests(unittest.TestCase):
         s.open_interest_change_pct = -0.03
         s.open_interest_change_window_seconds = 3.0
         s.open_interest_updated_at = 3.0
+        s.open_interest = 970.0
+        s._persistent_oi_episode_binding = {
+            "candidate_id": "pmeta:LONG:1000",
+            "before": {"value": 1000.0, "updated_at": 0.9},
+        }
         histories = dict(self._persistent_histories(cash="binance_spot"))
         coinbase = self._persistent_histories(cash="coinbase_spot")
         histories["coinbase_spot"] = coinbase["coinbase_spot"]
@@ -773,10 +832,17 @@ class IgnitionCoreTests(unittest.TestCase):
         stale = ignition_core._result_from_episode(
             s, dict(episode), histories, freshness, 10.0,
         )
-        self.assertEqual(stale["reason"], "WAIT_FUTURES_PROPOSER_OI_REFRESH")
-        self.assertEqual(stale["phase"], "PRESSURE_BUILDING")
+        self.assertEqual(stale["reason"], "WAIT_CAUSAL_LEADER_UNCERTAIN")
+        self.assertEqual(
+            stale["ignition"]["oi_verification_state"]["status"],
+            "UNAVAILABLE",
+        )
 
+        episode["oi_before_snapshot"] = {
+            "value": 100_000.0, "updated_at": 9.0,
+        }
         s.open_interest_updated_at = 10.0
+        s.open_interest = 99_970.0
         s.prev_open_interest = 100_000.0
         s.open_interest_change_window_seconds = 5.0
         s.open_interest_change_pct = -0.03

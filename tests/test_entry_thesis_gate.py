@@ -47,6 +47,13 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
             "intent": intent, "fresh": True,
             "causal_class": "CASH_LED_UNWIND" if intent == "UNWIND" else "ALIGNED_BUILD",
         },
+        "oi_verification_state": {
+            "status": (
+                "FRESH_UNWIND" if intent == "UNWIND"
+                else "FRESH_POSITION_BUILD"
+            ),
+            "intent": intent,
+        },
         "bias_snapshot": {
             "direction": "SHORT", "confidence": 0.80,
             "direction_context": {
@@ -109,7 +116,7 @@ class EntryThesisGateTests(unittest.TestCase):
 
     def test_primary_absorption_without_independent_continuation_vetoes(self):
         audit = entry_thesis_gate.evaluate(
-            SimpleNamespace(entry_economics_v2_replay_approved=True),
+            SimpleNamespace(entry_economics_v3_replay_approved=True),
             result(
                 intent="POSITION_BUILD", consumed=0.20,
                 flow_states={
@@ -124,7 +131,7 @@ class EntryThesisGateTests(unittest.TestCase):
 
     def test_v2_absorption_is_telemetry_until_canonical_replay_is_approved(self):
         audit = entry_thesis_gate.evaluate(
-            SimpleNamespace(entry_economics_v2_replay_approved=False),
+            SimpleNamespace(entry_economics_v3_replay_approved=False),
             result(
                 intent="POSITION_BUILD", consumed=0.20,
                 flow_states={

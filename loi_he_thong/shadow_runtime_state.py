@@ -5,13 +5,14 @@ from pathlib import Path
 import tempfile
 import time
 
-VERSION = "SHADOW_RUNTIME_STATE_V6_ENTRY_ECONOMICS"
+VERSION = "SHADOW_RUNTIME_STATE_V7_ENTRY_ECONOMICS_V3"
 SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V1",
     "SHADOW_RUNTIME_STATE_V2",
     "SHADOW_RUNTIME_STATE_V3_PROMOTION_EVIDENCE",
     "SHADOW_RUNTIME_STATE_V4_VERSION_BOUND_CALIBRATION",
     "SHADOW_RUNTIME_STATE_V5_VERIFIED_COST_PLAN",
+    "SHADOW_RUNTIME_STATE_V6_ENTRY_ECONOMICS",
     VERSION,
 }
 
@@ -313,7 +314,7 @@ def restore(base):
         state._entry_economics_v2_rows = [
             dict(row) for row in economics_rows[-1024:]
             if isinstance(row, dict)
-            and row.get("economic_contract_version") == "ENTRY_ECONOMICS_V2"
+            and row.get("economic_contract_version") == "ENTRY_ECONOMICS_V3"
         ]
     else:
         state._entry_economics_v2_rows = []

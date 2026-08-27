@@ -810,7 +810,7 @@ class WavefrontShadowEvaluator:
             "proposer": candidate["proposer"],
             "guardian_version": self.guardian.VERSION,
             "risk_version": self.risk.VERSION,
-            "economic_contract_version": "ENTRY_ECONOMICS_V2",
+            "economic_contract_version": "ENTRY_ECONOMICS_V3",
             "hard_sl": pos.hard_sl, "core_snapshot": candidate["core_snapshot"],
         }, now_ms)
         self._persist()
@@ -917,7 +917,7 @@ class WavefrontShadowEvaluator:
             "commission_verified": twin["cost_plan"]["commission_verified"],
             "guardian_version": self.guardian.VERSION,
             "risk_version": self.risk.VERSION,
-            "economic_contract_version": "ENTRY_ECONOMICS_V2",
+            "economic_contract_version": "ENTRY_ECONOMICS_V3",
         }
         if filled and exit_price is not None:
             entry = twin["entry_price"]

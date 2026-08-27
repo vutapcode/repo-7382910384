@@ -47,8 +47,14 @@ def _bias_question(result, ignition):
 
 def _intent_question(ignition, liquidation):
     oi = dict(ignition.get("oi_intent") or {})
-    intent = str(oi.get("intent") or "NEUTRAL").upper()
-    fresh = bool(oi.get("fresh"))
+    verification = dict(ignition.get("oi_verification_state") or {})
+    verification_status = str(
+        verification.get("status") or "UNAVAILABLE"
+    ).upper()
+    intent = str(
+        verification.get("intent") or oi.get("intent") or "NEUTRAL"
+    ).upper()
+    fresh = verification_status.startswith("FRESH_")
     phase = str((liquidation or {}).get("phase") or "UNKNOWN").upper()
     forced = bool(
         fresh and intent == "UNWIND"
@@ -65,7 +71,8 @@ def _intent_question(ignition, liquidation):
     return {
         "question": "NEW_MONEY_OR_FORCED_UNWIND",
         "status": classification, "oi_intent": intent,
-        "oi_fresh": fresh, "oi_causal_class": oi.get("causal_class"),
+        "oi_fresh": fresh, "oi_verification_status": verification_status,
+        "oi_causal_class": oi.get("causal_class"),
         "force_order_phase": phase, "forced_closing_risk": forced,
     }
 
@@ -242,7 +249,7 @@ def evaluate(state, result, impact, basis, liquidation):
     if q6["status"] in ("DERIVATIVES_LED_REJECT", "NO_CASH_AUTHORITY"):
         blockers.append("EXCHANGE_INDEPENDENCE_FAIL")
     replay_approved = bool(
-        getattr(state, "entry_economics_v2_replay_approved", False)
+        getattr(state, "entry_economics_v3_replay_approved", False)
     )
     if replay_approved and q3.get("composite_veto"):
         blockers.append("FLOW_EFFICIENCY_V2_VETO")
@@ -258,7 +265,7 @@ def evaluate(state, result, impact, basis, liquidation):
         },
         "blocking_reasons": blockers,
         "forced_unwind_tail": forced_tail_veto,
-        "entry_economics_v2_replay_approved": replay_approved,
+        "entry_economics_v3_replay_approved": replay_approved,
         "policy": "COMPOSITE_CAUSAL_VETO_NO_SINGLE_SIGNAL_DIRECTION",
     }
 
