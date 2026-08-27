@@ -165,6 +165,14 @@ def compact_position(row):
             "adverse_count": guardian.get("adverse_count"),
             "entry_thesis": guardian.get("entry_thesis"),
             "runner_shield_active": guardian.get("runner_shield_active"),
+            "guardian_phase": guardian.get("guardian_phase"),
+            "pullback_start_ms": guardian.get("pullback_start_ms"),
+            "worst_adverse_bps": guardian.get("worst_adverse_bps"),
+            "reclaim_fraction": guardian.get("reclaim_fraction"),
+            "recovery_conversion_state": guardian.get("recovery_conversion_state"),
+            "opposing_flow_state": guardian.get("opposing_flow_state"),
+            "recovery_result": guardian.get("recovery_result"),
+            "failed_recovery_reason": guardian.get("failed_recovery_reason"),
             "deterioration_elapsed_seconds": guardian.get(
                 "deterioration_elapsed_seconds"
             ),
@@ -252,6 +260,14 @@ def _exit_record(row):
             "entry_thesis": guardian.get("entry_thesis"),
             "adverse_profile": guardian.get("adverse_profile"),
             "runner_shield_active": guardian.get("runner_shield_active"),
+            "guardian_phase": guardian.get("guardian_phase"),
+            "pullback_start_ms": guardian.get("pullback_start_ms"),
+            "worst_adverse_bps": guardian.get("worst_adverse_bps"),
+            "reclaim_fraction": guardian.get("reclaim_fraction"),
+            "recovery_conversion_state": guardian.get("recovery_conversion_state"),
+            "opposing_flow_state": guardian.get("opposing_flow_state"),
+            "recovery_result": guardian.get("recovery_result"),
+            "failed_recovery_reason": guardian.get("failed_recovery_reason"),
             "deterioration_elapsed_seconds": guardian.get(
                 "deterioration_elapsed_seconds"
             ),

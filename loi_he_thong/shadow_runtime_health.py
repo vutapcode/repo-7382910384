@@ -97,7 +97,10 @@ def install(base,risk,edge):
             if h is not None:
                 try:h.clear()
                 except Exception:pass
-        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.; s.guardian_s_reset_reason=reason; s.guardian_s_reset_at=now
+        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.
+        try:base.guardian_s._reset_recovery_path(pos)
+        except Exception:pass
+        s.guardian_s_reset_reason=reason; s.guardian_s_reset_at=now
     async def guardian_loop():
         stale=False
         while True:

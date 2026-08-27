@@ -8,6 +8,23 @@ from ops.rebase_shadow_balance import last_position_event_seq
 
 
 class TradeAuditMirrorTests(unittest.TestCase):
+    def test_position_compaction_keeps_guardian_recovery_path(self):
+        compact = audit.compact_position({
+            "ts": 2.0,
+            "guardian_state": {
+                "guardian_phase": "RECOVERY_TEST",
+                "pullback_start_ms": 1000.0,
+                "worst_adverse_bps": 3.5,
+                "reclaim_fraction": 0.4,
+                "recovery_conversion_state": "CONVERTING",
+                "opposing_flow_state": "DECAYED",
+                "recovery_result": "IN_PROGRESS",
+            },
+        })
+        guardian_state = compact["guardian"]
+        self.assertEqual(guardian_state["guardian_phase"], "RECOVERY_TEST")
+        self.assertEqual(guardian_state["recovery_result"], "IN_PROGRESS")
+
     def test_capital_audit_never_owns_position_sequence(self):
         with tempfile.TemporaryDirectory() as temp:
             journal = Path(temp) / "events.jsonl"

@@ -34,6 +34,27 @@ class ResearchPublisherTests(unittest.TestCase):
         self.assertEqual(compact["consumed_fraction"], 0.51)
         self.assertEqual(compact["causal_episode_id"], "ign:spot:SHORT:1")
 
+    def test_exit_export_keeps_guardian_recovery_path_without_unknown_fields(self):
+        compact = publisher._compact_event({
+            "event": "EXIT", "ts": 3.0, "side": "LONG",
+            "guardian_state": {
+                "reason": "TIER_S_PRICE_PLUS_CAUSE_EXIT",
+                "guardian_phase": "FAILED_RECOVERY",
+                "pullback_start_ms": 1000.0,
+                "worst_adverse_bps": 4.2,
+                "reclaim_fraction": 0.25,
+                "recovery_conversion_state": "ABSENT",
+                "opposing_flow_state": "PERSISTENT",
+                "recovery_result": "FAILED",
+                "failed_recovery_reason": "RECLAIM_LOST",
+                "private_payload": "must-not-leak",
+            },
+        })
+        recovery = compact["guardian"]
+        self.assertEqual(recovery["guardian_phase"], "FAILED_RECOVERY")
+        self.assertEqual(recovery["recovery_result"], "FAILED")
+        self.assertNotIn("private_payload", recovery)
+
     def test_closed_trade_history_uses_second_allowlist(self):
         import json
         import tempfile

@@ -868,8 +868,13 @@ class GuardianDeteriorationTests(unittest.TestCase):
             venues=[],
         )
         neutral_oi = guardian._vote("NEUTRAL", 0.10, "NO_OPPOSITE_BUILD", oi_pct=0.0)
-        recovered = self._assess_with_votes(
+        testing = self._assess_with_votes(
             state, pos, 100.60, (reclaim_s1, reclaim_s2, neutral_oi)
+        )
+        self.assertEqual(testing["guardian_phase"], "RECOVERY_TEST")
+        self.assertEqual(testing["reason"], "RECOVERY_TEST_IN_PROGRESS")
+        recovered = self._assess_with_votes(
+            state, pos, 100.70, (reclaim_s1, reclaim_s2, neutral_oi)
         )
 
         self.assertEqual(recovered["decision"], "HOLD")
@@ -880,6 +885,112 @@ class GuardianDeteriorationTests(unittest.TestCase):
         )
         self.assertTrue(recovered["recovery_shield_active"])
         self.assertIsNone(recovered["deterioration_since"])
+
+    def test_first_pullback_keeps_path_memory_without_fast_exit(self):
+        state = self._state(100.0, 99.98, sell=True)
+        pos = SimpleNamespace(
+            position_cycle_id="first-pullback", side="LONG", opened_at=90.0,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot", "cash_anchors": ["spot", "coinbase"],
+            },
+        )
+        result = self._assess_with_votes(
+            state, pos, 100.0, self._causal_votes(price=-2.0, flow=-0.30)
+        )
+        self.assertEqual(result["guardian_phase"], "FIRST_PULLBACK")
+        self.assertEqual(result["decision"], "DETERIORATING")
+        self.assertFalse(result["kill_fast"])
+        self.assertIsNotNone(result["pullback_start_ms"])
+
+    def _open_recovery_test(self, state, pos):
+        adverse = self._causal_votes(price=-2.0, flow=-0.30)
+        first = self._assess_with_votes(state, pos, 100.0, adverse)
+        candidate_since = pos.guardian_s_candidate_since
+        for key, value in vars(self._state(100.2, 99.99, sell=False)).items():
+            setattr(state, key, value)
+        supportive = (
+            guardian._vote(
+                "SUPPORTIVE", 0.70, "PRICE_RECLAIM",
+                horizons={"1.0": {
+                    "moves": {"spot": 1.5, "coinbase": 1.5, "futures": 1.5},
+                    "adverse": [], "supportive": ["spot", "coinbase", "futures"],
+                }},
+            ),
+            guardian._vote(
+                "SUPPORTIVE", 0.70, "ORIGINAL_FLOW_RETURNED",
+                signed_imbalances={"spot": 0.35, "coinbase": 0.30, "futures": 0.25},
+                venues=[],
+            ),
+            guardian._vote("NEUTRAL", 0.10, "NO_OPPOSITE_BUILD", oi_pct=0.0),
+        )
+        testing = self._assess_with_votes(state, pos, 100.2, supportive)
+        self.assertEqual(first["guardian_phase"], "FIRST_PULLBACK")
+        self.assertEqual(testing["guardian_phase"], "RECOVERY_TEST")
+        self.assertEqual(pos.guardian_s_candidate_since, candidate_since)
+        return adverse, supportive, candidate_since
+
+    def test_weak_reclaim_then_new_extreme_is_failed_recovery(self):
+        state = self._state(100.0, 99.98, sell=True)
+        pos = SimpleNamespace(
+            position_cycle_id="failed-recovery", side="LONG", opened_at=90.0,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot", "cash_anchors": ["spot", "coinbase"],
+            },
+        )
+        adverse, _, candidate_since = self._open_recovery_test(state, pos)
+        for key, value in vars(self._state(100.3, 99.97, sell=True)).items():
+            setattr(state, key, value)
+        failed = self._assess_with_votes(state, pos, 100.3, adverse)
+        self.assertEqual(failed["guardian_phase"], "FAILED_RECOVERY")
+        self.assertEqual(failed["recovery_result"], "FAILED")
+        self.assertEqual(
+            failed["failed_recovery_reason"],
+            "RECLAIM_LOST_WITH_PERSISTENT_OPPOSING_FLOW",
+        )
+        self.assertEqual(pos.guardian_s_candidate_since, candidate_since)
+
+    def test_second_adverse_after_failed_recovery_can_kill_fast(self):
+        state = self._state(100.0, 99.98, sell=True)
+        pos = SimpleNamespace(
+            position_cycle_id="second-adverse", side="LONG", opened_at=90.0,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot", "cash_anchors": ["spot", "coinbase"],
+            },
+        )
+        adverse, _, _ = self._open_recovery_test(state, pos)
+        for now, price in ((100.3, 99.97), (100.4, 99.96)):
+            for key, value in vars(self._state(now, price, sell=True)).items():
+                setattr(state, key, value)
+            result = self._assess_with_votes(state, pos, now, adverse)
+        self.assertEqual(result["guardian_phase"], "FAILED_RECOVERY")
+        self.assertTrue(
+            result["adverse_event"]["recovery_path"]["second_adverse_kill_eligible"]
+        )
+        self.assertTrue(result["kill_fast"])
+        self.assertEqual(result["decision"], "EXIT")
+
+    def test_failed_recovery_can_retry_before_a_new_adverse_extreme(self):
+        state = self._state(100.0, 99.98, sell=True)
+        pos = SimpleNamespace(
+            position_cycle_id="recovery-retry", side="LONG", opened_at=90.0,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot", "cash_anchors": ["spot", "coinbase"],
+            },
+        )
+        adverse, supportive, candidate_since = self._open_recovery_test(state, pos)
+        for key, value in vars(self._state(100.3, 99.97, sell=True)).items():
+            setattr(state, key, value)
+        failed = self._assess_with_votes(state, pos, 100.3, adverse)
+        self.assertEqual(failed["guardian_phase"], "FAILED_RECOVERY")
+
+        for key, value in vars(self._state(100.4, 99.99, sell=False)).items():
+            setattr(state, key, value)
+        retry = self._assess_with_votes(state, pos, 100.4, supportive)
+        self.assertEqual(retry["guardian_phase"], "RECOVERY_TEST")
+        self.assertEqual(pos.guardian_s_candidate_since, candidate_since)
+        recovered = self._assess_with_votes(state, pos, 100.5, supportive)
+        self.assertEqual(recovered["guardian_phase"], "RECOVERED")
+        self.assertEqual(recovered["decision"], "HOLD")
 
     def test_adverse_flow_without_primary_cash_conversion_is_absorbed_pullback(self):
         state = self._state(100.0, 100.0, sell=True)

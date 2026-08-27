@@ -4,7 +4,7 @@ import time
 
 from loi_he_thong import liquidation_context
 
-VERSION="GUARDIAN_S_TIER_V9_ENTRY_ECONOMICS"
+VERSION="GUARDIAN_S_TIER_V10_RECOVERY_PATH"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -21,8 +21,9 @@ RUNNER_DETERIORATION_SECONDS=1.80
 TREND_DETERIORATION_SECONDS=3.00
 RUNNER_MIN_BEST_R=1.0
 COINBASE_STRICT_AGE_SECONDS=2.5
-RECOVERY_MIN_SECONDS=0.50
-RECOVERY_MAX_SECONDS=3.00
+RECOVERY_PHASES={
+    "HEALTHY","FIRST_PULLBACK","RECOVERY_TEST","RECOVERED","FAILED_RECOVERY",
+}
 
 def _clamp(x): return max(0.0,min(1.0,float(x)))
 def _mid(b,a):
@@ -37,6 +38,19 @@ def _pct(c,r):
     return None if c<=0 or r<=0 else (c-r)/r*100
 def _vote(status="NEUTRAL",conf=0.0,reason="",**m):
     return {"status":status,"confidence":round(_clamp(conf),6),"reason":reason,"metrics":m}
+
+def _reset_recovery_path(pos):
+    pos.guardian_s_phase="HEALTHY"
+    pos.guardian_s_pullback_started_at=0.0
+    pos.guardian_s_pullback_start_price=0.0
+    pos.guardian_s_worst_adverse_price=0.0
+    pos.guardian_s_worst_adverse_bps=0.0
+    pos.guardian_s_reclaim_peak_fraction=0.0
+    pos.guardian_s_reclaim_hold_since=0.0
+    pos.guardian_s_recovery_result="NONE"
+    pos.guardian_s_failed_recovery_reason=None
+    pos.guardian_s_pullback_flow_state="UNKNOWN"
+    pos.guardian_s_pullback_opposing_flow_state="UNKNOWN"
 
 def _last_fut(state,now):
     rows=getattr(state,"danh_sach_khop_lenh_futures",None) or ()
@@ -64,6 +78,7 @@ def _ensure(state,pos):
         pos.guardian_s_signature=()
         pos.guardian_s_scout_since=0.0
         pos.guardian_s_adverse_started_at=0.0
+        _reset_recovery_path(pos)
     return state.guardian_s_prices,state.guardian_s_oi
 
 def _sample(state,pos,now):
@@ -409,30 +424,6 @@ def _trend_context_shield(state,pos):
         "policy":"SOFT_CAUSAL_HOLD_ONLY_HARD_RISK_UNCHANGED",
     }
 
-def _adverse_recovery_window(pos,now,s1,s2,profile):
-    observed=bool(
-        profile.get("active") or s1.get("status")=="ADVERSE"
-        or s2.get("status")=="ADVERSE"
-    )
-    started=float(getattr(pos,"guardian_s_adverse_started_at",0.0) or 0.0)
-    if observed and started<=0.0:
-        started=now
-        pos.guardian_s_adverse_started_at=started
-    elapsed=max(0.0,now-started) if started>0.0 else 0.0
-    if not observed and started>0.0 and elapsed>RECOVERY_MAX_SECONDS:
-        started=0.0; elapsed=0.0
-        pos.guardian_s_adverse_started_at=0.0
-    return {
-        "adverse_observed_now":observed,
-        "started_at":started or None,
-        "elapsed_seconds":round(elapsed,4),
-        "eligible":bool(
-            started>0.0 and RECOVERY_MIN_SECONDS<=elapsed<=RECOVERY_MAX_SECONDS
-        ),
-        "minimum_seconds":RECOVERY_MIN_SECONDS,
-        "maximum_seconds":RECOVERY_MAX_SECONDS,
-    }
-
 def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_window=None):
     """Separate a new opposing thesis from forced flow and pullback noise.
 
@@ -520,16 +511,10 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_windo
 
     price_reclaim=bool(s1.get("status")=="SUPPORTIVE")
     recovery_window=dict(recovery_window or {})
-    recovery_confirmed=bool(
-        primary
-        and recovery_window.get("eligible")
-        and oi_state!="OPPOSITE_POSITION_BUILD"
-        and (
-            (price_reclaim and original_cash_flow)
-            or (price_stalled and original_cash_flow)
-            or (price_stalled and liquidation_phase=="DECELERATING")
-        )
-    )
+    # Recovery authority belongs to the ordered path state machine below.
+    # Contemporaneous evidence must never become recovery merely because a
+    # timer happened to fall inside an arbitrary window.
+    recovery_confirmed=False
     cross_evidence_conflict=bool(
         dual_cash and futures_supportive
         and oi_state!="OPPOSITE_POSITION_BUILD"
@@ -599,6 +584,178 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_windo
         "policy":"CLASSIFY_BEFORE_KILL_FAST",
     }
 
+def _recovery_anchor_price(prices,thesis):
+    primary=str((thesis or {}).get("primary_cash_anchor") or "").lower()
+    if primary in {"spot","coinbase"}:
+        value=float((prices or {}).get(primary,0.0) or 0.0)
+        if value>0.0:return primary,value
+    for name in ("spot","coinbase"):
+        value=float((prices or {}).get(name,0.0) or 0.0)
+        if value>0.0:return name,value
+    return None,0.0
+
+def _pullback_reference_price(current,anchor,s1,side):
+    """Reconstruct the pre-adverse cash reference from the shortest horizon."""
+    if current<=0.0 or not anchor:return current
+    rows=[]
+    for horizon,row in ((s1.get("metrics") or {}).get("horizons") or {}).items():
+        try:
+            seconds=float(horizon)
+            signed=float(((row or {}).get("moves") or {}).get(anchor))
+        except (TypeError,ValueError):continue
+        if signed<0.0:rows.append((seconds,signed))
+    if not rows:return current
+    signed=min(rows,key=lambda item:item[0])[1]
+    raw=signed*_sign(side)
+    denominator=1.0+raw/10000.0
+    return current/denominator if denominator>0.0 else current
+
+def _recovery_flow_state(s2):
+    signed=(s2.get("metrics") or {}).get("signed_imbalances") or {}
+    adverse=[]; favorable=[]
+    for name in ("spot","coinbase"):
+        try:value=float(signed.get(name,0.0) or 0.0)
+        except (TypeError,ValueError):continue
+        if value<=-MIN_FLOW_IMB:adverse.append(name)
+        elif value>=MIN_FLOW_IMB:favorable.append(name)
+    opposing=("PERSISTENT" if len(adverse)>=2 else
+              "PRESENT" if adverse else "DECAYED")
+    favorable_state=("MULTI_CASH_RETURN" if len(favorable)>=2 else
+                     "PRIMARY_CASH_RETURN" if favorable else "ABSENT")
+    return opposing,favorable_state,adverse,favorable
+
+def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event):
+    """Remember pullback -> recovery -> failure without making time an exit rule."""
+    phase=str(getattr(pos,"guardian_s_phase","HEALTHY") or "HEALTHY").upper()
+    if phase not in RECOVERY_PHASES:phase="HEALTHY"
+    previous_phase=phase
+    price_adverse=bool(s1.get("status")=="ADVERSE" or profile.get("active"))
+    price_supportive=bool(s1.get("status")=="SUPPORTIVE")
+    opposing,favorable,adverse_cash,favorable_cash=_recovery_flow_state(s2)
+    conversion=("CONVERTING" if price_supportive and favorable_cash else
+                "FLOW_NOT_CONVERTING" if favorable_cash else
+                "PRICE_ONLY_RECLAIM" if price_supportive else "ABSENT")
+    anchor,current=_recovery_anchor_price(prices,thesis)
+
+    if phase=="RECOVERED":
+        _reset_recovery_path(pos)
+        phase="HEALTHY"
+
+    if phase=="HEALTHY" and price_adverse and not adverse_event.get("kill_fast_eligible"):
+        phase="FIRST_PULLBACK"
+        pos.guardian_s_pullback_started_at=now
+        pos.guardian_s_pullback_start_price=_pullback_reference_price(
+            current,anchor,s1,getattr(pos,"side","")
+        )
+        pos.guardian_s_worst_adverse_price=current
+        pos.guardian_s_worst_adverse_bps=0.0
+        pos.guardian_s_reclaim_peak_fraction=0.0
+        pos.guardian_s_reclaim_hold_since=0.0
+        pos.guardian_s_recovery_result="PULLBACK_OPEN"
+        pos.guardian_s_failed_recovery_reason=None
+        pos.guardian_s_pullback_flow_state=conversion
+        pos.guardian_s_pullback_opposing_flow_state=opposing
+        if float(getattr(pos,"guardian_s_candidate_since",0.0) or 0.0)<=0.0:
+            pos.guardian_s_candidate_since=now
+
+    start=float(getattr(pos,"guardian_s_pullback_start_price",0.0) or 0.0)
+    previous_worst=float(getattr(pos,"guardian_s_worst_adverse_bps",0.0) or 0.0)
+    signed_move=(
+        float(_bps(current,start) or 0.0)*_sign(getattr(pos,"side",""))
+        if current>0.0 and start>0.0 else 0.0
+    )
+    current_adverse=max(0.0,-signed_move)
+    new_extreme=bool(current_adverse>previous_worst+1e-9)
+    if new_extreme:
+        pos.guardian_s_worst_adverse_bps=current_adverse
+        pos.guardian_s_worst_adverse_price=current
+    worst=max(previous_worst,current_adverse)
+    reclaim_fraction=(
+        _clamp((worst-current_adverse)/worst) if worst>0.0 else 0.0
+    )
+    peak=max(
+        float(getattr(pos,"guardian_s_reclaim_peak_fraction",0.0) or 0.0),
+        reclaim_fraction,
+    )
+    pos.guardian_s_reclaim_peak_fraction=peak
+
+    recovery_attempt=bool(
+        price_supportive and favorable_cash and opposing!="PERSISTENT"
+    )
+    if phase in {"FIRST_PULLBACK","FAILED_RECOVERY"} and recovery_attempt:
+        phase="RECOVERY_TEST"
+        pos.guardian_s_reclaim_hold_since=now
+        pos.guardian_s_recovery_result="IN_PROGRESS"
+
+    failed_reason=None
+    hold_since=float(getattr(pos,"guardian_s_reclaim_hold_since",0.0) or 0.0)
+    held_across_observation=bool(hold_since>0.0 and now>hold_since)
+    if phase=="RECOVERY_TEST":
+        recovery_success=bool(
+            held_across_observation and price_supportive and favorable_cash
+            and opposing!="PERSISTENT" and conversion=="CONVERTING"
+            and s3.get("status")!="ADVERSE"
+        )
+        lost_reclaim=bool(
+            peak>0.0 and reclaim_fraction<peak and price_adverse
+            and opposing=="PERSISTENT"
+        )
+        failed_conversion=bool(
+            favorable_cash and conversion=="FLOW_NOT_CONVERTING"
+            and opposing=="PERSISTENT"
+        )
+        if recovery_success:
+            phase="RECOVERED"
+            pos.guardian_s_recovery_result="SUCCESS"
+            pos.guardian_s_failed_recovery_reason=None
+            pos.guardian_s_signature=()
+            pos.guardian_s_candidate_since=0.0
+        elif lost_reclaim or failed_conversion or (
+            new_extreme and price_adverse and opposing=="PERSISTENT"
+        ):
+            phase="FAILED_RECOVERY"
+            failed_reason=("RECLAIM_LOST_WITH_PERSISTENT_OPPOSING_FLOW"
+                           if lost_reclaim else
+                           "FAVORABLE_FLOW_FAILED_TO_CONVERT"
+                           if failed_conversion else
+                           "NEW_ADVERSE_EXTREME_AFTER_RECOVERY_ATTEMPT")
+            pos.guardian_s_recovery_result="FAILED"
+            pos.guardian_s_failed_recovery_reason=failed_reason
+
+    dual_cash=bool(
+        (adverse_event.get("cash_acceptance") or {}).get("dual_cash_adverse")
+    )
+    opposite_build=bool(
+        (adverse_event.get("oi") or {}).get("state")=="OPPOSITE_POSITION_BUILD"
+    )
+    second_adverse_kill=bool(
+        previous_phase=="FAILED_RECOVERY" and phase=="FAILED_RECOVERY"
+        and price_adverse and dual_cash and opposing=="PERSISTENT"
+        and (new_extreme or opposite_build or bool((thesis or {}).get("broken")))
+    )
+    pos.guardian_s_phase=phase
+    started=float(getattr(pos,"guardian_s_pullback_started_at",0.0) or 0.0)
+    return {
+        "guardian_phase":phase,
+        "previous_phase":previous_phase,
+        "pullback_start_ms":round(started*1000.0,3) if started>0.0 else None,
+        "pullback_anchor":anchor,
+        "pullback_start_price":start or None,
+        "worst_adverse_price":float(getattr(pos,"guardian_s_worst_adverse_price",0.0) or 0.0) or None,
+        "worst_adverse_bps":round(worst,6),
+        "reclaim_fraction":round(reclaim_fraction,6),
+        "reclaim_hold_seconds":round(max(0.0,now-hold_since),4) if hold_since>0.0 else 0.0,
+        "recovery_conversion_state":conversion,
+        "opposing_flow_state":opposing,
+        "favorable_flow_state":favorable,
+        "recovery_result":str(getattr(pos,"guardian_s_recovery_result","NONE") or "NONE"),
+        "failed_recovery_reason":failed_reason or getattr(pos,"guardian_s_failed_recovery_reason",None),
+        "new_adverse_extreme":new_extreme,
+        "second_adverse_kill_eligible":second_adverse_kill,
+        "time_only_authority":False,
+        "single_venue_kill_authority":False,
+    }
+
 def assess(state,pos,now=None):
     now=time.time() if now is None else float(now)
     p,ph,oh=_sample(state,pos,now)
@@ -628,21 +785,37 @@ def assess(state,pos,now=None):
         and getattr(pos,"floor_r",None) is not None
     )
     trend_context=_trend_context_shield(state,pos)
-    recovery_window=_adverse_recovery_window(pos,now,s1,s2,profile)
     adverse_event=_classify_adverse_event(
-        state,pos,now,s1,s2,s3,profile,thesis,recovery_window
+        state,pos,now,s1,s2,s3,profile,thesis
     )
+    recovery_path=_advance_recovery_path(
+        pos,now,p,s1,s2,s3,profile,thesis,adverse_event
+    )
+    preserve_deterioration=bool(
+        recovery_path["guardian_phase"] in {
+            "FIRST_PULLBACK","RECOVERY_TEST","FAILED_RECOVERY",
+        }
+    )
+    def clear_deterioration_if_path_complete():
+        if not preserve_deterioration:
+            pos.guardian_s_signature=()
+            pos.guardian_s_candidate_since=0.0
+    adverse_event["recovery_path"]=recovery_path
+    if recovery_path["guardian_phase"]=="RECOVERED":
+        adverse_event["classification"]="THESIS_RECOVERY_CONFIRMED"
+        adverse_event["reason"]="RECLAIM_HELD_WITH_FAVORABLE_CASH_CONVERSION"
     time_to_edge=_time_to_edge(pos,now,p,s1,s2,s3,thesis)
     trend_fast_override=bool(adverse_event["kill_fast_eligible"])
-    kill_fast=bool(
-        causal_exit and profile["kill_fast"]
-        and trend_fast_override
-    )
+    kill_fast=bool(causal_exit and (
+        (profile["kill_fast"] and trend_fast_override)
+        or recovery_path["second_adverse_kill_eligible"]
+    ))
     classifier_shield=bool(
         causal_exit and profile["kill_fast"] and not kill_fast
     )
     recovery_shield=bool(
-        adverse_event["classification"]=="THESIS_RECOVERY_CONFIRMED"
+        recovery_path["guardian_phase"] in {"RECOVERY_TEST","RECOVERED"}
+        and adverse_event["classification"]!="THESIS_BREAK_CONFIRMED"
     )
     runner_shield=bool(causal_exit and runner_active and not kill_fast)
     trend_shield=bool(
@@ -668,38 +841,46 @@ def assess(state,pos,now=None):
         if getattr(pos,"guardian_s_signature",())!=sig:
             scout_since=float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0)
             pos.guardian_s_signature=sig
-            pos.guardian_s_candidate_since=scout_since if scout_since>0.0 else now
+            if float(getattr(pos,"guardian_s_candidate_since",0.0) or 0.0)<=0.0:
+                pos.guardian_s_candidate_since=scout_since if scout_since>0.0 else now
         if now-float(getattr(pos,"guardian_s_candidate_since",now) or now)>=hold:
             decision,reason="EXIT","TIER_S_PRICE_PLUS_CAUSE_EXIT"
         else:
             decision,reason="DETERIORATING","TIER_S_PRICE_PLUS_CAUSE_CONVERGENCE"
     elif recovery_shield:
-        decision,reason,hold="HOLD","THESIS_RECOVERY_SHIELD",0.0
-        exit_profile="THESIS_RECOVERY"
-        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
+        decision,reason,hold=(
+            "HOLD",
+            "THESIS_RECOVERY_SHIELD" if recovery_path["guardian_phase"]=="RECOVERED"
+            else "RECOVERY_TEST_IN_PROGRESS",
+            0.0,
+        )
+        exit_profile=("THESIS_RECOVERY" if recovery_path["guardian_phase"]=="RECOVERED"
+                      else "RECOVERY_TEST")
+        if recovery_path["guardian_phase"]=="RECOVERED":
+            pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
     elif raw_causal_exit and external_guard["blocks_binance_only_exit"]:
         decision,reason,hold="DETERIORATING","BINANCE_ONLY_ADVERSE_AWAITING_EXTERNAL_OR_OI",0.0
-        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
+        clear_deterioration_if_path_complete()
     elif raw_causal_exit and not thesis["broken"]:
         decision,reason,hold="DETERIORATING","ENTRY_THESIS_NOT_BROKEN",0.0
         exit_profile="THESIS_HOLDS"
-        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
+        clear_deterioration_if_path_complete()
     elif s1["status"]=="ADVERSE":
         decision,reason,hold="DETERIORATING","PRICE_ADVERSE_AWAITING_FLOW_OR_OI",0.0
-        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
+        clear_deterioration_if_path_complete()
     elif profile["active"]:
         decision,reason,hold="DETERIORATING","EARLY_ADVERSE_SCOUT_AWAITING_CONFIRM",0.0
         exit_profile="SCOUT"
-        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
+        clear_deterioration_if_path_complete()
     elif s2["status"]=="ADVERSE" and s3["status"]=="ADVERSE":
         decision,reason,hold="HOLD","FLOW_AND_OI_NOT_CONVERTED_TO_PRICE",0.0
-        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
+        clear_deterioration_if_path_complete()
     elif s2["status"]=="ADVERSE" or s3["status"]=="ADVERSE":
         decision,reason,hold="HOLD","ADVERSE_CAUSE_NOT_CONVERTED_TO_PRICE",0.0
-        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
+        clear_deterioration_if_path_complete()
     else:
         decision,reason,hold="HOLD","NO_TIER_S_ADVERSE_CONVERGENCE",0.0
-        pos.guardian_s_signature=(); pos.guardian_s_candidate_since=0.0
+        clear_deterioration_if_path_complete()
 
     if decision=="HOLD" and not recovery_shield and len(supportive)==3:
         reason="THREE_S_SUPPORTIVE"
@@ -727,6 +908,14 @@ def assess(state,pos,now=None):
             "exit_profile":exit_profile,"runner_shield_active":runner_shield,
             "trend_shield_active":trend_shield,"trend_context":trend_context,
             "recovery_shield_active":recovery_shield,
+            "guardian_phase":recovery_path["guardian_phase"],
+            "pullback_start_ms":recovery_path["pullback_start_ms"],
+            "worst_adverse_bps":recovery_path["worst_adverse_bps"],
+            "reclaim_fraction":recovery_path["reclaim_fraction"],
+            "recovery_conversion_state":recovery_path["recovery_conversion_state"],
+            "opposing_flow_state":recovery_path["opposing_flow_state"],
+            "recovery_result":recovery_path["recovery_result"],
+            "failed_recovery_reason":recovery_path["failed_recovery_reason"],
             "time_to_edge":time_to_edge,
             "kill_fast":kill_fast,"scout_since":float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0) or None,
             "deterioration_since":float(getattr(pos,"guardian_s_candidate_since",0.0) or 0.0) or None,
