@@ -101,6 +101,11 @@ class SharedState:
         self.cpu_budget_1h_remaining = 0.0
         self.governor_mode = 'WARMUP'
         self.host_cpu_entry_allowed = False
+        self.live_entry_cpu_allowed = False
+        self.shadow_entry_cpu_allowed = True
+        self.shadow_cpu_scheduler_mode = 'WARMUP'
+        self.shadow_entry_eval_interval_seconds = 0.0
+        self.shadow_entry_idle_skips = 0
         self.host_cpu_hard_limit_respected = True
         self.host_cpu_top_processes = []
         self.production_workload_blockers = []

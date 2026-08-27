@@ -25,6 +25,8 @@ class HostCpuGovernorTests(unittest.TestCase):
         self.assertAlmostEqual(snap["host_cpu_15m_pct"], 20.0)
         self.assertEqual(snap["governor_mode"], "SAFETY_ONLY")
         self.assertFalse(snap["entry_cpu_allowed"])
+        self.assertFalse(snap["live_entry_cpu_allowed"])
+        self.assertTrue(snap["shadow_entry_cpu_allowed"])
 
     def test_modes_and_state_contract(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -47,6 +49,8 @@ class HostCpuGovernorTests(unittest.TestCase):
                 }
                 governor.publish(state, payload)
                 self.assertTrue(state.host_cpu_entry_allowed)
+                self.assertTrue(state.live_entry_cpu_allowed)
+                self.assertTrue(state.shadow_entry_cpu_allowed)
                 self.assertEqual(state.governor_mode, "NORMAL")
 
     def test_recent_history_survives_process_restart(self):

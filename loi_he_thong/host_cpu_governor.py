@@ -371,7 +371,13 @@ class HostCpuGovernor:
             "governor_mode": self.mode,
             "host_cpu_p95_pct": round(p95, 4),
             "host_cpu_projected_peak_pct": round(projected_peak, 4),
+            # Backward-compatible name: this is a production/live admission
+            # gate.  Shadow execution must keep every otherwise eligible
+            # sample; CPU pressure may only lower non-authoritative evaluation
+            # cadence, never censor a demo trade.
             "entry_cpu_allowed": self.mode in ("NORMAL", "CONSERVE"),
+            "live_entry_cpu_allowed": self.mode in ("NORMAL", "CONSERVE"),
+            "shadow_entry_cpu_allowed": True,
             "hard_limit_respected": actual_peak < self.hard_pct and (
                 external_peak is None or float(external_peak) < self.hard_pct
             ),
@@ -390,6 +396,12 @@ class HostCpuGovernor:
         state.governor_mode = payload["governor_mode"]
         state.host_cpu_p95_pct = payload.get("host_cpu_p95_pct", 0.0)
         state.host_cpu_entry_allowed = payload["entry_cpu_allowed"]
+        state.live_entry_cpu_allowed = payload.get(
+            "live_entry_cpu_allowed", payload["entry_cpu_allowed"]
+        )
+        state.shadow_entry_cpu_allowed = bool(
+            payload.get("shadow_entry_cpu_allowed", True)
+        )
         state.host_cpu_hard_limit_respected = payload["hard_limit_respected"]
         state.host_cpu_top_processes = payload["top_cpu_processes"]
         state.production_workload_blockers = payload["production_blockers"]

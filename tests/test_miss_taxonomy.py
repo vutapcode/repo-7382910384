@@ -6,6 +6,36 @@ from recorder.decision_outcomes import DecisionOutcomeTracker
 
 
 class MissTaxonomyTests(unittest.TestCase):
+    def test_launcher_allows_only_canonical_dual_cash_transition_bypass(self):
+        state = SimpleNamespace(bias_state="SHORT")
+        base = {"decision": "GO", "side": "LONG", "ignition": {}}
+        self.assertFalse(launcher._bias_or_transition_authorized(base, state))
+
+        transition = {
+            **base,
+            "ignition": {
+                "transition_confirmed": True,
+                "transition_authority": {
+                    "status": "REVERSAL_CONFIRMED",
+                    "side": "LONG",
+                    "cash_synchronous_transition": True,
+                    "accepted_cash_venues": [
+                        "binance_spot", "coinbase_spot",
+                    ],
+                },
+            },
+        }
+        self.assertTrue(
+            launcher._bias_or_transition_authorized(transition, state)
+        )
+
+        transition["ignition"]["transition_authority"][
+            "accepted_cash_venues"
+        ] = ["binance_spot"]
+        self.assertFalse(
+            launcher._bias_or_transition_authorized(transition, state)
+        )
+
     def test_frozen_bias_mismatch_has_distinct_taxonomy(self):
         result = {
             "decision": "WAIT",

@@ -33,10 +33,13 @@ os.environ["SMC_MAINNET_EXCLUSIVE_ACCOUNT"] = "false"
 
 import khoi_dong as app
 
-VERSION = "MAINNET_TIER_S_SHADOW_V2_CPU_SPLIT"
+VERSION = "MAINNET_TIER_S_SHADOW_V3_ADAPTIVE_DEMO_CPU"
 ENTRY_POLL = 0.10
 BIAS_SCOUT = 0.25
 GUARD_POLL = 0.05
+SHADOW_ENTRY_WARM_INTERVAL = 0.20
+SHADOW_ENTRY_IDLE_INTERVAL = 0.50
+SHADOW_ACTIVITY_MAX_AGE_MS = 800
 IDLE = 60.0
 QTY_BTC = 0.001
 LEVERAGE = 20
@@ -97,6 +100,66 @@ def _authority_delay(state, normal_delay):
     if _live_entry_authority(state):
         return host_cpu_governor.feature_delay(state, normal_delay)
     return float(normal_delay)
+
+
+def _shadow_activity_profile(state, now=None):
+    """Cheap wake/sleep hint; it never grants or vetoes Entry authority."""
+    if _live_entry_authority(state):
+        return "LIVE"
+    pos = getattr(state, "mainnet_shadow_position", None)
+    if pos is not None and bool(getattr(pos, "active", False)):
+        return "HOT"
+    if isinstance(getattr(state, "mainnet_shadow_pending_entry", None), dict):
+        return "HOT"
+    if isinstance(getattr(state, "_ignition_episode", None), dict) or isinstance(
+        getattr(state, "_ignition_pending_reversal_episode", None), dict
+    ):
+        return "HOT"
+    persistent = dict(getattr(state, "persistent_metaorder_shadow", {}) or {})
+    if str(persistent.get("candidate_side", "ABSTAIN")).upper() in (
+        "LONG", "SHORT"
+    ):
+        return "HOT"
+
+    now_ms = int((time.time() if now is None else float(now)) * 1000.0)
+    engine = getattr(state, "_ignition_signal_engine", None)
+    warm = False
+    for venue in getattr(engine, "venues", {}).values():
+        history = getattr(venue, "history", ())
+        if not history:
+            continue
+        row = history[-1]
+        age_ms = now_ms - int(row.get("receive_time_ms", 0) or 0)
+        if age_ms < 0 or age_ms > SHADOW_ACTIVITY_MAX_AGE_MS:
+            continue
+        if bool(row.get("strong")):
+            return "HOT"
+        warm = True
+    return "WARM" if warm else "IDLE"
+
+
+def _shadow_entry_eval_interval(state, now=None):
+    """Keep a 100 ms scout, but avoid full council work while causally idle."""
+    profile = _shadow_activity_profile(state, now=now)
+    state.shadow_cpu_scheduler_mode = profile
+    if profile in ("LIVE", "HOT"):
+        interval = ENTRY_POLL
+    elif profile == "WARM":
+        interval = SHADOW_ENTRY_WARM_INTERVAL
+    else:
+        interval = SHADOW_ENTRY_IDLE_INTERVAL
+    state.shadow_entry_eval_interval_seconds = interval
+    return interval
+
+
+def _shadow_bias_delay(state):
+    profile = _shadow_activity_profile(state)
+    state.shadow_cpu_scheduler_mode = profile
+    if profile in ("LIVE", "HOT"):
+        return _authority_delay(state, BIAS_SCOUT)
+    if profile == "WARM":
+        return 0.35
+    return 0.50
 
 
 async def _idle(*_args, **_kwargs):
@@ -360,6 +423,29 @@ def _entry_quorum_ok(result, state, now):
             ignition.get("proposer") != "futures"
             or ignition.get("futures_cash_response_ok")
         )
+    )
+
+
+def _bias_or_transition_authorized(result, state):
+    """Allow only the canonical dual-cash transition to bypass old Bias."""
+    side = str((result or {}).get("side") or "ABSTAIN").upper()
+    bias_side = str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
+    if side not in ("LONG", "SHORT"):
+        return False
+    if bias_side not in ("LONG", "SHORT") or side == bias_side:
+        return True
+    ignition = dict((result or {}).get("ignition") or {})
+    transition = dict(ignition.get("transition_authority") or {})
+    accepted = {
+        str(value).lower()
+        for value in (transition.get("accepted_cash_venues") or ())
+    }
+    return bool(
+        ignition.get("transition_confirmed")
+        and transition.get("status") == "REVERSAL_CONFIRMED"
+        and str(transition.get("side") or "").upper() == side
+        and transition.get("cash_synchronous_transition")
+        and {"binance_spot", "coinbase_spot"}.issubset(accepted)
     )
 
 
@@ -1417,7 +1503,7 @@ async def _bias_loop():
             raise
         except Exception:
             logging.exception("[MAINNET-SHADOW] fast bias scout failure")
-        await asyncio.sleep(_authority_delay(app.state, BIAS_SCOUT))
+        await asyncio.sleep(_shadow_bias_delay(app.state))
 
 
 async def _entry_loop():
@@ -1507,7 +1593,12 @@ async def _entry_loop():
                 s.mainnet_shadow_entry_state = "WAIT_HOST_CPU_BUDGET"
                 await asyncio.sleep(host_cpu_governor.feature_delay(s, ENTRY_POLL))
                 continue
-            s.mainnet_shadow_cpu_degraded = not host_cpu_governor.entry_allowed(s)
+            # CPU admission applies to real orders only. Shadow keeps trading;
+            # its non-authoritative full-evaluation cadence adapts while the
+            # 100 ms executed-flow collectors remain continuously active.
+            s.mainnet_shadow_cpu_degraded = False
+            s.shadow_entry_cpu_allowed = True
+            s.mainnet_live_cpu_blocked = not host_cpu_governor.entry_allowed(s)
             if not _spot_fresh(now):
                 s.mainnet_shadow_entry_state = "WAIT_STALE_SPOT"
                 await asyncio.sleep(ENTRY_POLL)
@@ -1524,6 +1615,17 @@ async def _entry_loop():
                 round(float(getattr(s, "thoi_gian_dong_tien_futures_cuoi", 0.0) or 0.0), 3),
                 round(float(getattr(s, "open_interest", 0.0) or 0.0), 3),
             )
+            minimum_eval_interval = _shadow_entry_eval_interval(s, now=now)
+            if (
+                not _live_entry_authority(s)
+                and last_eval_at > 0.0
+                and now - last_eval_at < minimum_eval_interval
+            ):
+                s.shadow_entry_idle_skips = int(
+                    getattr(s, "shadow_entry_idle_skips", 0) or 0
+                ) + 1
+                await asyncio.sleep(ENTRY_POLL)
+                continue
             if revision == last_revision and now - last_eval_at < 0.50:
                 await asyncio.sleep(_authority_delay(s, ENTRY_POLL))
                 continue
@@ -1716,8 +1818,9 @@ async def _entry_loop():
             if side not in ("LONG", "SHORT"):
                 await asyncio.sleep(ENTRY_POLL)
                 continue
-            bias_side = str(getattr(s, "bias_state", "ABSTAIN")).upper()
-            if bias_side in ("LONG", "SHORT") and side != bias_side:
+            if not _bias_or_transition_authorized(result, s):
+                s.mainnet_shadow_entry_state = "WAIT_BIAS_OR_TRANSITION_AUTHORITY"
+                s.mainnet_shadow_last_skip = "BIAS_ALIGNMENT_FAIL"
                 await asyncio.sleep(ENTRY_POLL)
                 continue
 

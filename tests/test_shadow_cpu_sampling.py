@@ -58,6 +58,9 @@ class ShadowCpuSamplingTests(unittest.TestCase):
             "if _live_entry_authority(s) and not host_cpu_governor.entry_allowed(s)",
             launcher,
         )
+        self.assertIn("s.shadow_entry_cpu_allowed = True", launcher)
+        self.assertIn("minimum_eval_interval = _shadow_entry_eval_interval", launcher)
+        self.assertIn("if bool(row.get(\"strong\")):", launcher)
         self.assertIn(
             's.wstrade_live_arm_reason = "LIVE_HOST_CPU_OR_HEALTH_BLOCKED"',
             launcher,

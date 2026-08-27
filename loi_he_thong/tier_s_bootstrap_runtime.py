@@ -116,6 +116,21 @@ async def vong_lap_runtime_heartbeat():
                 getattr(state, "cpu_budget_1h_remaining", 0.0) or 0.0
             ),
             "governor_mode": getattr(state, "governor_mode", "WARMUP"),
+            "live_entry_cpu_allowed": bool(
+                getattr(state, "live_entry_cpu_allowed", False)
+            ),
+            "shadow_entry_cpu_allowed": bool(
+                getattr(state, "shadow_entry_cpu_allowed", True)
+            ),
+            "shadow_cpu_scheduler_mode": getattr(
+                state, "shadow_cpu_scheduler_mode", "WARMUP"
+            ),
+            "shadow_entry_eval_interval_seconds": float(
+                getattr(state, "shadow_entry_eval_interval_seconds", 0.0) or 0.0
+            ),
+            "shadow_entry_idle_skips": int(
+                getattr(state, "shadow_entry_idle_skips", 0) or 0
+            ),
             "cpu_history_restored": bool(
                 getattr(state, "cpu_history_restored", False)
             ),
