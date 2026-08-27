@@ -46,6 +46,9 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
     venues = dict(flow.get("venues") or {})
     proposer = _u(ignition.get("proposer"))
     primary_state = _u((venues.get(proposer.lower()) or {}).get("state"))
+    questions = dict((thesis_audit or {}).get("questions") or {})
+    composite_flow = dict(questions.get("q3_flow_efficiency") or {})
+    composite_state = _u(composite_flow.get("status"), primary_state)
     oi = dict(ignition.get("oi_verification_state") or {})
     if not oi:
         raw_oi = dict(ignition.get("oi_intent") or {})
@@ -63,7 +66,17 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
         "bias_phase": _u(context.get("phase")),
         "consumed_band": consumed_band(ignition.get("consumed_fraction")),
         "oi_quality": oi_status,
-        "flow_efficiency_state": primary_state,
+        # Cohorts must learn the state that actually authorized Entry.  When
+        # the proposer is ambiguous but an independent cash venue confirms,
+        # storing only the proposer state poisons the empirical cohort.
+        "flow_efficiency_state": composite_state,
+        "primary_flow_efficiency_state": primary_state,
+        "flow_confirmation_source": _u(
+            composite_flow.get("confirmation_source"), "NONE"
+        ),
+        "independent_flow_witnesses": tuple(
+            sorted(composite_flow.get("independent_witness_venues") or ())
+        ),
     }
 
 

@@ -229,6 +229,12 @@ class IgnitionCoreTests(unittest.TestCase):
             {"binance_spot": rows}, "LONG", ("binance_spot",)
         )["venues"]["binance_spot"]
         self.assertEqual(venue["state"], "FADING")
+        self.assertEqual(
+            venue["classification_reason"],
+            "ABSOLUTE_FLOW_AND_PROGRESS_COLLAPSED",
+        )
+        self.assertTrue(venue["diagnostics"]["flow_collapsed"])
+        self.assertTrue(venue["diagnostics"]["progress_collapsed"])
         self.assertGreater(
             venue["windows"][-1]["efficiency_bps_per_million"],
             venue["windows"][-2]["efficiency_bps_per_million"],
@@ -244,6 +250,10 @@ class IgnitionCoreTests(unittest.TestCase):
             {"binance_spot": rows}, "SHORT", ("binance_spot",)
         )["venues"]["binance_spot"]
         self.assertEqual(venue["state"], "REACCELERATION_UNCONFIRMED")
+        self.assertEqual(
+            venue["classification_reason"],
+            "ONE_BURST_AFTER_TWO_NON_CONVERTING_WINDOWS",
+        )
 
     def test_two_converting_windows_confirm_continuation(self):
         rows = self._efficiency_rows(
@@ -254,6 +264,7 @@ class IgnitionCoreTests(unittest.TestCase):
             {"binance_spot": rows}, "LONG", ("binance_spot",)
         )["venues"]["binance_spot"]
         self.assertEqual(venue["state"], "CONTINUING_CONFIRMED")
+        self.assertTrue(venue["diagnostics"]["conversion_survived"])
 
     def test_bias_wait_reasons_are_diagnostic_only(self):
         abstain = state(now=3.0)

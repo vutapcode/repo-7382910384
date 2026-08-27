@@ -128,6 +128,11 @@ def _flow_question(result, ignition, impact):
     independent_continuation = any(
         state == "CONTINUING_CONFIRMED" for state in other_states.values()
     )
+    independent_witnesses = sorted(
+        name for name, state in other_states.items()
+        if state == "CONTINUING_CONFIRMED"
+    )
+    primary_continuation = primary_state == "CONTINUING_CONFIRMED"
     composite_veto = bool(
         primary_state in ("ABSORBED", "EXHAUSTED")
         and not independent_continuation
@@ -137,13 +142,13 @@ def _flow_question(result, ignition, impact):
     converts = bool(
         not composite_veto
         and (
-            primary_state == "CONTINUING_CONFIRMED"
+            primary_continuation
             or independent_continuation
         )
     )
     if composite_veto:
         status = primary_state
-    elif primary_state == "CONTINUING_CONFIRMED" or independent_continuation:
+    elif primary_continuation or independent_continuation:
         status = "CONTINUING_CONFIRMED"
     elif (
         primary_state == "REACCELERATION_UNCONFIRMED"
@@ -171,6 +176,12 @@ def _flow_question(result, ignition, impact):
         "primary_state": primary_state,
         "other_cash_states": other_states,
         "independent_cash_continuation": independent_continuation,
+        "confirmation_source": (
+            "PRIMARY_CASH_SURVIVAL" if primary_continuation
+            else "INDEPENDENT_CASH_WITNESS" if independent_continuation
+            else "NONE"
+        ),
+        "independent_witness_venues": independent_witnesses,
         "composite_veto": composite_veto,
         "converts": converts,
         "flow_efficiency": efficiency,

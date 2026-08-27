@@ -23,6 +23,41 @@ def snapshot(**overrides):
 
 
 class EntryEconomicsV2Tests(unittest.TestCase):
+    def test_composite_cash_witness_state_is_used_for_economic_cohort(self):
+        result = {
+            "side": "SHORT", "entry_mode": "PERSISTENT_METAORDER",
+            "ignition": {
+                "proposer": "binance_spot",
+                "proof_type": "PERSISTENT_METAORDER",
+                "consumed_fraction": 0.20,
+                "flow_efficiency": {"venues": {
+                    "binance_spot": {
+                        "state": "REACCELERATION_UNCONFIRMED"
+                    },
+                    "coinbase_spot": {"state": "CONTINUING_CONFIRMED"},
+                }},
+                "bias_snapshot": {"direction_context": {
+                    "phase": "ESTABLISHED_TREND"
+                }},
+            },
+        }
+        audit = {"questions": {"q3_flow_efficiency": {
+            "status": "CONTINUING_CONFIRMED",
+            "confirmation_source": "INDEPENDENT_CASH_WITNESS",
+            "independent_witness_venues": ["coinbase_spot"],
+        }}}
+        row = entry_economics_v2.feature_snapshot(
+            result, {"regime": "NORMAL"}, "TAKER", audit
+        )
+        self.assertEqual(
+            row["primary_flow_efficiency_state"],
+            "REACCELERATION_UNCONFIRMED",
+        )
+        self.assertEqual(row["flow_efficiency_state"], "CONTINUING_CONFIRMED")
+        self.assertEqual(
+            row["flow_confirmation_source"], "INDEPENDENT_CASH_WITNESS"
+        )
+
     def test_insufficient_data_never_invents_forward_edge(self):
         report = entry_economics_v2.estimate(SimpleNamespace(), snapshot())
         self.assertEqual(report["status"], "BOOTSTRAP_UNVERIFIED")

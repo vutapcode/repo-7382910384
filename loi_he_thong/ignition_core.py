@@ -177,8 +177,17 @@ def _flow_efficiency_snapshot(histories, side, cash_venues):
                 windows, valid = fallback, fallback_valid
                 resolution_ms = fallback_resolution_ms
                 source = "PERSISTENT_1S_EXECUTED_FLOW_FALLBACK"
+        diagnostics = {
+            "flow_change_ratio": None,
+            "progress_change_ratio": None,
+            "flow_collapsed": False,
+            "progress_collapsed": False,
+            "absorbed_before_burst": False,
+            "conversion_survived": False,
+        }
         if len(valid) != 3:
             state = "UNKNOWN"
+            classification_reason = "INSUFFICIENT_CONTIGUOUS_MATERIAL_WINDOWS"
         else:
             old, previous, current = valid
             material_progress = MATERIAL_PRICE_BPS * 0.70
@@ -214,30 +223,53 @@ def _flow_efficiency_snapshot(histories, side, cash_venues):
                 and current["price_progress_bps"] >= material_progress
                 and current["efficiency_bps_per_million"] > 0.0
             )
+            diagnostics = {
+                "flow_change_ratio": round(
+                    current["directional_quote"]
+                    / previous["directional_quote"], 6
+                ) if previous["directional_quote"] > 0.0 else None,
+                "progress_change_ratio": round(
+                    current["price_progress_bps"]
+                    / previous["price_progress_bps"], 6
+                ) if previous["price_progress_bps"] > 0.0 else None,
+                "flow_collapsed": flow_collapsed,
+                "progress_collapsed": progress_collapsed,
+                "absorbed_before_burst": absorbed_before_burst,
+                "conversion_survived": conversion_survived,
+            }
             # A prettier price/volume ratio cannot hide that both absolute
             # flow and absolute marginal progress collapsed.  This is a soft
             # timing state downstream, not an absorption veto.
             if flow_collapsed and progress_collapsed:
                 state = "FADING"
+                classification_reason = "ABSOLUTE_FLOW_AND_PROGRESS_COLLAPSED"
             # Two non-converting cash windows followed by one large print are
             # not yet a durable metaorder.  A later window or an independent
             # cash venue may confirm it without resetting the causal wave.
             elif absorbed_before_burst:
                 state = "REACCELERATION_UNCONFIRMED"
+                classification_reason = "ONE_BURST_AFTER_TWO_NON_CONVERTING_WINDOWS"
             elif flow_persists and no_progress and progress_decay_1 and progress_decay_2:
                 state = "EXHAUSTED"
+                classification_reason = "PERSISTENT_FLOW_WITH_PROGRESS_DECAY"
             elif flow_persists and repeated_no_progress:
                 state = "ABSORBED"
+                classification_reason = "PERSISTENT_FLOW_WITHOUT_PRICE_PROGRESS"
             elif (progress_decay_2 and efficiency_decay_2) or (
                 progress_decay_1 and efficiency_decay_1
             ):
                 state = "DECAYING"
+                classification_reason = "MARGINAL_CONVERSION_DECAYING"
             elif conversion_survived:
                 state = "CONTINUING_CONFIRMED"
+                classification_reason = "TWO_CONTIGUOUS_CONVERTING_WINDOWS"
             else:
                 state = "UNKNOWN"
+                classification_reason = "NO_DURABLE_CONVERSION_CLASSIFICATION"
         venues[venue] = {
             "state": state,
+            "classification_reason": classification_reason,
+            "diagnostics": diagnostics,
             "windows": windows,
             "window_resolution_ms": resolution_ms,
             "measurement_source": source,

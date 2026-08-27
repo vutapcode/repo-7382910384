@@ -174,12 +174,21 @@ def assess_entry(state, result, now):
     ignition = (result or {}).get("ignition") or {}
     report = snapshot(state, (result or {}).get("side"), now)
     oi = ignition.get("oi_intent") or {}
+    verification = ignition.get("oi_verification_state") or {}
+    verification_status = str(
+        verification.get("status") or "UNAVAILABLE"
+    ).upper()
     cash = set(ignition.get("cash_venues") or ())
     dual_cash = {"binance_spot", "coinbase_spot"}.issubset(cash)
-    unwind = bool(oi.get("fresh") and str(oi.get("intent") or "").upper() == "UNWIND")
+    # Only an OI refresh inside this exact causal episode may corroborate a
+    # forced unwind.  A young but unchanged pre-episode snapshot is UNKNOWN,
+    # even when the legacy intent metadata says fresh.
+    unwind = verification_status == "FRESH_UNWIND"
     tail = bool(report["decelerating"] and unwind and not dual_cash)
     report.update({
         "oi_unwind_confirmed": unwind,
+        "oi_verification_status": verification_status,
+        "raw_oi_intent": str(oi.get("intent") or "UNKNOWN").upper(),
         "independent_cash_confirmed": dual_cash,
         "tail_veto": tail,
         "reason": "LIQUIDATION_TAIL_COMPOSITE" if tail else "CONTEXT_ONLY",

@@ -16,6 +16,13 @@ def candidate(side="LONG", *, oi="UNWIND", cash=("binance_spot",)):
     return {"decision": "GO", "side": side, "ignition": {
         "cash_venues": list(cash),
         "oi_intent": {"intent": oi, "fresh": True},
+        "oi_verification_state": {
+            "status": (
+                "FRESH_UNWIND" if oi == "UNWIND"
+                else "FRESH_POSITION_BUILD"
+            ),
+            "intent": oi,
+        },
     }}
 
 
@@ -65,6 +72,19 @@ class LiquidationContextTests(unittest.TestCase):
         self.assertFalse(dual["tail_veto"])
         build = context.assess_entry(state, candidate(oi="POSITION_BUILD"), 12.05)
         self.assertFalse(build["tail_veto"])
+
+    def test_unchanged_oi_snapshot_cannot_confirm_liquidation_tail(self):
+        state = SimpleNamespace()
+        context.observe_force_order(state, event("BUY", 10_000, 200_000), 10_010)
+        context.observe_force_order(state, event("BUY", 11_000, 100_000), 11_010)
+        row = candidate()
+        row["ignition"]["oi_verification_state"] = {
+            "status": "UNCHANGED_UNKNOWN", "intent": "UNWIND",
+        }
+        report = context.assess_entry(state, row, 12.05)
+        self.assertTrue(report["decelerating"])
+        self.assertFalse(report["oi_unwind_confirmed"])
+        self.assertFalse(report["tail_veto"])
 
 
 if __name__ == "__main__":
