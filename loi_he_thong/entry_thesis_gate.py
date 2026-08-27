@@ -6,7 +6,7 @@ unwind tail cannot look like fresh whale commitment merely because sell/buy
 market orders are large.
 """
 
-VERSION = "ENTRY_THESIS_GATE_V3_MARGINAL_FLOW_EFFICIENCY"
+VERSION = "ENTRY_THESIS_GATE_V4_FLOW_SURVIVAL"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -126,7 +126,7 @@ def _flow_question(result, ignition, impact):
         for name in cash if name != primary
     }
     independent_continuation = any(
-        state == "CONTINUING" for state in other_states.values()
+        state == "CONTINUING_CONFIRMED" for state in other_states.values()
     )
     composite_veto = bool(
         primary_state in ("ABSORBED", "EXHAUSTED")
@@ -136,12 +136,22 @@ def _flow_question(result, ignition, impact):
     # present-tense conversion after the executed-flow window went quiet.
     converts = bool(
         not composite_veto
-        and (primary_state == "CONTINUING" or independent_continuation)
+        and (
+            primary_state == "CONTINUING_CONFIRMED"
+            or independent_continuation
+        )
     )
     if composite_veto:
         status = primary_state
-    elif primary_state == "CONTINUING" or independent_continuation:
-        status = "CONTINUING"
+    elif primary_state == "CONTINUING_CONFIRMED" or independent_continuation:
+        status = "CONTINUING_CONFIRMED"
+    elif (
+        primary_state == "REACCELERATION_UNCONFIRMED"
+        or "REACCELERATION_UNCONFIRMED" in other_states.values()
+    ):
+        status = "REACCELERATION_UNCONFIRMED"
+    elif primary_state == "FADING" or "FADING" in other_states.values():
+        status = "FADING"
     elif primary_state == "DECAYING" or "DECAYING" in other_states.values():
         status = "DECAYING"
     else:
@@ -272,6 +282,10 @@ def evaluate(state, result, impact, basis, liquidation):
     # either state into a hard veto.
     if persistent and q3["status"] in ("DECAYING", "UNKNOWN"):
         soft_waits.append("WAIT_PERSISTENT_FLOW_EFFICIENCY")
+    elif persistent and q3["status"] == "FADING":
+        soft_waits.append("WAIT_PERSISTENT_FLOW_FADING")
+    elif persistent and q3["status"] == "REACCELERATION_UNCONFIRMED":
+        soft_waits.append("WAIT_PERSISTENT_REACCELERATION_CONFIRMATION")
     return {
         "version": VERSION,
         "decision": "WAIT" if blockers or soft_waits else "PASS",

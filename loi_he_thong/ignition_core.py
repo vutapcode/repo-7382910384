@@ -181,17 +181,50 @@ def _flow_efficiency_snapshot(histories, side, cash_venues):
             state = "UNKNOWN"
         else:
             old, previous, current = valid
+            material_progress = MATERIAL_PRICE_BPS * 0.70
             progress_decay_1 = previous["price_progress_bps"] < old["price_progress_bps"] * 0.70
             progress_decay_2 = current["price_progress_bps"] < previous["price_progress_bps"] * 0.70
             efficiency_decay_1 = previous["efficiency_bps_per_million"] < old["efficiency_bps_per_million"] * 0.70
             efficiency_decay_2 = current["efficiency_bps_per_million"] < previous["efficiency_bps_per_million"] * 0.70
             flow_persists = current["directional_quote"] >= previous["directional_quote"]
-            no_progress = current["price_progress_bps"] < MATERIAL_PRICE_BPS * 0.70
+            flow_collapsed = (
+                previous["directional_quote"] > 0.0
+                and current["directional_quote"]
+                < previous["directional_quote"] * 0.70
+            )
+            progress_collapsed = (
+                previous["price_progress_bps"] >= material_progress
+                and current["price_progress_bps"]
+                < previous["price_progress_bps"] * 0.70
+            )
+            no_progress = current["price_progress_bps"] < material_progress
             repeated_no_progress = all(
-                row["price_progress_bps"] < MATERIAL_PRICE_BPS * 0.70
+                row["price_progress_bps"] < material_progress
                 for row in (old, previous, current)
             )
-            if flow_persists and no_progress and progress_decay_1 and progress_decay_2:
+            absorbed_before_burst = bool(
+                old["price_progress_bps"] < material_progress
+                and previous["price_progress_bps"] < material_progress
+                and current["price_progress_bps"] >= material_progress
+                and current["directional_quote"]
+                > max(old["directional_quote"], previous["directional_quote"])
+            )
+            conversion_survived = bool(
+                previous["price_progress_bps"] >= material_progress
+                and current["price_progress_bps"] >= material_progress
+                and current["efficiency_bps_per_million"] > 0.0
+            )
+            # A prettier price/volume ratio cannot hide that both absolute
+            # flow and absolute marginal progress collapsed.  This is a soft
+            # timing state downstream, not an absorption veto.
+            if flow_collapsed and progress_collapsed:
+                state = "FADING"
+            # Two non-converting cash windows followed by one large print are
+            # not yet a durable metaorder.  A later window or an independent
+            # cash venue may confirm it without resetting the causal wave.
+            elif absorbed_before_burst:
+                state = "REACCELERATION_UNCONFIRMED"
+            elif flow_persists and no_progress and progress_decay_1 and progress_decay_2:
                 state = "EXHAUSTED"
             elif flow_persists and repeated_no_progress:
                 state = "ABSORBED"
@@ -199,11 +232,8 @@ def _flow_efficiency_snapshot(histories, side, cash_venues):
                 progress_decay_1 and efficiency_decay_1
             ):
                 state = "DECAYING"
-            elif (
-                current["price_progress_bps"] >= MATERIAL_PRICE_BPS * 0.70
-                and current["efficiency_bps_per_million"] > 0.0
-            ):
-                state = "CONTINUING"
+            elif conversion_survived:
+                state = "CONTINUING_CONFIRMED"
             else:
                 state = "UNKNOWN"
         venues[venue] = {
@@ -220,7 +250,7 @@ def _flow_efficiency_snapshot(histories, side, cash_venues):
             "policy": "THREE_CONTIGUOUS_WINDOWS_EXACT_EXECUTED_FLOW_NO_EPISODE_FALLBACK",
         }
     return {
-        "version": "FLOW_EFFICIENCY_V3_MARGINAL_CONVERSION",
+        "version": "FLOW_EFFICIENCY_V4_SURVIVAL_CONFIRMATION",
         "side": side,
         "venues": venues,
         "authority": "ENTRY_COMPOSITE_ONLY",

@@ -32,12 +32,13 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
         "venue_moves_bps": {venue: 0.50 for venue in cash} | {"futures": 0.40},
         "flow_by_venue": flow,
         "flow_efficiency": {
-            "version": "FLOW_EFFICIENCY_V3_MARGINAL_CONVERSION",
+            "version": "FLOW_EFFICIENCY_V4_SURVIVAL_CONFIRMATION",
             "venues": {
                 venue: {
                     "state": (flow_states or {}).get(
                         venue,
-                        "EXHAUSTED" if recent_progress < 0.10 else "CONTINUING",
+                        "EXHAUSTED" if recent_progress < 0.10
+                        else "CONTINUING_CONFIRMED",
                     )
                 }
                 for venue in cash
@@ -96,7 +97,8 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertEqual(audit["decision"], "PASS")
         self.assertNotIn("UNWIND_TAIL_VETO", audit["blocking_reasons"])
         self.assertEqual(
-            audit["questions"]["q3_flow_efficiency"]["status"], "CONTINUING"
+            audit["questions"]["q3_flow_efficiency"]["status"],
+            "CONTINUING_CONFIRMED",
         )
 
     def test_primary_absorption_is_not_a_veto_when_other_cash_continues(self):
@@ -106,7 +108,7 @@ class EntryThesisGateTests(unittest.TestCase):
                 intent="POSITION_BUILD", consumed=0.20,
                 flow_states={
                     "binance_spot": "ABSORBED",
-                    "coinbase_spot": "CONTINUING",
+                    "coinbase_spot": "CONTINUING_CONFIRMED",
                 },
             ),
             PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
@@ -170,7 +172,8 @@ class EntryThesisGateTests(unittest.TestCase):
         candidate = result(
             intent="POSITION_BUILD", consumed=0.20,
             flow_states={
-                "binance_spot": "CONTINUING", "coinbase_spot": "UNKNOWN",
+                "binance_spot": "CONTINUING_CONFIRMED",
+                "coinbase_spot": "UNKNOWN",
             },
         )
         allowed, report = entry_edge_tier.authorize(candidate, SimpleNamespace(
@@ -179,6 +182,69 @@ class EntryThesisGateTests(unittest.TestCase):
         ))
         self.assertTrue(allowed)
         self.assertEqual(report["soft_wait_reasons"], [])
+
+    def test_persistent_fading_soft_waits_without_hard_veto(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "FADING", "coinbase_spot": "UNKNOWN",
+            },
+        )
+        allowed, report = entry_edge_tier.authorize(candidate, SimpleNamespace(
+            entry_economics_v3_replay_approved=False,
+            wstrade_live_armed=False,
+        ))
+        self.assertFalse(allowed)
+        self.assertIn(
+            "WAIT_PERSISTENT_FLOW_FADING", report["soft_wait_reasons"]
+        )
+        self.assertNotIn(
+            "WAIT_PERSISTENT_FLOW_FADING", report["hard_vetoes"]
+        )
+
+    def test_reacceleration_waits_unless_independent_cash_confirms(self):
+        ambiguous = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "REACCELERATION_UNCONFIRMED",
+                "coinbase_spot": "UNKNOWN",
+            },
+        )
+        allowed, report = entry_edge_tier.authorize(
+            ambiguous,
+            SimpleNamespace(
+                entry_economics_v3_replay_approved=False,
+                wstrade_live_armed=False,
+            ),
+        )
+        self.assertFalse(allowed)
+        self.assertIn(
+            "WAIT_PERSISTENT_REACCELERATION_CONFIRMATION",
+            report["soft_wait_reasons"],
+        )
+
+        corroborated = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "REACCELERATION_UNCONFIRMED",
+                "coinbase_spot": "CONTINUING_CONFIRMED",
+            },
+        )
+        allowed, report = entry_edge_tier.authorize(
+            corroborated,
+            SimpleNamespace(
+                entry_economics_v3_replay_approved=False,
+                wstrade_live_armed=False,
+            ),
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(report["soft_wait_reasons"], [])
+        self.assertEqual(
+            report["entry_thesis_audit"]["questions"][
+                "q3_flow_efficiency"
+            ]["status"],
+            "CONTINUING_CONFIRMED",
+        )
 
     def test_v3_absorption_is_telemetry_until_canonical_replay_is_approved(self):
         audit = entry_thesis_gate.evaluate(

@@ -188,13 +188,72 @@ class IgnitionCoreTests(unittest.TestCase):
         report = ignition_core._flow_efficiency_snapshot(
             {"binance_spot": rows}, "LONG", ("binance_spot",)
         )["venues"]["binance_spot"]
-        self.assertEqual(report["state"], "CONTINUING")
+        self.assertEqual(report["state"], "CONTINUING_CONFIRMED")
         self.assertEqual(report["window_resolution_ms"], 1_000)
         self.assertEqual(
             report["measurement_source"],
             "PERSISTENT_1S_EXECUTED_FLOW_FALLBACK",
         )
         self.assertGreater(report["marginal_conversion_now_bps"], 0.0)
+
+    @staticmethod
+    def _efficiency_rows(quotes, progresses, side="LONG"):
+        rows = []
+        price = 100.0
+        sign = 1.0 if side == "LONG" else -1.0
+        for index, (quote, progress) in enumerate(zip(quotes, progresses)):
+            next_price = price * (1.0 + sign * progress / 10_000.0)
+            rows.append({
+                "venue": "binance_spot",
+                "bucket_start_ms": index * 500,
+                "receive_time_ms": (index + 1) * 500,
+                "epoch": 1,
+                "clock_valid": True,
+                "buy_quote": quote if side == "LONG" else 0.0,
+                "sell_quote": quote if side == "SHORT" else 0.0,
+                "buy_qty": 1.0 if side == "LONG" else 0.0,
+                "sell_qty": 1.0 if side == "SHORT" else 0.0,
+                "total_qty": 1.0,
+                "first_price": price,
+                "price": next_price,
+            })
+            price = next_price
+        return rows
+
+    def test_ratio_illusion_is_fading_when_flow_and_progress_collapse(self):
+        rows = self._efficiency_rows(
+            (5_975.0, 11_141.0, 1_390.0),
+            (0.103, 1.136, 0.248),
+        )
+        venue = ignition_core._flow_efficiency_snapshot(
+            {"binance_spot": rows}, "LONG", ("binance_spot",)
+        )["venues"]["binance_spot"]
+        self.assertEqual(venue["state"], "FADING")
+        self.assertGreater(
+            venue["windows"][-1]["efficiency_bps_per_million"],
+            venue["windows"][-2]["efficiency_bps_per_million"],
+        )
+
+    def test_single_burst_after_absorption_needs_reacceleration_proof(self):
+        rows = self._efficiency_rows(
+            (26_339.0, 28_873.0, 313_795.0),
+            (0.0, 0.0, 2.188),
+            side="SHORT",
+        )
+        venue = ignition_core._flow_efficiency_snapshot(
+            {"binance_spot": rows}, "SHORT", ("binance_spot",)
+        )["venues"]["binance_spot"]
+        self.assertEqual(venue["state"], "REACCELERATION_UNCONFIRMED")
+
+    def test_two_converting_windows_confirm_continuation(self):
+        rows = self._efficiency_rows(
+            (10_000.0, 11_000.0, 12_000.0),
+            (0.20, 0.30, 0.35),
+        )
+        venue = ignition_core._flow_efficiency_snapshot(
+            {"binance_spot": rows}, "LONG", ("binance_spot",)
+        )["venues"]["binance_spot"]
+        self.assertEqual(venue["state"], "CONTINUING_CONFIRMED")
 
     def test_bias_wait_reasons_are_diagnostic_only(self):
         abstain = state(now=3.0)

@@ -15,7 +15,8 @@ def snapshot(**overrides):
         "proof_type": "METAORDER_CONTINUATION",
         "proposer": "BINANCE_SPOT", "execution_style": "TAKER",
         "bias_phase": "ESTABLISHED_TREND", "consumed_band": "EARLY_15_25",
-        "oi_quality": "UNKNOWN", "flow_efficiency_state": "CONTINUING",
+        "oi_quality": "UNKNOWN",
+        "flow_efficiency_state": "CONTINUING_CONFIRMED",
     }
     row.update(overrides)
     return row
