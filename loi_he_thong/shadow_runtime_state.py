@@ -5,12 +5,13 @@ from pathlib import Path
 import tempfile
 import time
 
-VERSION = "SHADOW_RUNTIME_STATE_V5_VERIFIED_COST_PLAN"
+VERSION = "SHADOW_RUNTIME_STATE_V6_ENTRY_ECONOMICS"
 SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V1",
     "SHADOW_RUNTIME_STATE_V2",
     "SHADOW_RUNTIME_STATE_V3_PROMOTION_EVIDENCE",
     "SHADOW_RUNTIME_STATE_V4_VERSION_BOUND_CALIBRATION",
+    "SHADOW_RUNTIME_STATE_V5_VERIFIED_COST_PLAN",
     VERSION,
 }
 
@@ -34,6 +35,7 @@ PERSIST_FIELDS = (
     "entry_causal_thesis",
     "shadow_cost_plan", "execution_cost_plan",
     "shadow_ledger_type", "would_live_authorize",
+    "edge_first_positive_net_at", "edge_time_to_positive_net_seconds",
 )
 
 # Short-lived evidence must never bridge a process/network outage.
@@ -186,6 +188,15 @@ def snapshot(base):
         "edge_calibration_config_version": str(
             getattr(state, "strategy_config_version", "") or ""
         ),
+        "entry_economics_v2_rows": list(
+            getattr(state, "_entry_economics_v2_rows", ()) or ()
+        )[-1024:],
+        "entry_economics_code_version": str(
+            getattr(state, "code_version", "") or ""
+        ),
+        "entry_economics_config_version": str(
+            getattr(state, "strategy_config_version", "") or ""
+        ),
         "position": None,
     }
     if pos is not None and bool(getattr(pos, "active", False)):
@@ -291,6 +302,26 @@ def restore(base):
             }
     state.edge_cal_v2_code_version = active_code
     state.edge_cal_v2_config_version = active_config
+
+    economics_rows = raw.get("entry_economics_v2_rows", [])
+    economics_version_match = bool(
+        str(raw.get("entry_economics_code_version", "") or "") == active_code
+        and str(raw.get("entry_economics_config_version", "") or "") == active_config
+        and active_code and active_config
+    )
+    if isinstance(economics_rows, list) and economics_version_match:
+        state._entry_economics_v2_rows = [
+            dict(row) for row in economics_rows[-1024:]
+            if isinstance(row, dict)
+            and row.get("economic_contract_version") == "ENTRY_ECONOMICS_V2"
+        ]
+    else:
+        state._entry_economics_v2_rows = []
+        if economics_rows:
+            state.entry_economics_v2_last_exclusion = {
+                "reason": "CODE_OR_CONFIG_VERSION_MISMATCH",
+                "excluded_rows": len(economics_rows),
+            }
 
     # A process restart is a causal data gap. Preserve lifetime counters and
     # consumed IDs, but never bridge a short-lived evidence episode across it.

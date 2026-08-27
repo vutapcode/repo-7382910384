@@ -168,6 +168,7 @@ def compact_position(row):
             "deterioration_elapsed_seconds": guardian.get(
                 "deterioration_elapsed_seconds"
             ),
+            "time_to_edge": guardian.get("time_to_edge"),
         },
         "risk": {
             "decision": risk.get("decision"),
@@ -228,6 +229,10 @@ def _exit_record(row):
         "fee_bps": row.get("fee_bps"),
         "net_pnl_r": row.get("net_pnl_r"),
         "holding_seconds": row.get("holding_time_seconds"),
+        "time_to_positive_net_seconds": row.get(
+            "time_to_positive_net_seconds"
+        ),
+        "economic_contract_version": row.get("economic_contract_version"),
         "best_r": row.get("best_r"),
         "floor_r": row.get("floor_r"),
         "balance_usdt": row.get("balance_usdt"),
@@ -250,6 +255,7 @@ def _exit_record(row):
             "deterioration_elapsed_seconds": guardian.get(
                 "deterioration_elapsed_seconds"
             ),
+            "time_to_edge": guardian.get("time_to_edge"),
         },
         "regime_at_exit": row.get("regime_at_exit"),
     }

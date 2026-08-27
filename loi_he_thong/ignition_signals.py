@@ -183,6 +183,7 @@ class _Venue:
             "clock_uncertainty_ms": round(self.uncertainty_ms, 4),
             "clock_valid": self.clock_valid, "side": side, "strong": strong,
             "buy_qty": self.buy_qty, "sell_qty": self.sell_qty,
+            "buy_quote": self.buy_quote, "sell_quote": self.sell_quote,
             "total_qty": total, "signed_quote": signed_quote,
             "imbalance": round(imbalance, 6), "first_price": self.first_price,
             "price": self.last_price, "high": self.high, "low": self.low,

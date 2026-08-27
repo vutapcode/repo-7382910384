@@ -11,7 +11,8 @@ V2 = "SHADOW_RUNTIME_STATE_V2"
 V3 = "SHADOW_RUNTIME_STATE_V3_PROMOTION_EVIDENCE"
 V4 = "SHADOW_RUNTIME_STATE_V4_VERSION_BOUND_CALIBRATION"
 V5 = "SHADOW_RUNTIME_STATE_V5_VERIFIED_COST_PLAN"
-VERSIONS = {V1, V2, V3, V4, V5}
+V6 = "SHADOW_RUNTIME_STATE_V6_ENTRY_ECONOMICS"
+VERSIONS = {V1, V2, V3, V4, V5, V6}
 
 
 def fail(msg):
@@ -72,9 +73,9 @@ wins = counter(raw, "wins")
 losses = counter(raw, "losses")
 breakevens = counter(raw, "breakevens", optional=True)
 event_seq = counter(raw, "event_seq", optional=True)
-if version in {V2, V3, V4, V5} and trades != wins + losses + breakevens:
+if version in {V2, V3, V4, V5, V6} and trades != wins + losses + breakevens:
     fail(f"counter_invariant:{trades}!={wins}+{losses}+{breakevens}")
-if version in {V3, V4, V5}:
+if version in {V3, V4, V5, V6}:
     evaluations = counter(raw, "decision_evaluations", optional=True)
     near_misses = counter(raw, "near_misses", optional=True)
     if near_misses > evaluations:
@@ -131,7 +132,7 @@ if version in {V3, V4, V5}:
                 row[8], f"edge_calibration_rows.{index}.execution_cost_bps",
                 nonnegative=True,
             )
-    if version in {V4, V5}:
+    if version in {V4, V5, V6}:
         for name in (
             "edge_calibration_code_version",
             "edge_calibration_config_version",
@@ -139,6 +140,31 @@ if version in {V3, V4, V5}:
             value = raw.get(name)
             if not isinstance(value, str) or not value:
                 fail(f"{name}:missing")
+    if version == V6:
+        economics = raw.get("entry_economics_v2_rows")
+        if not isinstance(economics, list) or len(economics) > 1024:
+            fail("entry_economics_v2_rows:invalid")
+        for name in (
+            "entry_economics_code_version",
+            "entry_economics_config_version",
+        ):
+            value = raw.get(name)
+            if not isinstance(value, str) or not value:
+                fail(f"{name}:missing")
+        for index, row in enumerate(economics):
+            if not isinstance(row, dict) or row.get(
+                "economic_contract_version"
+            ) != "ENTRY_ECONOMICS_V2" or row.get("valid") is not True:
+                fail(f"entry_economics_v2_rows.{index}:invalid")
+            num(
+                row.get("net_pnl_bps_after_frozen_cost"),
+                f"entry_economics_v2_rows.{index}.net_bps",
+            )
+            num(
+                row.get("execution_cost_bps"),
+                f"entry_economics_v2_rows.{index}.execution_cost_bps",
+                nonnegative=True,
+            )
 
 pos = raw.get("position")
 if pos is not None:
@@ -153,7 +179,7 @@ if pos is not None:
             fail(f"position.side:{side or 'missing'}")
         num(pos.get("qty"), "position.qty", positive=True)
         entry = num(pos.get("entry_price"), "position.entry_price", positive=True)
-        if version in {V2, V3, V4, V5}:
+        if version in {V2, V3, V4, V5, V6}:
             r = num(pos.get("r"), "position.r", positive=True)
             hard_sl = num(pos.get("hard_sl"), "position.hard_sl", positive=True)
             best = num(pos.get("best"), "position.best", positive=True)
@@ -189,7 +215,7 @@ if pos is not None:
                     fail("position.floor:below_best_short")
 
             cost_plan = pos.get("shadow_cost_plan")
-            if version == V5 and cost_plan is not None:
+            if version in {V5, V6} and cost_plan is not None:
                 if not isinstance(cost_plan, dict):
                     fail("position.shadow_cost_plan:not_object")
                 for name in (

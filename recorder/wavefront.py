@@ -20,7 +20,7 @@ from loi_he_thong import shadow_risk_guard
 from recorder.residual_edge import ResidualEdgeBook
 
 
-VERSION = "WAVEFRONT_SHADOW_V1_CAUSAL_RESIDUAL_EDGE"
+VERSION = "WAVEFRONT_SHADOW_V2_TIME_TO_POSITIVE_NET"
 AUTHORITY = False
 FOLLOW_MAX_MS = 1_200
 LEAD_FLOOR_MS = 100.0
@@ -770,6 +770,7 @@ class WavefrontShadowEvaluator:
                 "filled": False, "terminal": False, "trace": [],
                 "mfe_bps": 0.0, "mae_bps": 0.0,
                 "adverse_250ms_bps": None, "adverse_1s_bps": None,
+                "time_to_positive_net_ms": None,
             }
             self.twins[name] = twin
             if name == "TAKER_TWIN":
@@ -809,6 +810,7 @@ class WavefrontShadowEvaluator:
             "proposer": candidate["proposer"],
             "guardian_version": self.guardian.VERSION,
             "risk_version": self.risk.VERSION,
+            "economic_contract_version": "ENTRY_ECONOMICS_V2",
             "hard_sl": pos.hard_sl, "core_snapshot": candidate["core_snapshot"],
         }, now_ms)
         self._persist()
@@ -866,6 +868,18 @@ class WavefrontShadowEvaluator:
             twin["mfe_bps"] = max(twin["mfe_bps"], signed_bps)
             twin["mae_bps"] = min(twin["mae_bps"], signed_bps)
             age = now_ms - twin["fill_ms"]
+            # Entry/exit slippage is already embedded in executable fill/close
+            # prices. Subtract commissions exactly once when measuring the
+            # first moment the twin becomes positive after all frozen cost.
+            executable_net_bps = signed_bps - (
+                _f(twin["cost_plan"].get("entry_fee_bps"))
+                + _f(twin["cost_plan"].get("exit_fee_bps"))
+            )
+            if (
+                twin.get("time_to_positive_net_ms") is None
+                and executable_net_bps >= 0.0
+            ):
+                twin["time_to_positive_net_ms"] = max(0, age)
             if age >= 250 and twin["adverse_250ms_bps"] is None:
                 twin["adverse_250ms_bps"] = min(0.0, signed_bps)
             if age >= 1_000 and twin["adverse_1s_bps"] is None:
@@ -903,6 +917,7 @@ class WavefrontShadowEvaluator:
             "commission_verified": twin["cost_plan"]["commission_verified"],
             "guardian_version": self.guardian.VERSION,
             "risk_version": self.risk.VERSION,
+            "economic_contract_version": "ENTRY_ECONOMICS_V2",
         }
         if filled and exit_price is not None:
             entry = twin["entry_price"]
@@ -917,6 +932,11 @@ class WavefrontShadowEvaluator:
                 "entry_price": entry, "exit_price": float(exit_price),
                 "fill_time_ms": twin["fill_ms"], "exit_time_ms": now_ms,
                 "holding_time_seconds": max(0.0, (now_ms - twin["fill_ms"]) / 1000.0),
+                "time_to_positive_net_ms": twin.get("time_to_positive_net_ms"),
+                "time_to_positive_net_seconds": (
+                    round(twin["time_to_positive_net_ms"] / 1000.0, 6)
+                    if twin.get("time_to_positive_net_ms") is not None else None
+                ),
                 "gross_pnl_bps": round(gross_bps, 6),
                 "net_pnl_bps": round(net_bps, 6),
                 "stress_25bps_net_bps": round(gross_bps - 25.0, 6),
@@ -933,6 +953,9 @@ class WavefrontShadowEvaluator:
                 "entry_advance_ms": advance,
                 "guardian": guardian, "risk": risk,
                 "guardian_trace": twin["trace"],
+                "net_cost_accounting": (
+                    "EXECUTABLE_FILL_PRICES_INCLUDE_SLIPPAGE_FEES_SUBTRACTED_ONCE"
+                ),
             })
         self._publish("wavefront_virtual_exit", payload, now_ms)
         report = self.residual.observe_exit(payload)

@@ -166,6 +166,9 @@ def _closed_trade_history(cutoff):
         "net_pnl_bps", "net_pnl_usdt", "net_pnl_r", "holding_time_seconds",
         "exit_reason", "guardian_exit_profile", "guardian_trend_shield_active",
         "guardian_version", "virtual_only", "historical_current_authority",
+        "economic_contract_version", "flow_efficiency_state",
+        "oi_verification_status", "consumed_band",
+        "time_to_positive_net_seconds", "flow_efficiency",
     )
     rows = []
     try:
@@ -189,6 +192,8 @@ def _closed_trade_history(cutoff):
                 thesis = _dict(nested_entry.get("causal_thesis"))
                 bias = _dict(thesis.get("bias_thesis"))
                 oi = _dict(thesis.get("oi_intent"))
+                oi_verification = _dict(thesis.get("oi_verification_state"))
+                economics = _dict(thesis.get("economic_feature_snapshot"))
                 guardian = _dict(nested_exit.get("guardian"))
                 row = {
                     "schema_version": source.get("schema_version"),
@@ -219,6 +224,18 @@ def _closed_trade_history(cutoff):
                     "net_pnl_usdt": nested_exit.get("net_pnl_usdt"),
                     "net_pnl_r": nested_exit.get("net_pnl_r"),
                     "holding_time_seconds": nested_exit.get("holding_seconds"),
+                    "time_to_positive_net_seconds": nested_exit.get(
+                        "time_to_positive_net_seconds"
+                    ),
+                    "economic_contract_version": thesis.get(
+                        "economic_contract_version"
+                    ),
+                    "flow_efficiency_state": economics.get(
+                        "flow_efficiency_state"
+                    ),
+                    "oi_verification_status": oi_verification.get("status"),
+                    "consumed_band": economics.get("consumed_band"),
+                    "flow_efficiency": thesis.get("flow_efficiency"),
                     "exit_reason": nested_exit.get("reason"),
                     "guardian_exit_profile": guardian.get("exit_profile"),
                     "guardian_trend_shield_active": guardian.get("trend_shield_active"),

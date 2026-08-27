@@ -454,8 +454,10 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         failed.append("WAIT_OI_CLOSING_CONTEXT")
     # Edge metadata is behavior only when the Council actually offered a GO
     # candidate to authorize. On a Council WAIT it is context, not a veto.
-    if would_enter and bool(impact.get("absorbed")):
-        failed.append("ABSORPTION_VETO")
+    if would_enter and "FLOW_EFFICIENCY_V2_VETO" in (
+        thesis_audit.get("blocking_reasons") or ()
+    ):
+        failed.append("FLOW_EFFICIENCY_V2_VETO")
     if would_enter and bool(basis.get("perp_expansion")):
         failed.append("PERP_LED_VETO")
     if would_enter and bool(liquidation.get("tail_veto")):
@@ -475,7 +477,10 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
     # structural residual proxy is zero.  Only a final rejected GO is tagged.
     if (
         would_enter and not quorum_ok
-        and not impact.get("absorbed") and not basis.get("perp_expansion")
+        and "FLOW_EFFICIENCY_V2_VETO" not in (
+            thesis_audit.get("blocking_reasons") or ()
+        )
+        and not basis.get("perp_expansion")
     ):
         bootstrap = bool((edge_report or {}).get("bootstrap_shadow_allowed"))
         empirical = bool((edge_report or {}).get("live_empirical_ok"))
@@ -490,7 +495,7 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         "WAIT_CASH_RESPONSE", "WAIT_LEADER_UNCERTAIN", "WAIT_LATE_IMPULSE",
         "WAIT_IGNITION_PROOF", "WAIT_CAUSAL_PERSISTENCE", "WAIT_OI_REFRESH",
         "WAIT_OI_CLOSING_CONTEXT",
-        "ABSORPTION_VETO", "PERP_LED_VETO", "LIQUIDATION_TAIL_VETO",
+        "FLOW_EFFICIENCY_V2_VETO", "PERP_LED_VETO", "LIQUIDATION_TAIL_VETO",
         "UNWIND_TAIL_VETO", "EXCHANGE_INDEPENDENCE_FAIL",
         "EMPIRICAL_ALPHA_NOT_READY",
         "EDGE_COST_FAIL",
@@ -534,6 +539,11 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "commission_source": (edge_report or {}).get("commission_source"),
         "components": (edge_report or {}).get("cost_components"),
         "empirical_alpha": (edge_report or {}).get("empirical_alpha"),
+        "economic_contract_version": (edge_report or {}).get(
+            "economic_contract_version"
+        ),
+        "forward_edge": (edge_report or {}).get("forward_edge"),
+        "time_to_edge": (edge_report or {}).get("time_to_edge"),
     }
     return {
         "cycle_id": cycle_id,
@@ -541,7 +551,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "strategy_authority": "IGNITION_CORE_V1",
         "strategy_code_version": getattr(state, "code_version", None),
         "strategy_config_version": getattr(state, "strategy_config_version", None),
-        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V4_BIAS_ALIGNMENT",
+        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V5_ENTRY_ECONOMICS",
         "causal_episode_id": (opportunity or {}).get("causal_episode_id"),
         "inputs": {
             "bias": {
@@ -801,6 +811,8 @@ def _open_shadow(side, result, now):
         entry_regime=entry_regime,
         entry_edge_class=(result.get("edge_tier") or {}).get("edge_class"),
         entry_causal_thesis=live_execution._entry_causal_thesis(result),
+        edge_first_positive_net_at=None,
+        edge_time_to_positive_net_seconds=None,
         shadow_cost_plan=shadow_cost_plan,
         shadow_ledger_type=str(
             (result.get("edge_tier") or {}).get(
@@ -1104,6 +1116,12 @@ def _close_shadow(pos, guardian_result, now):
             "holding_time_seconds": max(
                 0.0, now - float(getattr(pos, "opened_at", now) or now)
             ),
+            "time_to_positive_net_seconds": getattr(
+                pos, "edge_time_to_positive_net_seconds", None
+            ),
+            "economic_contract_version": (
+                getattr(pos, "entry_causal_thesis", {}) or {}
+            ).get("economic_contract_version"),
             "hard_sl": getattr(pos, "hard_sl", None),
             "best_r": getattr(pos, "best_r", None),
             "floor_r": getattr(pos, "floor_r", None),
@@ -1667,6 +1685,14 @@ async def _entry_loop():
                         "exchange_independence"
                     ),
                     "price_impact": edge_report.get("price_impact"),
+                    "entry_thesis_audit": edge_report.get("entry_thesis_audit"),
+                    "economic_contract_version": edge_report.get(
+                        "economic_contract_version"
+                    ),
+                    "forward_edge_status": edge_report.get("forward_edge_status"),
+                    "forward_edge": edge_report.get("forward_edge"),
+                    "time_to_edge_status": edge_report.get("time_to_edge_status"),
+                    "time_to_edge": edge_report.get("time_to_edge"),
                     "spot_perp_basis": edge_report.get("spot_perp_basis"),
                     "governor_mode": getattr(s, "governor_mode", None),
                     "miss_taxonomy": recorder_snapshot["output"]["miss_taxonomy"],

@@ -505,6 +505,7 @@ def _entry_causal_thesis(result):
     """Keep only the cash-led facts Guardian needs to judge thesis failure."""
     causal=(result or {}).get("causal") or {}
     ignition=(result or {}).get("ignition") or causal.get("ignition") or {}
+    edge=dict((result or {}).get("edge_tier") or {})
     groups=causal.get("evidence_groups") or {}
     cash_price=set(groups.get("cash_price") or ())&{"spot","coinbase"}
     cash_flow=set(groups.get("cash_flow") or ())&{"spot","coinbase"}
@@ -542,6 +543,16 @@ def _entry_causal_thesis(result):
             "proposer":ignition.get("proposer"),
             "impulse_phase":ignition.get("impulse_phase"),
             "residual_edge_proxy_bps":ignition.get("residual_edge_proxy_bps"),
+            "economic_contract_version":edge.get("economic_contract_version"),
+            "economic_feature_snapshot":dict(
+                edge.get("economic_feature_snapshot") or {}
+            ),
+            "forward_edge":dict(edge.get("forward_edge") or {}),
+            "time_to_edge":dict(edge.get("time_to_edge") or {}),
+            "flow_efficiency":dict(ignition.get("flow_efficiency") or {}),
+            "oi_verification_state":dict(
+                ignition.get("oi_verification_state") or {}
+            ),
             "bias_thesis":{
                 "direction":frozen.get("direction"),
                 "confidence":frozen.get("confidence"),
@@ -585,6 +596,8 @@ def _position(side, qty, fill_price, hard_sl, risk_plan, now, client_id, result)
         canonical_opportunity_id=int(result.get("canonical_opportunity_id", 0) or 0),
         causal_episode_id=result.get("causal_episode_id"),
         entry_causal_thesis=_entry_causal_thesis(result),
+        edge_first_positive_net_at=None,
+        edge_time_to_positive_net_seconds=None,
     )
 
 
@@ -865,6 +878,12 @@ async def close_position(api, state, position, reason, now=None, event_callback=
             "entry_causal_thesis": dict(
                 getattr(position, "entry_causal_thesis", {}) or {}
             ),
+            "time_to_positive_net_seconds": getattr(
+                position, "edge_time_to_positive_net_seconds", None
+            ),
+            "economic_contract_version": (
+                getattr(position, "entry_causal_thesis", {}) or {}
+            ).get("economic_contract_version"),
         })
     return True
 

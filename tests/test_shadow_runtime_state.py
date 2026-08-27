@@ -7,6 +7,38 @@ from loi_he_thong import shadow_runtime_state as runtime_state
 
 
 class ShadowRuntimeStateTests(unittest.TestCase):
+    def test_entry_economics_rows_are_version_bound(self):
+        row = {
+            "economic_contract_version": "ENTRY_ECONOMICS_V2",
+            "valid": True, "side": "LONG",
+            "net_pnl_bps_after_frozen_cost": 3.0,
+        }
+        with tempfile.TemporaryDirectory() as temp, patch.dict(
+            'os.environ', {'SMC_JOURNAL_DIR': temp}
+        ):
+            source_state = SimpleNamespace(
+                code_version="code-v2", strategy_config_version="config-v2",
+                mainnet_shadow_position=None,
+                _entry_economics_v2_rows=[row],
+            )
+            runtime_state.save(SimpleNamespace(
+                app=SimpleNamespace(state=source_state), QTY_BTC=0.001
+            ))
+            same = SimpleNamespace(
+                code_version="code-v2", strategy_config_version="config-v2"
+            )
+            runtime_state.restore(SimpleNamespace(
+                app=SimpleNamespace(state=same), QTY_BTC=0.001
+            ))
+            changed = SimpleNamespace(
+                code_version="code-v3", strategy_config_version="config-v2"
+            )
+            runtime_state.restore(SimpleNamespace(
+                app=SimpleNamespace(state=changed), QTY_BTC=0.001
+            ))
+        self.assertEqual(same._entry_economics_v2_rows, [row])
+        self.assertEqual(changed._entry_economics_v2_rows, [])
+
     def test_flat_strategy_counters_survive_restart(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(
             'os.environ', {'SMC_JOURNAL_DIR': temp}

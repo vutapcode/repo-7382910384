@@ -1,6 +1,7 @@
 import copy
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from recorder.residual_edge import ResidualEdgeBook
@@ -90,6 +91,20 @@ class WavefrontHarness:
 
 
 class WavefrontCausalityTests(unittest.TestCase):
+    def test_executable_twin_freezes_first_positive_net_timestamp(self):
+        h = WavefrontHarness()
+        h.prepare_aligned_build()
+        h.qualify()
+        twin = h.engine.twins["TAKER_TWIN"]
+        h.engine.state.execution_best_bid = 100.30
+        h.engine.state.execution_best_ask = 100.32
+        h.engine.state.execution_bbo_ts = 101.5
+        hold = {"decision": "HOLD", "reason": "TEST_HOLD"}
+        with patch.object(h.engine.guardian, "update_state", return_value=hold), \
+             patch.object(h.engine.risk, "assess", return_value=hold):
+            h.engine._advance_twins(101_500)
+        self.assertEqual(twin["time_to_positive_net_ms"], 200)
+
     def test_cash_proposer_and_futures_follower_open_execution_twins(self):
         h = WavefrontHarness()
         h.prepare_aligned_build()
@@ -106,7 +121,7 @@ class WavefrontCausalityTests(unittest.TestCase):
         self.assertFalse(entries[0][1]["authority"])
         self.assertEqual(
             h.engine.guardian.VERSION,
-            "GUARDIAN_S_TIER_V8_BREAK_CONFLICT_RECOVERY",
+            "GUARDIAN_S_TIER_V9_ENTRY_ECONOMICS",
         )
 
     def test_maker_requires_real_trade_through_and_expires_without_it(self):

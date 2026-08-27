@@ -6,7 +6,7 @@ from loi_he_thong import entry_edge_tier, entry_thesis_gate
 
 
 def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
-           cash=("binance_spot", "coinbase_spot")):
+           cash=("binance_spot", "coinbase_spot"), flow_states=None):
     flow = {
         venue: {
             "signed_imbalance": 0.70,
@@ -31,6 +31,18 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
         },
         "venue_moves_bps": {venue: 0.50 for venue in cash} | {"futures": 0.40},
         "flow_by_venue": flow,
+        "flow_efficiency": {
+            "version": "FLOW_EFFICIENCY_V2",
+            "venues": {
+                venue: {
+                    "state": (flow_states or {}).get(
+                        venue,
+                        "EXHAUSTED" if recent_progress < 0.10 else "CONTINUING",
+                    )
+                }
+                for venue in cash
+            },
+        },
         "oi_intent": {
             "intent": intent, "fresh": True,
             "causal_class": "CASH_LED_UNWIND" if intent == "UNWIND" else "ALIGNED_BUILD",
@@ -65,7 +77,7 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertIn("UNWIND_TAIL_VETO", audit["blocking_reasons"])
         self.assertEqual(
             audit["questions"]["q3_flow_efficiency"]["status"],
-            "FLOW_EXHAUSTION",
+            "EXHAUSTED",
         )
 
     def test_efficient_early_dual_cash_unwind_is_preserved(self):
@@ -77,8 +89,53 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertEqual(audit["decision"], "PASS")
         self.assertNotIn("UNWIND_TAIL_VETO", audit["blocking_reasons"])
         self.assertEqual(
-            audit["questions"]["q3_flow_efficiency"]["status"], "CONVERTING"
+            audit["questions"]["q3_flow_efficiency"]["status"], "CONTINUING"
         )
+
+    def test_primary_absorption_is_not_a_veto_when_other_cash_continues(self):
+        audit = entry_thesis_gate.evaluate(
+            SimpleNamespace(),
+            result(
+                intent="POSITION_BUILD", consumed=0.20,
+                flow_states={
+                    "binance_spot": "ABSORBED",
+                    "coinbase_spot": "CONTINUING",
+                },
+            ),
+            PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
+        )
+        self.assertEqual(audit["decision"], "PASS")
+        self.assertNotIn("FLOW_EFFICIENCY_V2_VETO", audit["blocking_reasons"])
+
+    def test_primary_absorption_without_independent_continuation_vetoes(self):
+        audit = entry_thesis_gate.evaluate(
+            SimpleNamespace(entry_economics_v2_replay_approved=True),
+            result(
+                intent="POSITION_BUILD", consumed=0.20,
+                flow_states={
+                    "binance_spot": "ABSORBED",
+                    "coinbase_spot": "DECAYING",
+                },
+            ),
+            PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
+        )
+        self.assertEqual(audit["decision"], "WAIT")
+        self.assertIn("FLOW_EFFICIENCY_V2_VETO", audit["blocking_reasons"])
+
+    def test_v2_absorption_is_telemetry_until_canonical_replay_is_approved(self):
+        audit = entry_thesis_gate.evaluate(
+            SimpleNamespace(entry_economics_v2_replay_approved=False),
+            result(
+                intent="POSITION_BUILD", consumed=0.20,
+                flow_states={
+                    "binance_spot": "ABSORBED",
+                    "coinbase_spot": "DECAYING",
+                },
+            ),
+            PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
+        )
+        self.assertEqual(audit["decision"], "PASS")
+        self.assertNotIn("FLOW_EFFICIENCY_V2_VETO", audit["blocking_reasons"])
 
     def test_position_build_is_not_relabelled_forced_unwind(self):
         audit = entry_thesis_gate.evaluate(

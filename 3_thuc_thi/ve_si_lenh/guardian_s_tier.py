@@ -4,7 +4,7 @@ import time
 
 from loi_he_thong import liquidation_context
 
-VERSION="GUARDIAN_S_TIER_V8_BREAK_CONFLICT_RECOVERY"
+VERSION="GUARDIAN_S_TIER_V9_ENTRY_ECONOMICS"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -271,6 +271,59 @@ def _adverse_profile(s1,s2):
         "flow_adverse":flow_adverse,"strong_flow_adverse":strong_flow,
         "kill_fast":kill_fast,"trend_kill_price":trend_kill_price,
         "policy":"SENSITIVE_SCOUT_STRONG_CAUSAL_CONFIRM_ONLY",
+    }
+
+
+def _time_to_edge(pos, now, prices, s1, s2, s3, thesis):
+    """Turn a cohort timeout into suspicion, never an autonomous exit."""
+    entry=float(getattr(pos,"entry_price",0.0) or 0.0)
+    current=float(prices.get("futures",0.0) or 0.0)
+    gross=(
+        _sign(getattr(pos,"side",""))*float(_bps(current,entry) or 0.0)
+        if entry>0.0 and current>0.0 else None
+    )
+    plan=(getattr(pos,"execution_cost_plan",None)
+          or getattr(pos,"shadow_cost_plan",None) or {})
+    recovery_cost=float(plan.get("total_cost_bps",0.0) or 0.0)
+    opened=float(getattr(pos,"opened_at",now) or now)
+    elapsed=max(0.0,now-opened)
+    if (
+        gross is not None and gross>recovery_cost
+        and getattr(pos,"edge_first_positive_net_at",None) is None
+    ):
+        pos.edge_first_positive_net_at=now
+        pos.edge_time_to_positive_net_seconds=elapsed
+    entry_thesis=dict(getattr(pos,"entry_causal_thesis",{}) or {})
+    contract=dict(entry_thesis.get("time_to_edge") or {})
+    p80=contract.get("p80_seconds")
+    try: p80=float(p80) if p80 is not None else None
+    except (TypeError,ValueError): p80=None
+    authority=bool(contract.get("authority") and p80 is not None and p80>0.0)
+    late=bool(
+        authority and elapsed>p80 and gross is not None
+        and gross<=recovery_cost
+    )
+    causal_confirmation=bool(
+        s1.get("status")=="ADVERSE"
+        or s2.get("status")=="ADVERSE"
+        or s3.get("status")=="ADVERSE"
+        or bool((thesis or {}).get("broken"))
+    )
+    return {
+        "version":"TIME_TO_EDGE_V1",
+        "status":"EDGE_LATE" if late else (
+            "POSITIVE_NET_REACHED"
+            if getattr(pos,"edge_first_positive_net_at",None) is not None
+            else "BOOTSTRAP_UNVERIFIED" if not authority else "ON_TIME"
+        ),
+        "authority":authority,"elapsed_seconds":round(elapsed,4),
+        "p80_seconds":p80,"gross_pnl_bps":(
+            round(gross,6) if gross is not None else None
+        ),
+        "positive_net_hurdle_bps":round(recovery_cost,6),
+        "causal_deterioration_confirmed":causal_confirmation,
+        "can_exit_alone":False,
+        "policy":"DETERIORATION_EVIDENCE_NEVER_HARD_TIMEOUT",
     }
 
 def _entry_thesis_break(state,pos,now,s1,s2,s3):
@@ -579,6 +632,7 @@ def assess(state,pos,now=None):
     adverse_event=_classify_adverse_event(
         state,pos,now,s1,s2,s3,profile,thesis,recovery_window
     )
+    time_to_edge=_time_to_edge(pos,now,p,s1,s2,s3,thesis)
     trend_fast_override=bool(adverse_event["kill_fast_eligible"])
     kill_fast=bool(
         causal_exit and profile["kill_fast"]
@@ -654,6 +708,15 @@ def assess(state,pos,now=None):
     elif decision=="HOLD" and not recovery_shield and s1["status"]=="SUPPORTIVE":
         reason="PRICE_STILL_SUPPORTIVE"
 
+    if decision=="HOLD" and time_to_edge["status"]=="EDGE_LATE":
+        decision="DETERIORATING"
+        reason=(
+            "EDGE_LATE_WITH_CAUSAL_DETERIORATION"
+            if time_to_edge["causal_deterioration_confirmed"]
+            else "EDGE_LATE_AWAITING_CAUSAL_BREAK"
+        )
+        exit_profile="TIME_TO_EDGE_SUSPICION"
+
     conf=sum(votes[k]["confidence"] for k in adverse)/max(1,len(adverse))
     return {"version":VERSION,"decision":decision,"reason":reason,"side":str(pos.side).upper(),
             "confidence":round(conf,6),"hold_seconds":round(hold,4),"votes":votes,
@@ -664,6 +727,7 @@ def assess(state,pos,now=None):
             "exit_profile":exit_profile,"runner_shield_active":runner_shield,
             "trend_shield_active":trend_shield,"trend_context":trend_context,
             "recovery_shield_active":recovery_shield,
+            "time_to_edge":time_to_edge,
             "kill_fast":kill_fast,"scout_since":float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0) or None,
             "deterioration_since":float(getattr(pos,"guardian_s_candidate_since",0.0) or 0.0) or None,
             "deterioration_elapsed_seconds":round(max(0.0,now-float(getattr(pos,"guardian_s_candidate_since",now) or now)),4) if causal_exit else 0.0,

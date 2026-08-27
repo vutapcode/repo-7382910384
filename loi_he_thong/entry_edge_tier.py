@@ -8,13 +8,14 @@ trades; real money additionally requires persisted empirical expectancy/LCB.
 import time
 
 from loi_he_thong import edge_calibration_v2
+from loi_he_thong import entry_economics_v2
 from loi_he_thong import entry_thesis_gate
 from loi_he_thong import entry_microstructure as micro
 from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
 from loi_he_thong import verified_cost_model
 
-VERSION = "IGNITION_RESIDUAL_EDGE_V2_THESIS_AUDIT"
+VERSION = "IGNITION_ENTRY_ECONOMICS_V2"
 EDGE_BPS = {
     "LOW_EDGE": 0.0, "NORMAL_EDGE": 13.0,
     "HIGH_EDGE": 20.0, "RUNNER_EDGE": 35.0,
@@ -76,7 +77,13 @@ def classify(result, state):
     hard_vetoes = []
     if candidate and not contract_ok:
         hard_vetoes.append("IGNITION_CONTRACT_FAIL")
-    if impact.get("absorbed"):
+    v2_replay_approved = bool(
+        getattr(state, "entry_economics_v2_replay_approved", False)
+    )
+    # Preserve baseline demo semantics until a canonical replay explicitly
+    # approves V2. Once approved, the persistent cross-cash classifier replaces
+    # this single-snapshot legacy veto instead of stacking both vetoes.
+    if candidate and not v2_replay_approved and bool(impact.get("absorbed")):
         hard_vetoes.append("ABSORPTION_VETO")
     if basis.get("perp_expansion"):
         hard_vetoes.append("PERP_LED_VETO")
@@ -99,11 +106,27 @@ def classify(result, state):
     residual = max(0.0, _f(ignition.get("residual_edge_proxy_bps")))
     cost_budget = max(0.0, _f(costs.get("total_cost_bps")))
     reserve = max(0.0, _f(costs.get("minimum_net_edge_bps")))
+    economic_snapshot = entry_economics_v2.feature_snapshot(
+        result, regime, costs.get("execution_style"), thesis_audit,
+    )
+    forward_edge = entry_economics_v2.estimate(state, economic_snapshot)
+    if (
+        candidate and forward_edge.get("status") == "ACTIVE"
+        and not forward_edge.get("positive_net")
+    ):
+        hard_vetoes.append("EMPIRICAL_FORWARD_EDGE_FAIL")
     expected_net = residual - cost_budget
-    economic_ok = bool(not hard_vetoes and expected_net >= reserve)
+    empirical_forward_ok = bool(
+        forward_edge.get("status") == "ACTIVE"
+        and forward_edge.get("positive_net")
+    )
+    economic_ok = bool(
+        not hard_vetoes and (empirical_forward_ok or expected_net >= reserve)
+    )
     thesis_audit = entry_thesis_gate.attach_economics(
         thesis_audit, total_cost_bps=cost_budget,
         reserve_bps=reserve, economic_ok=economic_ok,
+        forward_edge=forward_edge,
     )
 
     if not candidate:
@@ -171,6 +194,9 @@ def classify(result, state):
         and raw_empirical_ok
         and stress_ok and not hard_vetoes
         and costs.get("commission_verified")
+        and forward_edge.get("status") == "ACTIVE"
+        and forward_edge.get("level") == "EXACT"
+        and forward_edge.get("positive_net")
     )
     bootstrap_shadow_allowed = bool(contract_ok and not hard_vetoes and not live)
     research_probe_allowed = bool(bootstrap_shadow_allowed)
@@ -206,6 +232,24 @@ def classify(result, state):
             calibration.get("execution_cost_authority")
         ),
         "execution_cost_contract": cost_contract,
+        "economic_contract_version": entry_economics_v2.CONTRACT_VERSION,
+        "entry_economics_v2_replay_approved": v2_replay_approved,
+        "economic_feature_snapshot": economic_snapshot,
+        "forward_edge_status": forward_edge.get("status"),
+        "forward_edge": forward_edge,
+        "time_to_edge_status": (
+            "ACTIVE" if forward_edge.get("time_to_positive_net_p80_seconds") is not None
+            else "BOOTSTRAP_UNVERIFIED"
+        ),
+        "time_to_edge": {
+            "p80_seconds": forward_edge.get("time_to_positive_net_p80_seconds"),
+            "winner_samples": forward_edge.get("time_to_positive_net_winners", 0),
+            "authority": bool(
+                forward_edge.get("authority")
+                and forward_edge.get("time_to_positive_net_p80_seconds") is not None
+            ),
+            "policy": "DETERIORATION_EVIDENCE_NEVER_HARD_TIMEOUT",
+        },
         "cost_components": costs, "normal_contract_ok": contract_ok,
         "fast_contract_ok": False, "hard_vetoes": hard_vetoes,
         "price_impact": impact, "spot_perp_basis": basis,

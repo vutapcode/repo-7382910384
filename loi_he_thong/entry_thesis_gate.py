@@ -6,7 +6,7 @@ unwind tail cannot look like fresh whale commitment merely because sell/buy
 market orders are large.
 """
 
-VERSION = "ENTRY_THESIS_GATE_V1"
+VERSION = "ENTRY_THESIS_GATE_V2_FLOW_EFFICIENCY"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -95,33 +95,69 @@ def _flow_question(result, ignition, impact):
         MATERIAL_PRICE_BPS, _f((result or {}).get("price_threshold_bps"))
     )
     strong_flow = bool(flow_strength >= FLOW_IMBALANCE)
-    exhaustion = bool(
+    legacy_absorption = bool(
         (impact or {}).get("absorbed")
         or (
             strong_flow and rows
             and recent_cash_progress < threshold * 0.70
         )
     )
-    converts = bool(
-        not exhaustion and max(cash_move, recent_cash_progress) >= threshold
+    efficiency = dict(ignition.get("flow_efficiency") or {})
+    venue_efficiency = dict(efficiency.get("venues") or {})
+    proposer = str(ignition.get("proposer") or "").lower()
+    primary = proposer if proposer in CASH else (
+        sorted(cash)[0] if cash else None
     )
+    primary_state = str(
+        (venue_efficiency.get(primary) or {}).get("state") or "UNKNOWN"
+    ).upper()
+    other_states = {
+        name: str((venue_efficiency.get(name) or {}).get("state") or "UNKNOWN").upper()
+        for name in cash if name != primary
+    }
+    independent_continuation = any(
+        state == "CONTINUING" for state in other_states.values()
+    )
+    composite_veto = bool(
+        primary_state in ("ABSORBED", "EXHAUSTED")
+        and not independent_continuation
+    )
+    converts = bool(
+        not composite_veto
+        and max(cash_move, recent_cash_progress) >= threshold
+    )
+    if composite_veto:
+        status = primary_state
+    elif primary_state == "CONTINUING" or independent_continuation:
+        status = "CONTINUING"
+    elif primary_state == "DECAYING" or "DECAYING" in other_states.values():
+        status = "DECAYING"
+    else:
+        status = "CONTINUING" if converts else "UNKNOWN"
     return {
         "question": "EXECUTED_FLOW_CONVERTS_TO_PRICE",
-        "status": "FLOW_EXHAUSTION" if exhaustion else (
-            "CONVERTING" if converts else "UNPROVEN"
-        ),
+        "status": status,
         "cash_flow_strength": round(flow_strength, 6),
         "recent_cash_progress_bps": round(recent_cash_progress, 6),
         "episode_cash_progress_bps": round(cash_move, 6),
         "material_price_bps": round(threshold, 6),
         "price_impact": dict(impact or {}),
+        "legacy_absorption_observed": legacy_absorption,
+        "primary_cash_anchor": primary,
+        "primary_state": primary_state,
+        "other_cash_states": other_states,
+        "independent_cash_continuation": independent_continuation,
+        "composite_veto": composite_veto,
+        "converts": converts,
+        "flow_efficiency": efficiency,
+        "policy": "PRIMARY_CASH_DECAY_PLUS_NO_INDEPENDENT_CONTINUATION",
     }
 
 
 def _liquidity_question(flow_question):
     # The only full depth analyzer runs in the separate recorder process and
     # is authority=false. Never read a stale file or invent an IPC snapshot.
-    absorbed = flow_question.get("status") == "FLOW_EXHAUSTION"
+    absorbed = flow_question.get("status") in ("ABSORBED", "EXHAUSTED")
     return {
         "question": "LIQUIDITY_ACCEPTS_OR_ABSORBS",
         "status": "PRICE_FLOW_ABSORPTION" if absorbed else "UNAVAILABLE",
@@ -184,7 +220,7 @@ def evaluate(state, result, impact, basis, liquidation):
     q6 = _independence_question(ignition, basis)
     dual_cash = q6["status"] == "DUAL_INDEPENDENT_CASH"
     forced = bool(q2["forced_closing_risk"])
-    exhausted = q3["status"] == "FLOW_EXHAUSTION"
+    exhausted = q3["status"] in ("ABSORBED", "EXHAUSTED")
     mature = q5["status"] == "MATURE"
     liquidation_tail = q2["status"] == "LIQUIDATION_TAIL"
 
@@ -196,6 +232,7 @@ def evaluate(state, result, impact, basis, liquidation):
         forced and (
             liquidation_tail
             or exhausted
+            or q3.get("legacy_absorption_observed")
             or (mature and not dual_cash)
         )
     )
@@ -204,6 +241,11 @@ def evaluate(state, result, impact, basis, liquidation):
         blockers.append("BIAS_THESIS_FAIL")
     if q6["status"] in ("DERIVATIVES_LED_REJECT", "NO_CASH_AUTHORITY"):
         blockers.append("EXCHANGE_INDEPENDENCE_FAIL")
+    replay_approved = bool(
+        getattr(state, "entry_economics_v2_replay_approved", False)
+    )
+    if replay_approved and q3.get("composite_veto"):
+        blockers.append("FLOW_EFFICIENCY_V2_VETO")
     if forced_tail_veto:
         blockers.append("UNWIND_TAIL_VETO")
     return {
@@ -216,11 +258,13 @@ def evaluate(state, result, impact, basis, liquidation):
         },
         "blocking_reasons": blockers,
         "forced_unwind_tail": forced_tail_veto,
+        "entry_economics_v2_replay_approved": replay_approved,
         "policy": "COMPOSITE_CAUSAL_VETO_NO_SINGLE_SIGNAL_DIRECTION",
     }
 
 
-def attach_economics(report, *, total_cost_bps, reserve_bps, economic_ok):
+def attach_economics(report, *, total_cost_bps, reserve_bps, economic_ok,
+                     forward_edge=None):
     output = dict(report or {})
     questions = dict(output.get("questions") or {})
     questions["q7_economics"] = {
@@ -229,6 +273,8 @@ def attach_economics(report, *, total_cost_bps, reserve_bps, economic_ok):
         "total_cost_bps": round(_f(total_cost_bps), 6),
         "minimum_net_reserve_bps": round(_f(reserve_bps), 6),
         "authority": "RESIDUAL_EDGE_EMPIRICAL_COHORT",
+        "forward_edge": dict(forward_edge or {}),
+        "cost_counted_once": True,
     }
     output["questions"] = questions
     return output

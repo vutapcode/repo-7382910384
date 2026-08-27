@@ -1,5 +1,6 @@
 """Record and durably persist causally valid shadow calibration outcomes."""
 from loi_he_thong import edge_calibration_v2
+from loi_he_thong import entry_economics_v2
 
 VERSION="SHADOW_CAL_HOOK_V3_GAP_TAINT_EXCLUSION"
 
@@ -65,6 +66,24 @@ def install(hardened):
                     proof_type,proposer,execution_style,
                     execution_cost_bps=execution_cost_bps,
                 )
+                economic_snapshot=dict(
+                    thesis.get("economic_feature_snapshot") or {}
+                )
+                if (
+                    economic_snapshot.get("economic_contract_version")
+                    == entry_economics_v2.CONTRACT_VERSION
+                    and execution_cost_bps is not None
+                ):
+                    entry_economics_v2.record(
+                        state,
+                        economic_snapshot,
+                        net_bps=net/notional*10000.0,
+                        execution_cost_bps=execution_cost_bps,
+                        time_to_positive_net_seconds=getattr(
+                            pos,"edge_time_to_positive_net_seconds",None
+                        ),
+                        valid=True,
+                    )
                 # The close wrapper persists before this outer calibration hook
                 # runs.  Flush once more so a power loss immediately after EXIT
                 # cannot lose the newly learned row.

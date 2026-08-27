@@ -71,6 +71,62 @@ def evidence_row(receive_ms, side, price, *, strong=True, material=True):
 
 
 class IgnitionCoreTests(unittest.TestCase):
+    def test_oi_episode_binding_preserves_before_and_detects_refresh(self):
+        s = state(now=3.2)
+        s.open_interest = 1000.0
+        s.prev_open_interest = 999.0
+        s.open_interest_updated_at = 3.0
+        s.open_interest_change_pct = 0.10
+        s.open_interest_change_window_seconds = 5.0
+        before = ignition_core._oi_state_snapshot(s)
+        s.prev_open_interest = s.open_interest
+        s.open_interest = 1002.0
+        s.open_interest_updated_at = 3.3
+        s.open_interest_change_pct = 0.20
+        after = ignition_core._oi_state_snapshot(s)
+        report = ignition_core._oi_verification(
+            {"fresh": True, "intent": "POSITION_BUILD"}, before, after
+        )
+        self.assertEqual(report["episode_before"]["value"], 1000.0)
+        self.assertEqual(report["episode_after"]["value"], 1002.0)
+        self.assertTrue(report["refresh_observed"])
+        self.assertFalse(report["same_snapshot"])
+
+    def test_flow_efficiency_requires_composite_cash_exhaustion(self):
+        histories = {"binance_spot": [], "coinbase_spot": []}
+        # Three contiguous 500 ms windows. Executed sell quote persists while
+        # cash progress decays materially in both transitions.
+        for venue in histories:
+            price = 100.0
+            for index in range(15):
+                window = index // 5
+                progress_bps = (0.50, 0.15, 0.01)[window]
+                next_price = price * (1.0 - progress_bps / 10_000.0)
+                histories[venue].append({
+                    "venue": venue,
+                    "bucket_start_ms": index * 100,
+                    "receive_time_ms": index * 100 + 99,
+                    "epoch": 1,
+                    "clock_valid": True,
+                    "buy_quote": 0.0,
+                    "sell_quote": 100_000.0,
+                    "buy_qty": 0.0,
+                    "sell_qty": 1.0,
+                    "total_qty": 1.0,
+                    "first_price": price,
+                    "price": next_price,
+                })
+                price = next_price
+        report = ignition_core._flow_efficiency_snapshot(
+            histories, "SHORT", ("binance_spot", "coinbase_spot")
+        )
+        self.assertEqual(
+            report["venues"]["binance_spot"]["state"], "EXHAUSTED"
+        )
+        self.assertEqual(
+            report["venues"]["coinbase_spot"]["state"], "EXHAUSTED"
+        )
+
     def test_bias_wait_reasons_are_diagnostic_only(self):
         abstain = state(now=3.0)
         abstain.bias_state = "ABSTAIN"
@@ -1032,17 +1088,26 @@ class IgnitionCoreTests(unittest.TestCase):
             "commission_verified": True, "commission_source": "TEST",
             "execution_style": "TAKER",
         }
+        forward = {
+            "status": "ACTIVE", "level": "EXACT", "samples": 30,
+            "positive_net": True, "expected_guardian_net_bps": 4.0,
+            "lower_confidence_bound_bps": 1.0,
+        }
         with patch.object(entry_edge_tier.edge_calibration_v2, "factor", return_value=empirical), patch.object(
             entry_edge_tier.verified_cost_model, "estimate", return_value=costs
+        ), patch.object(
+            entry_edge_tier.entry_economics_v2, "estimate", return_value=forward
         ):
             allowed, report = entry_edge_tier.authorize(result, s)
-        self.assertFalse(report["cost_ok"])
+        self.assertTrue(report["cost_ok"])
         self.assertTrue(report["live_empirical_ok"])
         self.assertTrue(allowed)
 
         pooled = dict(empirical, level="PROOF_EXEC")
         with patch.object(entry_edge_tier.edge_calibration_v2, "factor", return_value=pooled), patch.object(
             entry_edge_tier.verified_cost_model, "estimate", return_value=costs
+        ), patch.object(
+            entry_edge_tier.entry_economics_v2, "estimate", return_value=forward
         ):
             allowed, report = entry_edge_tier.authorize(result, s)
         self.assertFalse(report["live_empirical_ok"])

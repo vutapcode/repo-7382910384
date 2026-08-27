@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 
-SCHEMA = "WSTRADE_SANITIZED_SHADOW_TRADE_V1"
+SCHEMA = "WSTRADE_SANITIZED_SHADOW_TRADE_V2_ENTRY_ECONOMICS"
 
 
 def _utc(ts):
@@ -23,6 +23,9 @@ def _compact(entry, exit_row):
     thesis = entry.get("entry_causal_thesis") or {}
     bias = thesis.get("bias_thesis") or {}
     oi = thesis.get("oi_intent") or {}
+    oi_verification = thesis.get("oi_verification_state") or {}
+    economic = thesis.get("economic_feature_snapshot") or {}
+    flow_efficiency = thesis.get("flow_efficiency") or {}
     costs = exit_row.get("execution_cost_model") or {}
     guardian = exit_row.get("guardian_state") or exit_row.get("guardian") or {}
     return {
@@ -52,6 +55,14 @@ def _compact(entry, exit_row):
         "net_pnl_usdt": exit_row.get("net_pnl_usdt"),
         "net_pnl_r": exit_row.get("net_pnl_r"),
         "holding_time_seconds": exit_row.get("holding_time_seconds"),
+        "time_to_positive_net_seconds": exit_row.get(
+            "time_to_positive_net_seconds"
+        ),
+        "economic_contract_version": thesis.get("economic_contract_version"),
+        "flow_efficiency_state": economic.get("flow_efficiency_state"),
+        "flow_efficiency": flow_efficiency,
+        "oi_verification_status": oi_verification.get("status"),
+        "consumed_band": economic.get("consumed_band"),
         "exit_reason": exit_row.get("risk_reason") or guardian.get("reason"),
         "guardian_version": guardian.get("version"),
         "guardian_exit_profile": guardian.get("exit_profile"),

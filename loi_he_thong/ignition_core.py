@@ -36,6 +36,7 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
+ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V2"
 
 
 def _f(value, default=0.0):
@@ -52,6 +53,164 @@ def _sign(side):
 def _bps(current, reference):
     current, reference = _f(current), _f(reference)
     return (current - reference) / reference * 10_000.0 if current > 0.0 and reference > 0.0 else 0.0
+
+
+def _efficiency_window(rows, side):
+    """Summarize one contiguous 500 ms receive-time window.
+
+    Quote volume is directional aggressive volume, while price progress is
+    measured from the first executable trade to the last.  Missing buckets,
+    epoch changes and invalid clocks make the window UNKNOWN instead of
+    manufacturing absorption from incomplete data.
+    """
+    if len(rows) != 5:
+        return None
+    epochs = {int(row.get("epoch", -1) or -1) for row in rows}
+    starts = [int(row.get("bucket_start_ms", 0) or 0) for row in rows]
+    if (
+        len(epochs) != 1
+        or any(not row.get("clock_valid") for row in rows)
+        or any(b - a != ignition_signals.BUCKET_MS for a, b in zip(starts, starts[1:]))
+    ):
+        return None
+    sign = _sign(side)
+    buy_quote = sum(_f(row.get("buy_quote")) for row in rows)
+    sell_quote = sum(_f(row.get("sell_quote")) for row in rows)
+    directional_quote = buy_quote if sign > 0.0 else sell_quote
+    total_qty = sum(_f(row.get("buy_qty")) + _f(row.get("sell_qty")) for row in rows)
+    aligned_qty = sum(
+        _f(row.get("buy_qty")) if sign > 0.0 else _f(row.get("sell_qty"))
+        for row in rows
+    )
+    imbalance = (
+        sign * (
+            sum(_f(row.get("buy_qty")) for row in rows)
+            - sum(_f(row.get("sell_qty")) for row in rows)
+        ) / total_qty
+        if total_qty > 0.0 else 0.0
+    )
+    first = next(
+        (_f(row.get("first_price")) for row in rows if _f(row.get("first_price")) > 0.0),
+        0.0,
+    )
+    last = next(
+        (_f(row.get("price")) for row in reversed(rows) if _f(row.get("price")) > 0.0),
+        0.0,
+    )
+    progress = sign * _bps(last, first) if first > 0.0 and last > 0.0 else 0.0
+    material = bool(
+        total_qty >= 2.0 * ignition_signals.MIN_QTY[str(rows[-1].get("venue"))]
+        and aligned_qty > 0.0 and imbalance >= 0.20 and directional_quote > 0.0
+    )
+    efficiency = progress / max(directional_quote / 1_000_000.0, 1e-9)
+    return {
+        "start_ms": starts[0], "end_ms": starts[-1] + ignition_signals.BUCKET_MS,
+        "epoch": next(iter(epochs)), "material": material,
+        "directional_quote": round(directional_quote, 6),
+        "total_qty": round(total_qty, 8), "imbalance": round(imbalance, 6),
+        "price_progress_bps": round(progress, 6),
+        "efficiency_bps_per_million": round(efficiency, 6),
+    }
+
+
+def _flow_efficiency_snapshot(histories, side, cash_venues):
+    """Return bounded three-window conversion evidence for each cash venue."""
+    venues = {}
+    for venue in sorted(set(cash_venues or ()) & CASH):
+        rows = list(histories.get(venue, ()))
+        windows = []
+        for offset in (15, 10, 5):
+            window = _efficiency_window(rows[-offset:-offset + 5] if offset > 5 else rows[-5:], side)
+            windows.append(window)
+        valid = [row for row in windows if row is not None and row.get("material")]
+        if len(valid) != 3:
+            state = "UNKNOWN"
+        else:
+            old, previous, current = valid
+            progress_decay_1 = previous["price_progress_bps"] < old["price_progress_bps"] * 0.70
+            progress_decay_2 = current["price_progress_bps"] < previous["price_progress_bps"] * 0.70
+            efficiency_decay_1 = previous["efficiency_bps_per_million"] < old["efficiency_bps_per_million"] * 0.70
+            efficiency_decay_2 = current["efficiency_bps_per_million"] < previous["efficiency_bps_per_million"] * 0.70
+            flow_persists = current["directional_quote"] >= previous["directional_quote"]
+            no_progress = current["price_progress_bps"] < MATERIAL_PRICE_BPS * 0.70
+            repeated_no_progress = all(
+                row["price_progress_bps"] < MATERIAL_PRICE_BPS * 0.70
+                for row in (old, previous, current)
+            )
+            if flow_persists and no_progress and progress_decay_1 and progress_decay_2:
+                state = "EXHAUSTED"
+            elif flow_persists and repeated_no_progress:
+                state = "ABSORBED"
+            elif (progress_decay_2 and efficiency_decay_2) or (
+                progress_decay_1 and efficiency_decay_1
+            ):
+                state = "DECAYING"
+            else:
+                state = "CONTINUING"
+        venues[venue] = {
+            "state": state,
+            "windows": windows,
+            "policy": "THREE_CONTIGUOUS_500MS_WINDOWS_NO_DEPTH_AUTHORITY",
+        }
+    return {
+        "version": "FLOW_EFFICIENCY_V2",
+        "side": side,
+        "venues": venues,
+        "authority": "ENTRY_COMPOSITE_ONLY",
+    }
+
+
+def _oi_state_snapshot(state):
+    """Freeze the REST OI observation visible in this scheduler turn."""
+    updated_at = _f(getattr(state, "open_interest_updated_at", 0.0))
+    value = _f(getattr(state, "open_interest", 0.0))
+    previous = _f(getattr(state, "prev_open_interest", 0.0))
+    return {
+        "value": value if value > 0.0 else None,
+        "updated_at": updated_at if updated_at > 0.0 else None,
+        "previous_value": previous if previous > 0.0 else None,
+        "change_pct": (
+            round(_f(getattr(state, "open_interest_change_pct", 0.0)), 6)
+            if updated_at > 0.0 and previous > 0.0 else None
+        ),
+        "sample_window_seconds": (
+            round(_f(getattr(state, "open_interest_change_window_seconds", 0.0)), 4)
+            if updated_at > 0.0 and previous > 0.0 else None
+        ),
+    }
+
+
+def _oi_verification(oi, before=None, after=None):
+    oi = dict(oi or {})
+    before, after = dict(before or {}), dict(after or {})
+    intent = str(oi.get("intent") or "NEUTRAL").upper()
+    fresh = bool(oi.get("fresh"))
+    status = (
+        "FRESH_POSITION_BUILD" if fresh and intent == "POSITION_BUILD" else
+        "FRESH_UNWIND" if fresh and intent == "UNWIND" else
+        "FRESH_NEUTRAL" if fresh else "UNKNOWN"
+    )
+    return {
+        "version": "OI_EPISODE_VERIFICATION_V1",
+        "status": status,
+        "fresh": fresh,
+        "intent": intent,
+        "intent_source": oi.get("intent_source"),
+        "frozen_updated_at": oi.get("frozen_oi_updated_at"),
+        "live_updated_at": oi.get("live_oi_updated_at"),
+        "live_age_seconds": oi.get("live_oi_age_seconds"),
+        "sample_window_seconds": oi.get("sample_window_seconds"),
+        "episode_before": before,
+        "episode_after": after,
+        "refresh_observed": bool(
+            _f(after.get("updated_at")) > _f(before.get("updated_at")) > 0.0
+        ),
+        "same_snapshot": bool(
+            _f(after.get("updated_at")) > 0.0
+            and _f(after.get("updated_at")) == _f(before.get("updated_at"))
+        ),
+        "policy": "STALE_IS_UNKNOWN_NEVER_SYNTHETIC_BUILD",
+    }
 
 
 def _wait(now, side, reason, phase="ARMED", episode=None, freshness=None):
@@ -480,6 +639,7 @@ def _start_episode(state, signal):
         "bias_snapshot": bias, "signals": [dict(signal)],
         "epochs": {signal.get("venue"): int(signal.get("epoch", 0))},
         "precursor_measurement": _precursor_cash_progress(state, signal),
+        "oi_before_snapshot": _oi_state_snapshot(state),
     }
     state._ignition_episode = episode
     return episode
@@ -1191,6 +1351,7 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "futures_cash_response_ok": True,
         "last_evidence_ms": latest_evidence_ms,
         "flow_by_venue": flow_by_venue,
+        "flow_efficiency": _flow_efficiency_snapshot(histories, side, cash),
         "venue_moves_bps": moves,
         "venue_anchor_prices": {
             name: (venue_reports.get(name) or {}).get("first_price")
@@ -1203,6 +1364,10 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "residual_edge_proxy_bps": 0.0,
         "residual_edge_source": "EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED",
         "oi_intent": oi,
+        "oi_verification_state": _oi_verification(
+            oi, None, _oi_state_snapshot(state),
+        ),
+        "economic_contract_version": ECONOMIC_CONTRACT_VERSION,
         "bias_context_quality": (
             "PROVISIONAL_DUAL_CASH_OI_BUILD"
             if provisional_context else "ESTABLISHED_OR_PULLBACK"
@@ -1473,6 +1638,9 @@ def _result_from_episode(state, episode, histories, freshness, now):
             ),
             "receive_time_ms": int(row.get("receive_time_ms", 0) or 0),
         } for row in episode["signals"][-3:]},
+        "flow_efficiency": _flow_efficiency_snapshot(
+            histories, side, cash_venues,
+        ),
         "venue_moves_bps": venue_moves,
         "venue_anchor_prices": venue_anchors,
         "venue_anchor_methods": venue_anchor_methods,
@@ -1493,6 +1661,10 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "residual_edge_proxy_bps": round(residual_proxy, 6),
         "residual_edge_source": "EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED",
         "oi_intent": oi,
+        "oi_verification_state": _oi_verification(
+            oi, episode.get("oi_before_snapshot"), _oi_state_snapshot(state),
+        ),
+        "economic_contract_version": ECONOMIC_CONTRACT_VERSION,
         "clock_quality": {name: {
             "uncertainty_ms": rows[-1].get("clock_uncertainty_ms"),
             "valid": rows[-1].get("clock_valid"), "epoch": rows[-1].get("epoch"),

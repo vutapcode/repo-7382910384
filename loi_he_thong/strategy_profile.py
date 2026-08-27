@@ -4,7 +4,7 @@ This module contains identity and invariants only. Trading thresholds stay in
 their owning strategy modules so metadata cannot silently override live logic.
 """
 
-PROFILE_VERSION = "IGNITION_CORE_2026_V1"
+PROFILE_VERSION = "IGNITION_CORE_ENTRY_ECONOMICS_V2"
 
 _PROFILE = {
     "name": "IGNITION_CORE_V1",
@@ -15,7 +15,7 @@ _PROFILE = {
     "architecture": (
         "BIAS_COUNCIL",
         "IGNITION_PREDICT_PROBE_PROVE",
-        "RESIDUAL_EDGE",
+        "ENTRY_ECONOMICS_V2",
         "GUARDIAN",
         "SHADOW_RISK",
     ),
@@ -32,7 +32,9 @@ _PROFILE = {
         "FUTURES_NEVER_SELF_OPENS",
         "CASH_PRICE_AND_EXECUTED_FLOW_AUTHORITY",
         "FAIL_NEUTRAL_ON_STALE_OPTIONAL_EVIDENCE",
-        "ORIGINAL_EDGE_VETO_IMMUTABLE",
+        "FROZEN_COST_COUNTED_ONCE",
+        "EMPIRICAL_GUARDIAN_NET_NOT_MFE_ALPHA",
+        "EDGE_LATE_IS_NOT_A_HARD_TIME_STOP",
         "BOUNDED_ADAPTATION_ONLY",
         "NO_ORDERBOOK_RESILIENCY_AUTHORITY",
         "NO_LEGACY_SMC_AUTHORITY",
