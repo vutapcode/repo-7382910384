@@ -63,6 +63,22 @@ class MissTaxonomyTests(unittest.TestCase):
         self.assertEqual(primary, "UNWIND_TAIL_VETO")
         self.assertIn("UNWIND_TAIL_VETO", failed)
 
+    def test_persistent_decay_is_soft_wait_not_empirical_failure(self):
+        result = {
+            "decision": "GO", "reason": "PERSISTENT_METAORDER_PROVED",
+            "side": "LONG", "s_votes": {},
+        }
+        edge = {
+            "cost_ok": False, "bootstrap_shadow_allowed": False,
+            "live_empirical_ok": False, "price_impact": {},
+            "spot_perp_basis": {},
+            "soft_wait_reasons": ["WAIT_PERSISTENT_FLOW_EFFICIENCY"],
+            "entry_thesis_audit": {"blocking_reasons": []},
+        }
+        primary, failed = launcher._miss_taxonomy(result, edge, False)
+        self.assertEqual(primary, "WAIT_PERSISTENT_FLOW_EFFICIENCY")
+        self.assertNotIn("EMPIRICAL_ALPHA_NOT_READY", failed)
+
 
     def test_proximity_cluster_does_not_dedupe_distinct_causal_episodes(self):
         tracker = DecisionOutcomeTracker(lambda *args, **kwargs: None)

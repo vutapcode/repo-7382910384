@@ -145,6 +145,41 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertFalse(flow["converts"])
         self.assertGreater(flow["episode_cash_progress_bps"], 0.0)
 
+    def test_persistent_decaying_soft_waits_instead_of_immediate_taker(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "DECAYING", "coinbase_spot": "UNKNOWN",
+            },
+        )
+        allowed, report = entry_edge_tier.authorize(candidate, SimpleNamespace(
+            entry_economics_v3_replay_approved=False,
+            wstrade_live_armed=False,
+        ))
+        self.assertFalse(allowed)
+        self.assertEqual(report["execution_style"], "TAKER")
+        self.assertIn(
+            "WAIT_PERSISTENT_FLOW_EFFICIENCY",
+            report["soft_wait_reasons"],
+        )
+        self.assertNotIn(
+            "WAIT_PERSISTENT_FLOW_EFFICIENCY", report["hard_vetoes"]
+        )
+
+    def test_persistent_continuing_remains_eligible(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "CONTINUING", "coinbase_spot": "UNKNOWN",
+            },
+        )
+        allowed, report = entry_edge_tier.authorize(candidate, SimpleNamespace(
+            entry_economics_v3_replay_approved=False,
+            wstrade_live_armed=False,
+        ))
+        self.assertTrue(allowed)
+        self.assertEqual(report["soft_wait_reasons"], [])
+
     def test_v3_absorption_is_telemetry_until_canonical_replay_is_approved(self):
         audit = entry_thesis_gate.evaluate(
             SimpleNamespace(entry_economics_v3_replay_approved=False),

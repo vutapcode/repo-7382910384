@@ -95,6 +95,7 @@ def classify(result, state):
     thesis_audit = entry_thesis_gate.evaluate(
         state, result, impact, basis, liquidation
     )
+    soft_waits = list(thesis_audit.get("soft_wait_reasons") or ())
     if candidate:
         hard_vetoes.extend(thesis_audit.get("blocking_reasons") or ())
 
@@ -121,7 +122,8 @@ def classify(result, state):
         and forward_edge.get("positive_net")
     )
     economic_ok = bool(
-        not hard_vetoes and (empirical_forward_ok or expected_net >= reserve)
+        not hard_vetoes and not soft_waits
+        and (empirical_forward_ok or expected_net >= reserve)
     )
     thesis_audit = entry_thesis_gate.attach_economics(
         thesis_audit, total_cost_bps=cost_budget,
@@ -131,6 +133,8 @@ def classify(result, state):
 
     if not candidate:
         edge_class = "NOT_CANDIDATE"
+    elif soft_waits:
+        edge_class = "WAIT_EVIDENCE"
     elif hard_vetoes:
         edge_class = "HARD_VETO"
     elif economic_ok:
@@ -197,8 +201,11 @@ def classify(result, state):
         and forward_edge.get("status") == "ACTIVE"
         and forward_edge.get("level") == "EXACT"
         and forward_edge.get("positive_net")
+        and not soft_waits
     )
-    bootstrap_shadow_allowed = bool(contract_ok and not hard_vetoes and not live)
+    bootstrap_shadow_allowed = bool(
+        contract_ok and not hard_vetoes and not soft_waits and not live
+    )
     research_probe_allowed = bool(bootstrap_shadow_allowed)
     ledger_type = "LIVE_LIKE_SHADOW" if live_empirical_ok else "RESEARCH_PROBE"
     execution_urgency = {
@@ -262,6 +269,7 @@ def classify(result, state):
         "execution_urgency": execution_urgency,
         "cost_components": costs, "normal_contract_ok": contract_ok,
         "fast_contract_ok": False, "hard_vetoes": hard_vetoes,
+        "soft_wait_reasons": soft_waits,
         "price_impact": impact, "spot_perp_basis": basis,
         "liquidation_context": liquidation,
         "entry_thesis_audit": thesis_audit,

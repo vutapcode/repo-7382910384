@@ -464,6 +464,7 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         failed.append("LIQUIDATION_TAIL_VETO")
     if would_enter:
         failed.extend(thesis_audit.get("blocking_reasons") or ())
+        failed.extend((edge_report or {}).get("soft_wait_reasons") or ())
     if reason == "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS":
         failed.append("BIAS_ALIGNMENT_FAIL")
     elif "BIAS" in reason or str((result or {}).get("side", "")).upper() not in ("LONG", "SHORT"):
@@ -481,6 +482,7 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
             thesis_audit.get("blocking_reasons") or ()
         )
         and not basis.get("perp_expansion")
+        and not (edge_report or {}).get("soft_wait_reasons")
     ):
         bootstrap = bool((edge_report or {}).get("bootstrap_shadow_allowed"))
         empirical = bool((edge_report or {}).get("live_empirical_ok"))
@@ -495,6 +497,7 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         "WAIT_CASH_RESPONSE", "WAIT_LEADER_UNCERTAIN", "WAIT_LATE_IMPULSE",
         "WAIT_IGNITION_PROOF", "WAIT_CAUSAL_PERSISTENCE", "WAIT_OI_REFRESH",
         "WAIT_OI_CLOSING_CONTEXT",
+        "WAIT_PERSISTENT_FLOW_EFFICIENCY",
         "FLOW_EFFICIENCY_V3_VETO", "PERP_LED_VETO", "LIQUIDATION_TAIL_VETO",
         "UNWIND_TAIL_VETO", "EXCHANGE_INDEPENDENCE_FAIL",
         "EMPIRICAL_ALPHA_NOT_READY",

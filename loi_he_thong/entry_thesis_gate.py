@@ -237,6 +237,9 @@ def evaluate(state, result, impact, basis, liquidation):
     exhausted = q3["status"] in ("ABSORBED", "EXHAUSTED")
     mature = q5["status"] == "MATURE"
     liquidation_tail = q2["status"] == "LIQUIDATION_TAIL"
+    persistent = str((result or {}).get("entry_mode") or "").upper() == (
+        "PERSISTENT_METAORDER"
+    )
 
     # Preserve good cash-led unwind opportunities. Forced closure becomes a
     # veto only when at least one independent symptom says the wave is ending:
@@ -251,6 +254,7 @@ def evaluate(state, result, impact, basis, liquidation):
         )
     )
     blockers = []
+    soft_waits = []
     if q1["status"] == "FAIL":
         blockers.append("BIAS_THESIS_FAIL")
     if q6["status"] in ("DERIVATIVES_LED_REJECT", "NO_CASH_AUTHORITY"):
@@ -262,15 +266,22 @@ def evaluate(state, result, impact, basis, liquidation):
         blockers.append("FLOW_EFFICIENCY_V3_VETO")
     if forced_tail_veto:
         blockers.append("UNWIND_TAIL_VETO")
+    # Persistence proves that a causal wave existed; it does not prove that a
+    # taker entry is still timely now.  DECAYING/UNKNOWN may recover on a later
+    # executed-flow window, so keep the episode retryable instead of turning
+    # either state into a hard veto.
+    if persistent and q3["status"] in ("DECAYING", "UNKNOWN"):
+        soft_waits.append("WAIT_PERSISTENT_FLOW_EFFICIENCY")
     return {
         "version": VERSION,
-        "decision": "WAIT" if blockers else "PASS",
+        "decision": "WAIT" if blockers or soft_waits else "PASS",
         "questions": {
             "q1_bias": q1, "q2_intent": q2, "q3_flow_efficiency": q3,
             "q4_liquidity": q4, "q5_maturity": q5,
             "q6_exchange_independence": q6,
         },
         "blocking_reasons": blockers,
+        "soft_wait_reasons": soft_waits,
         "forced_unwind_tail": forced_tail_veto,
         "entry_economics_v3_replay_approved": replay_approved,
         "policy": "COMPOSITE_CAUSAL_VETO_NO_SINGLE_SIGNAL_DIRECTION",
