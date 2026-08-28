@@ -85,6 +85,23 @@ class EntryContractParityTests(unittest.TestCase):
         self.assertFalse(launcher._entry_quorum_ok(result, state, 1.0))
         self.assertFalse(entry_edge_tier.normal_contract_ok(result))
 
+    def test_frozen_execution_policy_is_not_inferred_from_phase(self):
+        result = frozen_result()
+        result["phase"] = "RELEASE"
+        result["execution_policy"] = "MAKER"
+        valid, reason, detail = ignition_core.validate_frozen_entry_contract(
+            result, authority_scope="SHADOW", require_authority=True,
+        )
+        self.assertTrue(valid, reason)
+        self.assertEqual(detail["execution_policy"], "MAKER")
+
+        result["execution_policy"] = ""
+        valid, reason, _detail = ignition_core.validate_frozen_entry_contract(
+            result, authority_scope="SHADOW", require_authority=True,
+        )
+        self.assertFalse(valid)
+        self.assertEqual(reason, "FROZEN_EXECUTION_POLICY_INVALID")
+
 
 if __name__ == "__main__":
     unittest.main()

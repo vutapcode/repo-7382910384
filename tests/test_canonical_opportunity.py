@@ -7,7 +7,7 @@ from loi_he_thong import canonical_opportunity as opportunity
 def go(side="LONG", mode="NORMAL", phase="ACCEPTANCE"):
     return {
         "decision": "GO", "side": side,
-        "entry_mode": mode, "phase": phase,
+        "entry_mode": mode, "phase": phase, "execution_policy": "MAKER",
     }
 
 
@@ -34,6 +34,7 @@ class CanonicalOpportunityTests(unittest.TestCase):
         self.assertEqual(frozen["authority_basis"], "BIAS_ALIGNED")
         self.assertEqual(frozen["authority_dependencies"], dependencies)
         self.assertEqual(frozen["authority_proof_hash"], "proof-hash")
+        self.assertEqual(frozen["execution_policy"], "MAKER")
 
     def test_same_go_episode_is_claimed_once_across_exit_and_restart_state(self):
         state = SimpleNamespace()

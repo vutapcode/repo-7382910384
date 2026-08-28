@@ -1954,11 +1954,6 @@ async def _entry_loop():
             result = dict(result)
             result["canonical_opportunity_id"] = opportunity_id
             result["causal_episode_id"] = opportunity.get("causal_episode_id")
-            result["execution_policy"] = (
-                "TAKER"
-                if str(result.get("phase", "")).upper() == "RELEASE"
-                else "MAKER"
-            )
 
             s.mainnet_shadow_entry_claim = (
                 "CANONICAL_OPPORTUNITY", opportunity_id

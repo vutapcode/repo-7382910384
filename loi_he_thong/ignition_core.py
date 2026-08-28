@@ -1833,6 +1833,13 @@ def validate_frozen_entry_contract(
         return False, "DECISION_NOT_GO", {}
     if str(ignition.get("state") or "").upper() != "PROVE":
         return False, "IGNITION_NOT_PROVED", {}
+    execution_policy = str(
+        result.get("execution_policy") or ""
+    ).upper()
+    if execution_policy not in {"MAKER", "TAKER"}:
+        return False, "FROZEN_EXECUTION_POLICY_INVALID", {
+            "execution_policy": execution_policy,
+        }
     expected = {
         "IGNITION": {"METAORDER_CONTINUATION", "FAILED_REVERSION"},
         "PERSISTENT_METAORDER": {"PERSISTENT_METAORDER"},
@@ -1872,6 +1879,7 @@ def validate_frozen_entry_contract(
     return True, "PASS", {
         "entry_mode": mode,
         "proof_type": proof_type,
+        "execution_policy": execution_policy,
         "authority_scope": scope,
         "shadow_bootstrap_authority": mode == "PERSISTENT_METAORDER",
         "live_authority": mode != "PERSISTENT_METAORDER",

@@ -106,6 +106,9 @@ class StrategyAuthorityContractTests(unittest.TestCase):
         self.assertIn("_authority_contract", execution)
         self.assertIn("TRANSITION_CONFIRMED", execution)
         self.assertIn("SHARED_SHADOW_LIVE_CONTRACT", shadow)
+        self.assertNotIn(
+            'result["execution_policy"] = (', shadow,
+        )
 
     def test_old_causal_hardening_hook_is_explicitly_non_authority(self):
         source = self.text("loi_he_thong/entry_causal_hardening_hook.py")
