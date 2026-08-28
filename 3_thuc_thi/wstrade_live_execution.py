@@ -28,9 +28,10 @@ BBO_SUBMIT_MAX_AGE_SECONDS = 1.0
 def _revalidate_before_submit(state, side, result, now=None):
     """Compatibility wrapper around the single causal revalidation authority."""
     now = time.time() if now is None else float(now)
-    ok, reason, _detail = execution_causal_revalidation.validate_submit(
+    ok, reason, detail = execution_causal_revalidation.validate_submit(
         state, side, result, now,
     )
+    state.wstrade_live_causal_revalidation_detail = dict(detail or {})
     return ok, reason
 
 
@@ -659,8 +660,41 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
             state, side, result, now=time.time(),
         )
         state.wstrade_live_last_causal_revalidation = {
-            "ok": causal_ok, "reason": causal_reason, "checked_at": time.time(),
+            "ok": causal_ok,
+            "reason": causal_reason,
+            "detail": dict(
+                getattr(
+                    state, "wstrade_live_causal_revalidation_detail", {}
+                ) or {}
+            ),
+            "checked_at": time.time(),
         }
+        if event_callback:
+            timing = dict(
+                getattr(
+                    state, "wstrade_live_causal_revalidation_detail", {}
+                ) or {}
+            )
+            event_callback(
+                "LIVE_ENTRY_SUBMIT_REVALIDATED",
+                {
+                    "ok": causal_ok,
+                    "reason": causal_reason,
+                    "decision_to_submit_ms": timing.get(
+                        "decision_to_submit_ms"
+                    ),
+                    "flow_state_at_GO": timing.get("flow_state_at_GO"),
+                    "flow_state_at_submit": timing.get(
+                        "flow_state_at_submit"
+                    ),
+                    "cash_age_at_submit": timing.get(
+                        "cash_age_at_submit"
+                    ),
+                    "flow_decayed_before_submit": timing.get(
+                        "flow_decayed_before_submit", False
+                    ),
+                },
+            )
         if not causal_ok:
             return None
         cost_ok, cost_reason, cost_detail = (

@@ -291,6 +291,124 @@ def _flow_efficiency_snapshot(histories, side, cash_venues):
     }
 
 
+def flow_efficiency_state(snapshot, primary_cash=None, cash_venues=None):
+    """Normalize the flow classifier without inventing a second policy.
+
+    Both Fast Ignition and Persistent Metaorder publish the same state shape.
+    Execution may observe this value at submit time, but it cannot use this
+    helper to create direction or override the frozen Entry authority proof.
+    """
+    venues = dict((snapshot or {}).get("venues") or {})
+    cash = set(cash_venues or venues) & CASH
+    primary = str(primary_cash or "").lower()
+    if primary not in cash:
+        primary = sorted(cash)[0] if cash else None
+    primary_state = str(
+        (venues.get(primary) or {}).get("state") or "UNKNOWN"
+    ).upper()
+    other_states = {
+        name: str((venues.get(name) or {}).get("state") or "UNKNOWN").upper()
+        for name in cash if name != primary
+    }
+    independent_continuation = any(
+        value == "CONTINUING_CONFIRMED" for value in other_states.values()
+    )
+    states = {primary_state, *other_states.values()}
+    if primary_state == "CONTINUING_CONFIRMED" or independent_continuation:
+        state = "CONTINUING_CONFIRMED"
+    elif primary_state in {"ABSORBED", "EXHAUSTED"}:
+        state = primary_state
+    elif "REACCELERATION_UNCONFIRMED" in states:
+        state = "REACCELERATION_UNCONFIRMED"
+    elif "FADING" in states:
+        state = "FADING"
+    elif "DECAYING" in states:
+        state = "DECAYING"
+    else:
+        state = "UNKNOWN"
+    return {
+        "state": state,
+        "primary_cash": primary,
+        "primary_state": primary_state,
+        "other_cash_states": other_states,
+        "independent_cash_continuation": independent_continuation,
+        "policy": "SAME_CLASSIFIER_SEMANTICS_AS_ENTRY_THESIS",
+    }
+
+
+def causal_wave_snapshot(
+    histories, side, now_ms, *, causal_wave_id=None, wave_onset_ms=None,
+    primary_cash=None, cash_venues=None, flow_snapshot=None,
+    current_cash=None,
+):
+    """Return one read-only causal representation for Fast/Persistent/submit.
+
+    The snapshot carries per-field freshness and current conversion. It is not
+    an Entry gate and deliberately does not extend any evidence horizon.
+    """
+    side = str(side or "ABSTAIN").upper()
+    now_ms = int(now_ms or 0)
+    cash = sorted(set(cash_venues or CASH) & CASH)
+    flow = dict(
+        flow_snapshot
+        if isinstance(flow_snapshot, dict)
+        else _flow_efficiency_snapshot(histories, side, cash)
+    )
+    aggregate = flow_efficiency_state(flow, primary_cash, cash)
+    current_cash = dict(
+        current_cash
+        if isinstance(current_cash, dict)
+        else _current_cash_conversion(histories, side, now_ms)
+    )
+    opposite = "SHORT" if side == "LONG" else "LONG"
+    opposing_cash = _current_cash_conversion(histories, opposite, now_ms)
+    freshness = {}
+    epochs = {}
+    for venue in sorted(set(histories) & (CASH | {"futures"})):
+        rows = tuple(histories.get(venue, ()))
+        latest = max(
+            (int(row.get("receive_time_ms", 0) or 0) for row in rows),
+            default=0,
+        )
+        age_ms = now_ms - latest if latest > 0 else None
+        last = rows[-1] if rows else {}
+        freshness[venue] = {
+            "last_receive_ms": latest or None,
+            "age_ms": age_ms,
+            "fresh": bool(
+                age_ms is not None and 0 <= age_ms <= FOLLOW_MAX_MS
+            ),
+            "clock_valid": bool(last.get("clock_valid")) if rows else False,
+        }
+        epoch = int(last.get("epoch", 0) or 0) if rows else 0
+        if epoch > 0:
+            epochs[venue] = epoch
+    return {
+        "version": "CAUSAL_WAVE_SNAPSHOT_V1",
+        "causal_wave_id": str(causal_wave_id or ""),
+        "side": side,
+        "observed_at_ms": now_ms,
+        "wave_onset_ms": int(wave_onset_ms or 0) or None,
+        "cash_venues": cash,
+        "primary_cash": aggregate.get("primary_cash"),
+        "flow_efficiency_version": flow.get("version"),
+        "flow_efficiency_state": aggregate.get("state", "UNKNOWN"),
+        "flow_efficiency_summary": aggregate,
+        "current_cash_conversion": current_cash,
+        "opposing_cash_conversion": opposing_cash,
+        "contradictions": {
+            "opposing_cash_control": bool(opposing_cash.get("confirmed")),
+            "opposing_cash_venues": opposing_cash.get(
+                "accepted_cash_venues", []
+            ),
+        },
+        "freshness": freshness,
+        "epochs": epochs,
+        "authority": False,
+        "policy": "READ_ONLY_SHARED_REPRESENTATION_NO_HORIZON_CHANGE",
+    }
+
+
 def _oi_state_snapshot(state):
     """Freeze the REST OI observation visible in this scheduler turn."""
     updated_at = _f(getattr(state, "open_interest_updated_at", 0.0))
@@ -1429,6 +1547,7 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
     payload = dict(payload or {})
     side = str(side or "ABSTAIN").upper()
     current_cash = dict(payload.get("current_cash_conversion") or {})
+    wave_snapshot = dict(payload.get("causal_wave_snapshot") or {})
     transition = dict(payload.get("transition_authority") or {})
     transition_cash = {
         str(value) for value in transition.get("accepted_cash_venues") or ()
@@ -1459,11 +1578,22 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
         }
     frozen_bias = dict(payload.get("bias_snapshot") or {})
     dependencies = {
-        "version": "ENTRY_AUTHORITY_DEPENDENCIES_V1",
+        "version": "ENTRY_AUTHORITY_DEPENDENCIES_V2_FLOW_AT_GO",
         "causal_episode_id": str(causal_episode_id or ""),
         "side": side,
         "proof_type": str(proof_type or ""),
         "proof_venue": str(payload.get("proof_venue") or ""),
+        "flow_state_at_go": str(
+            wave_snapshot.get("flow_efficiency_state")
+            or flow_efficiency_state(
+                payload.get("flow_efficiency") or {},
+                payload.get("proposer"), payload.get("cash_venues"),
+            ).get("state")
+            or "UNKNOWN"
+        ).upper(),
+        "causal_wave_snapshot_version": str(
+            wave_snapshot.get("version") or "CAUSAL_WAVE_SNAPSHOT_V1"
+        ),
         "frozen_bias": {
             "side": str(frozen_bias.get("direction") or "ABSTAIN").upper(),
             "confidence": _f(frozen_bias.get("confidence")),
@@ -2108,6 +2238,9 @@ def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
         "captured": captured,
         "sides": sides,
         "authority": False,
+        "direct_entry_authority": False,
+        "shadow_bootstrap_authority": True,
+        "live_authority": "EMPIRICAL_COHORT_GATE_REQUIRED",
         "policy": "SHADOW_BOOTSTRAP_LIVE_EMPIRICAL_ONLY",
         "transition": identity != previous_identity,
     }
@@ -2183,6 +2316,16 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     names = set(cash) | {"futures"}
     current_cash = _current_cash_conversion(
         histories, side, int(now * 1000.0),
+    )
+    flow_efficiency = _flow_efficiency_snapshot(histories, side, cash)
+    shared_wave = causal_wave_snapshot(
+        histories, side, int(now * 1000.0),
+        causal_wave_id=candidate_id,
+        wave_onset_ms=wave_started_ms,
+        primary_cash=proposer,
+        cash_venues=cash,
+        flow_snapshot=flow_efficiency,
+        current_cash=current_cash,
     )
     moves = {
         name: _f((venue_reports.get(name) or {}).get("price_progress_bps"))
@@ -2308,6 +2451,7 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "futures_cash_response_ok": True,
         "last_evidence_ms": latest_evidence_ms,
         "current_cash_conversion": current_cash,
+        "causal_wave_snapshot": shared_wave,
         "dual_cash_synchronous_control": bool(
             current_cash.get("dual_cash_synchronous_control")
         ),
@@ -2315,7 +2459,7 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
             (snapshot or {}).get("bounded_wave_ledger") or {}
         ),
         "flow_by_venue": flow_by_venue,
-        "flow_efficiency": _flow_efficiency_snapshot(histories, side, cash),
+        "flow_efficiency": flow_efficiency,
         "venue_moves_bps": moves,
         "venue_anchor_prices": {
             name: (venue_reports.get(name) or {}).get("first_price")
@@ -2557,6 +2701,18 @@ def _result_from_episode(state, episode, histories, freshness, now):
         proposer_is_futures
         or (futures_response_ms and futures_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
     ) and not futures_reversal_confirmed
+    flow_efficiency = _flow_efficiency_snapshot(
+        histories, side, cash_venues,
+    )
+    shared_wave = causal_wave_snapshot(
+        histories, side, int(now * 1000.0),
+        causal_wave_id=episode.get("causal_episode_id"),
+        wave_onset_ms=episode.get("started_receive_ms"),
+        primary_cash=episode.get("proposer"),
+        cash_venues=cash_venues,
+        flow_snapshot=flow_efficiency,
+        current_cash=current_cash,
+    )
     latest = proof_signal or episode["signals"][-1]
     venue_moves = {}
     venue_anchors = {}
@@ -2611,6 +2767,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "futures_reversal_buckets": len(futures_reversals),
         "last_evidence_ms": int(episode.get("last_evidence_ms", 0) or 0),
         "current_cash_conversion": current_cash,
+        "causal_wave_snapshot": shared_wave,
         "dual_cash_synchronous_control": bool(
             current_cash.get("dual_cash_synchronous_control")
         ),
@@ -2643,9 +2800,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
             ),
             "receive_time_ms": int(row.get("receive_time_ms", 0) or 0),
         } for row in episode["signals"][-3:]},
-        "flow_efficiency": _flow_efficiency_snapshot(
-            histories, side, cash_venues,
-        ),
+        "flow_efficiency": flow_efficiency,
         "venue_moves_bps": venue_moves,
         "venue_anchor_prices": venue_anchors,
         "venue_anchor_methods": venue_anchor_methods,

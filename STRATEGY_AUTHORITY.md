@@ -45,9 +45,21 @@
    - Shadow bootstrap may collect structurally valid trades. Real money needs
      at least 30 persisted outcomes, positive expectancy, non-negative LCB,
      non-negative 25 bps stress and verified commission.
-   - A bounded 1-6 second persistent-metaorder lane is recorder telemetry only.
-     It cannot open, block or promote a trade until empirical review.
+   - A bounded 1-6 second persistent-metaorder lane has shadow/demo bootstrap
+     authority after the same Bias, current-cash, flow-efficiency, maturity,
+     OI-context and Edge contracts pass. Its observer snapshot itself has no
+     direct Entry authority. Real money remains blocked until the exact cohort
+     passes empirical expectancy/LCB/stress and manual Mainnet gates.
+   - Fast Ignition and Persistent Metaorder publish one read-only
+     `CausalWaveSnapshot` representation. This does not merge their proof
+     policies or extend their horizons; it prevents downstream modules from
+     assigning different meanings to the same conversion/freshness evidence.
 7. Execution and active position
+   - Every reserved GO is measured again immediately before submit using the
+     shared Ignition classifier. Journal telemetry records GO-to-submit delay,
+     flow state at GO/submit and cash age. This measurement cannot authorize a
+     rejected Entry; the post-proof raw scan remains a contradiction-only
+     safety guard, not a second strategy council.
    - Shadow sizing uses balance; exchange filters are enforced only when live
      filters are verified. Unknown filters remain `UNVERIFIED_FILTERS`.
    - Guardian exits only on adverse price with causal deterioration that breaks

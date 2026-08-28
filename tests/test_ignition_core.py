@@ -1157,6 +1157,16 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(result["ignition"]["proof_type"], "PERSISTENT_METAORDER")
         self.assertEqual(result["ignition"]["proposer"], "binance_spot")
         self.assertTrue(result["ignition"]["futures_follow_ok"])
+        shared = result["ignition"]["causal_wave_snapshot"]
+        self.assertEqual(shared["version"], "CAUSAL_WAVE_SNAPSHOT_V1")
+        self.assertEqual(shared["causal_wave_id"], result["causal_episode_id"])
+        self.assertFalse(shared["authority"])
+        self.assertTrue(
+            s.persistent_metaorder_shadow["shadow_bootstrap_authority"]
+        )
+        self.assertFalse(
+            s.persistent_metaorder_shadow["direct_entry_authority"]
+        )
         proposer_flow = result["ignition"]["flow_by_venue"]["binance_spot"]
         self.assertGreater(proposer_flow["recent_1s_volume_btc"], 0.0)
         self.assertGreater(proposer_flow["recent_1s_signed_imbalance"], 0.0)

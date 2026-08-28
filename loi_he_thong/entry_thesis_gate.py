@@ -6,6 +6,8 @@ unwind tail cannot look like fresh whale commitment merely because sell/buy
 market orders are large.
 """
 
+from loi_he_thong import ignition_core
+
 VERSION = "ENTRY_THESIS_GATE_V6_TAKER_FLOW_TIMING"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
@@ -133,9 +135,10 @@ def _flow_question(result, ignition, impact):
     primary = proposer if proposer in CASH else (
         sorted(cash)[0] if cash else None
     )
-    primary_state = str(
-        (venue_efficiency.get(primary) or {}).get("state") or "UNKNOWN"
-    ).upper()
+    shared_flow_state = ignition_core.flow_efficiency_state(
+        efficiency, primary, cash,
+    )
+    primary_state = str(shared_flow_state.get("primary_state") or "UNKNOWN")
     primary_efficiency = dict(venue_efficiency.get(primary) or {})
     marginal_now = primary_efficiency.get("marginal_conversion_now_bps")
     marginal_previous = primary_efficiency.get("previous_conversion_bps")
@@ -143,8 +146,8 @@ def _flow_question(result, ignition, impact):
         name: str((venue_efficiency.get(name) or {}).get("state") or "UNKNOWN").upper()
         for name in cash if name != primary
     }
-    independent_continuation = any(
-        state == "CONTINUING_CONFIRMED" for state in other_states.values()
+    independent_continuation = bool(
+        shared_flow_state.get("independent_cash_continuation")
     )
     independent_witnesses = sorted(
         name for name, state in other_states.items()
@@ -164,21 +167,7 @@ def _flow_question(result, ignition, impact):
             or independent_continuation
         )
     )
-    if composite_veto:
-        status = primary_state
-    elif primary_continuation or independent_continuation:
-        status = "CONTINUING_CONFIRMED"
-    elif (
-        primary_state == "REACCELERATION_UNCONFIRMED"
-        or "REACCELERATION_UNCONFIRMED" in other_states.values()
-    ):
-        status = "REACCELERATION_UNCONFIRMED"
-    elif primary_state == "FADING" or "FADING" in other_states.values():
-        status = "FADING"
-    elif primary_state == "DECAYING" or "DECAYING" in other_states.values():
-        status = "DECAYING"
-    else:
-        status = "UNKNOWN"
+    status = str(shared_flow_state.get("state") or "UNKNOWN").upper()
     return {
         "question": "EXECUTED_FLOW_CONVERTS_TO_PRICE",
         "status": status,
@@ -203,6 +192,7 @@ def _flow_question(result, ignition, impact):
         "composite_veto": composite_veto,
         "converts": converts,
         "flow_efficiency": efficiency,
+        "shared_flow_state": shared_flow_state,
         "policy": "MARGINAL_EXECUTED_FLOW_CONVERSION_NO_EPISODE_PROGRESS_AUTHORITY",
     }
 

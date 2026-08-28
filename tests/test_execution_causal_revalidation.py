@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from loi_he_thong import execution_causal_revalidation as recheck
 from loi_he_thong import ignition_core, ignition_signals, verified_cost_model
@@ -97,6 +98,43 @@ def fixture():
 
 
 class ExecutionCausalRevalidationTests(unittest.TestCase):
+    def test_pass_records_go_to_submit_timing_and_cash_age(self):
+        state, result = fixture()
+
+        ok, reason, detail = recheck.validate_submit(
+            state, "LONG", result, 10.0,
+        )
+
+        self.assertTrue(ok, (reason, detail))
+        self.assertEqual(detail["decision_to_submit_ms"], 500.0)
+        self.assertEqual(detail["flow_state_at_GO"], "UNKNOWN")
+        self.assertEqual(detail["flow_state_at_submit"], "UNKNOWN")
+        self.assertEqual(detail["cash_age_at_submit"], 200)
+        self.assertEqual(
+            detail["cash_age_by_venue_ms"], {"binance_spot": 200}
+        )
+
+    def test_timing_telemetry_flags_confirmed_flow_that_fades(self):
+        state, result = fixture()
+        result["authority_dependencies"] = dict(
+            result["authority_dependencies"],
+            flow_state_at_go="CONTINUING_CONFIRMED",
+        )
+        with patch.object(
+            ignition_core, "causal_wave_snapshot",
+            return_value={
+                "version": "CAUSAL_WAVE_SNAPSHOT_V1",
+                "flow_efficiency_state": "FADING",
+            },
+        ):
+            detail = recheck._submit_timing_telemetry(
+                state, "LONG", result, 10.0,
+            )
+
+        self.assertEqual(detail["flow_state_at_GO"], "CONTINUING_CONFIRMED")
+        self.assertEqual(detail["flow_state_at_submit"], "FADING")
+        self.assertTrue(detail["flow_decayed_before_submit"])
+
     def test_transition_proof_does_not_recheck_opposite_slow_bias(self):
         state, result = fixture()
         state.bias_state = "SHORT"

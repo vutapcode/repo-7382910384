@@ -13,7 +13,7 @@ from loi_he_thong import ignition_core
 from loi_he_thong import verified_cost_model
 
 
-VERSION = "EXECUTION_CAUSAL_REVALIDATION_V2_COHERENT_REVERSAL"
+VERSION = "EXECUTION_CAUSAL_REVALIDATION_V3_GO_SUBMIT_DECAY"
 PROOF_MAX_AGE_SECONDS = 1.5
 BBO_MAX_AGE_SECONDS = 1.0
 BIAS_MAX_AGE_SECONDS = 3.0
@@ -214,6 +214,7 @@ def _material_streak(rows, side, *, minimum=2):
 
 
 def _opposing_ok(rows, side):
+    """Submit-safety contradiction guard, never a second Entry council."""
     opposing = "SHORT" if str(side).upper() == "LONG" else "LONG"
     for venue in ("binance_spot", "coinbase_spot", "futures"):
         streak = _material_streak(rows.get(venue, ()), opposing)
@@ -265,6 +266,79 @@ def _opposing_ok(rows, side):
     return True, "PASS", {}
 
 
+def _submit_timing_telemetry(state, side, result, now):
+    """Observe GO -> submit decay through Ignition's shared representation."""
+    result = result or {}
+    dependencies = dict(result.get("authority_dependencies") or {})
+    decision_ts = _f(result.get("ts"))
+    now_ms = int(float(now) * 1000.0)
+    ignition = dict(result.get("ignition") or {})
+    go_state = str(
+        dependencies.get("flow_state_at_go")
+        or ignition_core.flow_efficiency_state(
+            ignition.get("flow_efficiency") or {},
+            ignition.get("proposer"), ignition.get("cash_venues"),
+        ).get("state")
+        or "UNKNOWN"
+    ).upper()
+    engine = _engine(state)
+    submit_snapshot = {}
+    submit_state = "UNKNOWN"
+    if engine is not None:
+        histories = {
+            name: tuple(venue.history)
+            for name, venue in engine.venues.items()
+        }
+        frozen_wave = dict(ignition.get("causal_wave_snapshot") or {})
+        ledger = dict(ignition.get("bounded_wave_ledger") or {})
+        submit_snapshot = ignition_core.causal_wave_snapshot(
+            histories, side, now_ms,
+            causal_wave_id=result.get("causal_episode_id"),
+            wave_onset_ms=(
+                frozen_wave.get("wave_onset_ms")
+                or ledger.get("wave_started_at_ms")
+            ),
+            primary_cash=ignition.get("proposer"),
+            cash_venues=ignition.get("cash_venues"),
+        )
+        submit_state = str(
+            submit_snapshot.get("flow_efficiency_state") or "UNKNOWN"
+        ).upper()
+    qualified = dict(
+        (dependencies.get("current_cash_conversion") or {}).get(
+            "qualified_acceptances"
+        ) or {}
+    )
+    cash_age_by_venue = {}
+    for venue, row in sorted(qualified.items()):
+        accepted_at = int((row or {}).get("accepted_at_ms", 0) or 0)
+        if accepted_at > 0:
+            cash_age_by_venue[str(venue)] = max(0, now_ms - accepted_at)
+    cash_age = max(cash_age_by_venue.values(), default=None)
+    decayed = bool(
+        go_state == "CONTINUING_CONFIRMED"
+        and submit_state in {
+            "FADING", "DECAYING", "REACCELERATION_UNCONFIRMED", "UNKNOWN",
+        }
+    )
+    return {
+        "version": "GO_SUBMIT_TIMING_V1",
+        "decision_to_submit_ms": (
+            round(max(0.0, (float(now) - decision_ts) * 1000.0), 3)
+            if decision_ts > 0.0 else None
+        ),
+        "flow_state_at_GO": go_state,
+        "flow_state_at_submit": submit_state,
+        "cash_age_at_submit": cash_age,
+        "cash_age_at_submit_ms": cash_age,
+        "cash_age_by_venue_ms": cash_age_by_venue,
+        "flow_decayed_before_submit": decayed,
+        "causal_wave_snapshot_at_submit": submit_snapshot,
+        "authority": False,
+        "policy": "TELEMETRY_ONLY_SHARED_IGNITION_CLASSIFIER",
+    }
+
+
 def validate_submit(state, side, result, now):
     """Fail closed when an already-reserved GO is no longer the same thesis."""
     result = result or {}
@@ -273,52 +347,69 @@ def validate_submit(state, side, result, now):
     if side not in ("LONG", "SHORT"):
         return False, "SIDE_INVALID", {}
 
+    timing = _submit_timing_telemetry(state, side, result, now)
+
+    def verdict(ok, reason, detail=None):
+        return bool(ok), str(reason), {
+            **timing,
+            **dict(detail or {}),
+            "post_proof_guard_policy": (
+                "CONTRADICTION_ONLY_NO_STRATEGY_REINTERPRETATION"
+            ),
+        }
+
     reserved = _reservation(state)
     if not reserved:
-        return False, "CANONICAL_RESERVATION_MISSING", {}
+        return verdict(False, "CANONICAL_RESERVATION_MISSING")
     if int(reserved.get("opportunity_id", 0) or 0) != int(
         result.get("canonical_opportunity_id", 0) or 0
     ):
-        return False, "CANONICAL_OPPORTUNITY_CHANGED", {}
+        return verdict(False, "CANONICAL_OPPORTUNITY_CHANGED")
     if str(reserved.get("causal_episode_id") or "") != str(
         result.get("causal_episode_id") or ""
     ):
-        return False, "CAUSAL_EPISODE_CHANGED", {}
+        return verdict(False, "CAUSAL_EPISODE_CHANGED")
 
     ok, reason, authority_detail = _authority_contract(
         state, side, result, now,
     )
     if not ok:
-        return ok, reason, authority_detail
+        return verdict(ok, reason, authority_detail)
 
     decision_ts = _f(result.get("ts"))
     proof_age = now - decision_ts
     if decision_ts <= 0.0 or proof_age < 0.0 or proof_age > PROOF_MAX_AGE_SECONDS:
-        return False, "CAUSAL_PROOF_STALE", {"age_seconds": max(0.0, proof_age)}
+        return verdict(
+            False, "CAUSAL_PROOF_STALE",
+            {"age_seconds": max(0.0, proof_age)},
+        )
 
     bid = _f(getattr(state, "execution_best_bid", 0.0))
     ask = _f(getattr(state, "execution_best_ask", 0.0))
     bbo_age = now - _f(getattr(state, "execution_price_time", 0.0))
     if bid <= 0.0 or ask <= bid:
-        return False, "EXECUTION_BBO_INVALID", {"bid": bid, "ask": ask}
+        return verdict(False, "EXECUTION_BBO_INVALID", {"bid": bid, "ask": ask})
     if bbo_age < 0.0 or bbo_age > BBO_MAX_AGE_SECONDS:
-        return False, "EXECUTION_BBO_STALE", {"age_seconds": max(0.0, bbo_age)}
+        return verdict(
+            False, "EXECUTION_BBO_STALE",
+            {"age_seconds": max(0.0, bbo_age)},
+        )
 
     ok, reason, detail = _epoch_ok(state, result)
     if not ok:
-        return ok, reason, detail
+        return verdict(ok, reason, detail)
     rows = _rows_after(state, result)
     if rows is None:
-        return False, "EXECUTED_FLOW_ENGINE_UNAVAILABLE", {}
+        return verdict(False, "EXECUTED_FLOW_ENGINE_UNAVAILABLE")
     ok, reason, detail = _opposing_ok(rows, side)
     if not ok:
-        return ok, reason, detail
-    return True, "PASS", {
+        return verdict(ok, reason, detail)
+    return verdict(True, "PASS", {
         **authority_detail,
         "proof_age_seconds": round(proof_age, 6),
         "bbo_age_seconds": round(bbo_age, 6),
         "post_result_rows": {name: len(value) for name, value in rows.items()},
-    }
+    })
 
 
 def _current_release(state, side, result, placed_at):

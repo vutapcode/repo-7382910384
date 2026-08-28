@@ -1291,6 +1291,34 @@ async def _open_position(side, result, now):
             "checked_at": float(now),
             "scope": "SHARED_SHADOW_LIVE_CONTRACT",
         }
+        _append_event("ENTRY_SUBMIT_REVALIDATED", {
+            "schema_version": "GO_SUBMIT_TIMING_V1",
+            "causal_episode_id": result.get("causal_episode_id"),
+            "canonical_opportunity_id": result.get(
+                "canonical_opportunity_id"
+            ),
+            "side": side,
+            "ok": causal_ok,
+            "reason": causal_reason,
+            "decision_to_submit_ms": causal_detail.get(
+                "decision_to_submit_ms"
+            ),
+            "flow_state_at_GO": causal_detail.get("flow_state_at_GO"),
+            "flow_state_at_submit": causal_detail.get(
+                "flow_state_at_submit"
+            ),
+            "cash_age_at_submit": causal_detail.get(
+                "cash_age_at_submit"
+            ),
+            "cash_age_by_venue_ms": causal_detail.get(
+                "cash_age_by_venue_ms", {}
+            ),
+            "flow_decayed_before_submit": causal_detail.get(
+                "flow_decayed_before_submit", False
+            ),
+            "authority_basis": causal_detail.get("authority_basis"),
+            "scope": "SHADOW_DEMO_AND_LIVE_PRE_SUBMIT",
+        })
         if not causal_ok:
             app.state.mainnet_shadow_last_skip = causal_reason
             return None

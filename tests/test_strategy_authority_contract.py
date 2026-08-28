@@ -111,6 +111,14 @@ class StrategyAuthorityContractTests(unittest.TestCase):
         source = self.text("loi_he_thong/entry_causal_hardening_hook.py")
         self.assertIn("RETIRED / NON_AUTHORITY", source[:500])
 
+    def test_persistent_lane_documentation_matches_shadow_bootstrap_behavior(self):
+        source = self.text("STRATEGY_AUTHORITY.md")
+        self.assertIn("shadow/demo bootstrap", source)
+        self.assertIn("CausalWaveSnapshot", source)
+        self.assertNotIn(
+            "persistent-metaorder lane is recorder telemetry only", source
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
