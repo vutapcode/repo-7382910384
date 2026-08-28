@@ -132,6 +132,22 @@ class MissTaxonomyTests(unittest.TestCase):
         self.assertEqual(primary, "WAIT_PERSISTENT_FLOW_EFFICIENCY")
         self.assertNotIn("EMPIRICAL_ALPHA_NOT_READY", failed)
 
+    def test_ignition_unknown_flow_is_recorded_as_soft_timing_wait(self):
+        result = {
+            "decision": "GO", "reason": "IGNITION_METAORDER_CONTINUATION",
+            "side": "SHORT", "s_votes": {},
+        }
+        edge = {
+            "cost_ok": False, "bootstrap_shadow_allowed": False,
+            "live_empirical_ok": False, "price_impact": {},
+            "spot_perp_basis": {},
+            "soft_wait_reasons": ["WAIT_IGNITION_FLOW_EFFICIENCY"],
+            "entry_thesis_audit": {"blocking_reasons": []},
+        }
+        primary, failed = launcher._miss_taxonomy(result, edge, False)
+        self.assertEqual(primary, "WAIT_IGNITION_FLOW_EFFICIENCY")
+        self.assertNotIn("EMPIRICAL_ALPHA_NOT_READY", failed)
+
 
     def test_proximity_cluster_does_not_dedupe_distinct_causal_episodes(self):
         tracker = DecisionOutcomeTracker(lambda *args, **kwargs: None)
