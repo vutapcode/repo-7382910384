@@ -18,7 +18,16 @@ class EntryBiasHandoffRegressionTests(unittest.TestCase):
         self.assertIn("BIAS_INVALID_OR_EXPIRED", source)
         self.assertIn('"_ignition_episode"', source)
         self.assertIn("_ignition_seen_bucket", source)
-        self.assertIn("never replay old flow as ignition", source)
+        self.assertIn("Bias never owns causal episodes", source)
+        self.assertIn("reset_causal=True", source)
+        self.assertNotIn(
+            '_reset_entry_context(state, current, reason, now, reset_causal=True)',
+            source,
+        )
+        self.assertNotIn(
+            '_reset_entry_context(state, "ABSTAIN", "BIAS_INVALID_OR_EXPIRED", now, reset_causal=True)',
+            source,
+        )
         self.assertIn("base.entry_council.evaluate = _entry_evaluate_context_guard", source)
 
 

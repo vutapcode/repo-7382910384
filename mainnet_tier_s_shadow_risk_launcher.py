@@ -35,20 +35,24 @@ _last_persist = 0.0
 
 _ENTRY_HISTORY_FIELDS = (
     "_ignition_episode",
+    "_ignition_pending_reversal_episode",
 )
 
-def _reset_entry_context(state, next_side, reason, now):
+def _reset_entry_context(state, next_side, reason, now, *, reset_causal=False):
+    """Reset wrapper-local handoff state; Bias never owns causal episodes.
+
+    Only a hard feed-integrity failure may invalidate Ignition memory here.
+    Bias changes are observations consumed by ``ignition_core`` itself, which
+    owns the wave lifecycle and its immutable onset.
+    """
     cleared = 0
-    for name in _ENTRY_HISTORY_FIELDS:
-        hist = getattr(state, name, None)
-        if name == "_ignition_episode":
+    if reset_causal:
+        for name in _ENTRY_HISTORY_FIELDS:
+            hist = getattr(state, name, None)
+            if isinstance(hist, dict):
+                cleared += len(hist.get("signals") or ())
             setattr(state, name, None)
-        elif hist is not None:
-            try:
-                cleared += len(hist)
-                hist.clear()
-            except (AttributeError, TypeError):
-                setattr(state, name, None)
+        state._ignition_pending_capture_id = None
     state._entry_causal_context_side = next_side
     state._entry_flow_persistence_side = next_side
     state._entry_acceptance_signature = None
@@ -57,14 +61,16 @@ def _reset_entry_context(state, next_side, reason, now):
     state.entry_causal_reset_reason = reason
     state.entry_causal_reset_count = int(getattr(state, "entry_causal_reset_count", 0) or 0) + 1
     state.entry_causal_reset_samples = cleared
-    # Keep streaming baselines warm, but mark every pre-reset 100 ms bucket as
-    # observed so a bias flip/reconnect can never replay old flow as ignition.
-    signal_engine = getattr(state, "_ignition_signal_engine", None)
-    venues = getattr(signal_engine, "venues", {}) or {}
-    state._ignition_seen_bucket = {
-        name: int(venue.history[-1].get("bucket_start_ms", -1))
-        for name, venue in venues.items() if getattr(venue, "history", None)
-    }
+    if reset_causal:
+        # Keep streaming baselines warm, but mark every pre-reset 100 ms bucket
+        # observed after a hard feed break. Bias changes deliberately do not
+        # touch this cursor or erase the causal wave.
+        signal_engine = getattr(state, "_ignition_signal_engine", None)
+        venues = getattr(signal_engine, "venues", {}) or {}
+        state._ignition_seen_bucket = {
+            name: int(venue.history[-1].get("bucket_start_ms", -1))
+            for name, venue in venues.items() if getattr(venue, "history", None)
+        }
 
 def _flow_volume_quorum_required(state, now, required=2):
     required = max(1, int(required))
@@ -346,7 +352,10 @@ def _entry_evaluate_context_guard(state, now=None, side=None):
     if bool(getattr(state, "futures_flow_ring_saturated", False)):
         previous = str(getattr(state, "_entry_causal_context_side", "ABSTAIN") or "ABSTAIN").upper()
         if previous in ("LONG", "SHORT"):
-            _reset_entry_context(state, "ABSTAIN", "FUTURES_FLOW_RING_SATURATED", now)
+            _reset_entry_context(
+                state, "ABSTAIN", "FUTURES_FLOW_RING_SATURATED", now,
+                reset_causal=True,
+            )
         state.mainnet_shadow_ready = False
         state.system_ready = False
         state.last_readiness_reason = "SHADOW_FEED_DEGRADED:futures_flow_ring_saturated"
