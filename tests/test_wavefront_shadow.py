@@ -359,6 +359,40 @@ class OfflineLiquidityTests(unittest.TestCase):
         self.assertFalse(response["authority"])
         self.assertFalse(response["eligible_for_live_gate"])
 
+    def test_unchanged_post_depletion_queue_is_zero_refill(self):
+        rows = []
+        analyzer = LiquidityResponseAnalyzer(
+            lambda stream, payload, event_time_ms=None: rows.append((stream, payload))
+        )
+        analyzer.observe({
+            "stream": "depth_checkpoint", "receive_time_ms": 1_000,
+            "payload": {
+                "lastUpdateId": 1, "bids": [["99", "100"]],
+                "asks": [["100", "100"]],
+            },
+        })
+        analyzer.observe({
+            "stream": "futures_trade_100ms", "receive_time_ms": 1_100,
+            "payload": {"buy_qty": 10.0, "sell_qty": 0.0,
+                        "high": 100.0, "low": 100.0},
+        })
+        analyzer.observe({
+            "stream": "depth_diff", "receive_time_ms": 1_200,
+            "payload": {"partial": True, "U": 2, "u": 2, "pu": 1,
+                        "b": [["99", "100"]], "a": [["100", "90"]]},
+        })
+        analyzer.observe({
+            "stream": "depth_diff", "receive_time_ms": 2_200,
+            "payload": {"partial": True, "U": 3, "u": 3, "pu": 2,
+                        "b": [["99", "100"]], "a": [["100", "90"]]},
+        })
+        analyzer.observe({"stream": "mark_price", "receive_time_ms": 4_200,
+                          "payload": {}})
+        response = rows[-1][1]
+        self.assertEqual(response["correlated_depletion_qty"], 10.0)
+        self.assertEqual(response["refill_ratio"]["250"], 0.0)
+        self.assertEqual(response["refill_ratio"]["1000"], 0.0)
+
 
 class WavefrontReplayTests(unittest.TestCase):
     def test_replay_is_deterministic_and_generated_rows_do_not_change_raw_digest(self):

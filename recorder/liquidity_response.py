@@ -12,7 +12,7 @@ from collections import deque
 from recorder.depth import DepthGap, LocalOrderBook
 
 
-VERSION = "LIQUIDITY_RESPONSE_RESEARCH_V2"
+VERSION = "LIQUIDITY_RESPONSE_RESEARCH_V3"
 HORIZONS_MS = (250, 1_000, 3_000)
 
 
@@ -127,21 +127,28 @@ class LiquidityResponseAnalyzer:
             pre_qty = self._qty(tracker["before_levels"])
             current_qty = self._qty(current)
             elapsed = now_ms - tracker["start_ms"]
-            ratio = current_qty / pre_qty if pre_qty > 0.0 else 0.0
+            post_min_qty = min(
+                _f(tracker.get("post_min_qty"), pre_qty), current_qty
+            )
+            tracker["post_min_qty"] = post_min_qty
+            depletion = max(0.0, pre_qty - post_min_qty)
+            refill_qty = max(0.0, current_qty - post_min_qty)
+            refill_fraction = (
+                min(1.0, refill_qty / depletion) if depletion > 0.0 else 0.0
+            )
+            if depletion > 0.0:
+                tracker["depletion_seen"] = True
+                tracker["max_depletion_qty"] = depletion
             for horizon in HORIZONS_MS:
                 if elapsed >= horizon and horizon not in tracker["refill_ratio"]:
-                    tracker["refill_ratio"][horizon] = round(ratio, 6)
+                    tracker["refill_ratio"][horizon] = round(
+                        refill_fraction, 6
+                    )
             if (
-                tracker.get("depletion_seen") and ratio >= 0.5
+                tracker.get("depletion_seen") and refill_fraction >= 0.5
                 and tracker.get("refill_half_life_ms") is None
             ):
                 tracker["refill_half_life_ms"] = max(0, elapsed)
-            if current_qty < pre_qty:
-                tracker["depletion_seen"] = True
-                tracker["max_depletion_qty"] = max(
-                    _f(tracker.get("max_depletion_qty")),
-                    max(0.0, pre_qty - current_qty),
-                )
             if elapsed >= HORIZONS_MS[-1]:
                 self._emit(tracker, now_ms)
             else:
@@ -208,6 +215,7 @@ class LiquidityResponseAnalyzer:
             "latest_levels": dict(before), "refill_ratio": {},
             "refill_half_life_ms": None, "depletion_seen": False,
             "pre_mid": pre_mid, "max_depletion_qty": 0.0,
+            "post_min_qty": self._qty(before),
         })
 
     def summary(self):
