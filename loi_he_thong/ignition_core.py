@@ -1813,6 +1813,71 @@ def validate_frozen_authority(result):
     }
 
 
+def validate_frozen_entry_contract(
+    result, *, authority_scope="SHADOW", require_authority=True,
+):
+    """Canonical structural contract shared by Edge and the launcher.
+
+    This validator does not calculate a new proof, direction, execution style,
+    or economics outcome. It only checks the immutable GO payload emitted by
+    Ignition. Persistent Metaorder is shadow-bootstrap authority and therefore
+    fails closed for a live scope even if later empirical gates are positive.
+    """
+    result = dict(result or {})
+    ignition = dict(result.get("ignition") or {})
+    mode = str(result.get("entry_mode") or "IGNITION").upper()
+    proof_type = str(ignition.get("proof_type") or "").upper()
+    proposer = str(ignition.get("proposer") or "").lower()
+    scope = str(authority_scope or "SHADOW").upper()
+    if result.get("decision") != "GO":
+        return False, "DECISION_NOT_GO", {}
+    if str(ignition.get("state") or "").upper() != "PROVE":
+        return False, "IGNITION_NOT_PROVED", {}
+    expected = {
+        "IGNITION": {"METAORDER_CONTINUATION", "FAILED_REVERSION"},
+        "PERSISTENT_METAORDER": {"PERSISTENT_METAORDER"},
+    }.get(mode)
+    if not expected or proof_type not in expected:
+        return False, "PROOF_MODE_CONTRACT_MISMATCH", {
+            "entry_mode": mode, "proof_type": proof_type,
+        }
+    if mode == "PERSISTENT_METAORDER" and scope == "LIVE":
+        return False, "PERSISTENT_METAORDER_LIVE_AUTHORITY_DISABLED", {
+            "shadow_bootstrap_authority": True,
+            "live_authority": False,
+        }
+    if not ignition.get("cash_venues"):
+        return False, "CASH_EVIDENCE_MISSING", {}
+    current_cash = dict(ignition.get("current_cash_conversion") or {})
+    if not current_cash.get("confirmed"):
+        return False, "CURRENT_CASH_CONVERSION_MISSING", {}
+    if _f(ignition.get("consumed_fraction"), 1.0) > MAX_CONSUMED_FRACTION:
+        return False, "IMPULSE_ALREADY_CONSUMED", {}
+    if mode == "PERSISTENT_METAORDER" and proposer not in CASH:
+        return False, "PERSISTENT_PROPOSER_NOT_CASH", {}
+    if proposer == "futures":
+        if not ignition.get("futures_cash_response_ok"):
+            return False, "FUTURES_PROPOSER_CASH_RESPONSE_MISSING", {}
+    elif not ignition.get("futures_follow_ok"):
+        return False, "CASH_PROPOSER_FUTURES_FOLLOW_MISSING", {}
+    has_authority = bool(
+        result.get("authority_basis")
+        or result.get("authority_dependencies")
+        or result.get("authority_proof_hash")
+    )
+    if require_authority or has_authority:
+        valid, reason, detail = validate_frozen_authority(result)
+        if not valid:
+            return False, reason, detail
+    return True, "PASS", {
+        "entry_mode": mode,
+        "proof_type": proof_type,
+        "authority_scope": scope,
+        "shadow_bootstrap_authority": mode == "PERSISTENT_METAORDER",
+        "live_authority": mode != "PERSISTENT_METAORDER",
+    }
+
+
 def _venue_anchor(history, started_receive_ms):
     """Return a venue-local pre-episode reference; never borrow another venue's basis."""
     rows = [row for row in history if _f(row.get("price")) > 0.0 or _f(row.get("first_price")) > 0.0]

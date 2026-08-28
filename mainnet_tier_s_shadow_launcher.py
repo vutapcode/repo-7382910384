@@ -410,23 +410,17 @@ def _flow_volume_quorum(state, now):
 
 
 def _entry_quorum_ok(result, state, now):
-    if not result or result.get("decision") != "GO":
-        return False
-    ignition = result.get("ignition") or {}
-    current_cash = dict(ignition.get("current_cash_conversion") or {})
-    return bool(
-        ignition.get("state") == "PROVE"
-        and ignition.get("proof_type") in (
-            "METAORDER_CONTINUATION", "FAILED_REVERSION",
-            "PERSISTENT_METAORDER",
-        )
-        and ignition.get("cash_venues")
-        and current_cash.get("confirmed")
-        and (
-            ignition.get("proposer") != "futures"
-            or ignition.get("futures_cash_response_ok")
-        )
+    scope = (
+        "LIVE" if bool(getattr(state, "wstrade_live_armed", False))
+        else "SHADOW"
     )
+    valid, reason, detail = entry_council.validate_frozen_entry_contract(
+        result, authority_scope=scope, require_authority=True,
+    )
+    state.entry_structural_contract = {
+        "ok": valid, "reason": reason, "detail": detail,
+    }
+    return valid
 
 
 def _bias_or_transition_authorized(result, state):

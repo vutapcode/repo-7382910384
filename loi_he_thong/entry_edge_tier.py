@@ -10,6 +10,7 @@ import time
 from loi_he_thong import edge_calibration_v2
 from loi_he_thong import entry_economics_v2
 from loi_he_thong import entry_thesis_gate
+from loi_he_thong import ignition_core
 from loi_he_thong import entry_microstructure as micro
 from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
@@ -30,26 +31,12 @@ def _f(value, default=0.0):
 
 
 def _ignition_contract(result):
-    ignition = (result or {}).get("ignition") or {}
-    current_cash = dict(ignition.get("current_cash_conversion") or {})
-    proposer = str(ignition.get("proposer") or "")
-    proof = str(ignition.get("proof_type") or "")
-    persistent = str((result or {}).get("entry_mode") or "").upper() == "PERSISTENT_METAORDER"
-    accepted_proofs = (
-        ("PERSISTENT_METAORDER",) if persistent
-        else ("METAORDER_CONTINUATION", "FAILED_REVERSION")
+    # Historical synthetic fixtures may predate the authority digest, but all
+    # active GO payloads carry it and are validated automatically here.
+    valid, _reason, _detail = ignition_core.validate_frozen_entry_contract(
+        result, authority_scope="SHADOW", require_authority=False,
     )
-    return bool(
-        (result or {}).get("decision") == "GO"
-        and ignition.get("state") == "PROVE"
-        and proof in accepted_proofs
-        and ignition.get("cash_venues")
-        and current_cash.get("confirmed")
-        and _f(ignition.get("consumed_fraction"), 1.0) <= 0.35
-        and (not persistent or proposer in ("binance_spot", "coinbase_spot"))
-        and (proposer != "futures" or ignition.get("futures_cash_response_ok"))
-        and (proposer == "futures" or ignition.get("futures_follow_ok"))
-    )
+    return valid
 
 
 def fast_contract_ok(result):
@@ -194,7 +181,8 @@ def classify(result, state):
     # Ignition cohort.
     stress_ok = bool(promotion_trades >= 30 and stress_total >= 0.0)
     live_empirical_ok = bool(
-        samples >= 30
+        mode != "PERSISTENT_METAORDER"
+        and samples >= 30
         and str(calibration.get("level") or "").upper() == "EXACT"
         and calibration.get("live_empirical_ok")
         and raw_empirical_ok
