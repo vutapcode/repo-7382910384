@@ -498,6 +498,101 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(promoted["bias_snapshot"]["direction"], "SHORT")
         self.assertEqual(promoted["side"], "LONG")
 
+    def test_transition_span_uses_first_qualified_acceptance_not_raw_flow(self):
+        pending = {
+            "side": "LONG", "started_receive_ms": 3_200,
+            "pre_impulse_bias_snapshot": {"direction": "SHORT"},
+            "opposing_flow_efficiency_at_onset": {"venues": {
+                "binance_spot": {"state": "DECAYING"},
+                "coinbase_spot": {"state": "UNKNOWN"},
+            }},
+        }
+        old_binance = evidence_row(3_000, "SHORT", 99.80)
+        old_coinbase = evidence_row(
+            3_050, "SHORT", 99.82, strong=False, material=False,
+        )
+        old_coinbase["venue"] = "coinbase_spot"
+        raw_binance = evidence_row(
+            3_200, "LONG", 99.805, material=False,
+        )
+        raw_coinbase = evidence_row(
+            3_250, "LONG", 99.825, material=False,
+        )
+        raw_coinbase["venue"] = "coinbase_spot"
+        qualified_binance = evidence_row(3_400, "LONG", 99.85)
+        qualified_coinbase = evidence_row(3_500, "LONG", 99.87)
+        qualified_coinbase["venue"] = "coinbase_spot"
+        histories = {
+            "binance_spot": (
+                old_binance, raw_binance, qualified_binance,
+            ),
+            "coinbase_spot": (
+                old_coinbase, raw_coinbase, qualified_coinbase,
+            ),
+            "futures": (),
+        }
+        current_old = {"venues": {
+            "binance_spot": {"state": "UNKNOWN"},
+            "coinbase_spot": {"state": "UNKNOWN"},
+        }}
+        with patch.object(
+            ignition_core, "_flow_efficiency_snapshot",
+            return_value=current_old,
+        ):
+            transition = ignition_core._transition_snapshot(
+                pending, histories, 3_550,
+            )
+        self.assertEqual(
+            transition["venues"]["binance_spot"][
+                "first_qualified_accept_ms"
+            ], 3_400,
+        )
+        self.assertEqual(
+            transition["venues"]["coinbase_spot"][
+                "first_qualified_accept_ms"
+            ], 3_500,
+        )
+        self.assertEqual(transition["cash_acceptance_span_ms"], 100)
+
+    def test_one_old_side_failure_cannot_override_other_cash_continuation(self):
+        pending = {
+            "side": "LONG", "started_receive_ms": 3_200,
+            "pre_impulse_bias_snapshot": {"direction": "SHORT"},
+            "opposing_flow_efficiency_at_onset": {"venues": {
+                "binance_spot": {"state": "DECAYING"},
+                "coinbase_spot": {"state": "UNKNOWN"},
+            }},
+        }
+        old_binance = evidence_row(3_000, "SHORT", 99.80)
+        old_coinbase = evidence_row(
+            3_050, "SHORT", 99.82, strong=False, material=False,
+        )
+        old_coinbase["venue"] = "coinbase_spot"
+        new_binance = evidence_row(3_400, "LONG", 99.85)
+        new_coinbase = evidence_row(3_500, "LONG", 99.87)
+        new_coinbase["venue"] = "coinbase_spot"
+        histories = {
+            "binance_spot": (old_binance, new_binance),
+            "coinbase_spot": (old_coinbase, new_coinbase),
+            "futures": (),
+        }
+        current_old = {"venues": {
+            "binance_spot": {"state": "UNKNOWN"},
+            "coinbase_spot": {"state": "CONTINUING_CONFIRMED"},
+        }}
+        with patch.object(
+            ignition_core, "_flow_efficiency_snapshot",
+            return_value=current_old,
+        ):
+            transition = ignition_core._transition_snapshot(
+                pending, histories, 3_550,
+            )
+        self.assertFalse(transition["old_side_failure_confirmed"])
+        self.assertFalse(transition["confirmed"])
+        self.assertEqual(
+            transition["old_side_continuing_venues"], ["coinbase_spot"],
+        )
+
     def test_confirmed_cash_transition_survives_current_bias_abstain(self):
         """Slow Bias may go neutral during handover; strict cash proof survives."""
         s = state(now=3.6)
@@ -725,6 +820,9 @@ class IgnitionCoreTests(unittest.TestCase):
                 "old_side_failure_confirmed": True,
                 "new_side_cash_control_confirmed": True,
                 "cash_synchronous_transition": True,
+                "accepted_cash_venues": [
+                    "binance_spot", "coinbase_spot",
+                ],
                 "hard_contradiction": False,
             },
         }
@@ -760,6 +858,8 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(result["decision"], "GO")
         self.assertTrue(result["ignition"]["transition_confirmed"])
         self.assertEqual(result["ignition"]["leader"], "SIMULTANEOUS")
+        self.assertEqual(result["authority_basis"], "TRANSITION_CONFIRMED")
+        self.assertTrue(result["authority_proof_hash"])
 
     def test_aligned_dual_cash_control_resolves_leader_without_reversal(self):
         s = state(now=10.0)
@@ -817,6 +917,8 @@ class IgnitionCoreTests(unittest.TestCase):
             result["ignition"]["dual_cash_synchronous_control"]
         )
         self.assertFalse(result["ignition"]["transition_confirmed"])
+        self.assertEqual(result["authority_basis"], "BIAS_ALIGNED")
+        self.assertTrue(result["authority_proof_hash"])
 
     def test_proved_episode_waits_when_current_cash_conversion_has_expired(self):
         s = state(now=10.0)

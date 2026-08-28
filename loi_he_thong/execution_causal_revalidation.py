@@ -5,6 +5,9 @@ authorizes a strategy candidate.  It only decides whether an already reserved
 candidate is still executable after REST/maker latency.
 """
 
+import hashlib
+import json
+
 from loi_he_thong import ignition_signals
 from loi_he_thong import ignition_core
 from loi_he_thong import verified_cost_model
@@ -34,6 +37,87 @@ def _engine(state):
 def _reservation(state):
     value = getattr(state, "canonical_reserved_context", None)
     return value if isinstance(value, dict) else {}
+
+
+def _authority_contract(state, side, result, now):
+    """Validate the immutable proof dependencies without rerunning strategy."""
+    reserved = _reservation(state)
+    basis = str((result or {}).get("authority_basis") or "").upper()
+    dependencies = dict(
+        (result or {}).get("authority_dependencies") or {}
+    )
+    proof_hash = str((result or {}).get("authority_proof_hash") or "")
+    if basis not in {"BIAS_ALIGNED", "TRANSITION_CONFIRMED"}:
+        return False, "AUTHORITY_BASIS_INVALID", {}
+    if not dependencies or not proof_hash:
+        return False, "AUTHORITY_PROOF_MISSING", {}
+    if basis != str(reserved.get("authority_basis") or "").upper():
+        return False, "RESERVED_AUTHORITY_BASIS_CHANGED", {}
+    if dependencies != dict(reserved.get("authority_dependencies") or {}):
+        return False, "RESERVED_AUTHORITY_DEPENDENCIES_CHANGED", {}
+    if proof_hash != str(reserved.get("authority_proof_hash") or ""):
+        return False, "RESERVED_AUTHORITY_PROOF_CHANGED", {}
+    encoded = json.dumps(
+        {"authority_basis": basis, "authority_dependencies": dependencies},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    if hashlib.sha256(encoded).hexdigest() != proof_hash:
+        return False, "AUTHORITY_PROOF_HASH_INVALID", {}
+    if str(dependencies.get("side") or "").upper() != str(side).upper():
+        return False, "AUTHORITY_SIDE_CHANGED", {}
+    if str(dependencies.get("causal_episode_id") or "") != str(
+        (result or {}).get("causal_episode_id") or ""
+    ):
+        return False, "AUTHORITY_EPISODE_CHANGED", {}
+
+    cash = dict(dependencies.get("current_cash_conversion") or {})
+    qualified = dict(cash.get("qualified_acceptances") or {})
+    now_ms = int(float(now) * 1000.0)
+    fresh = []
+    for venue, row in sorted(qualified.items()):
+        row = dict(row or {})
+        accepted_at = int(row.get("accepted_at_ms", 0) or 0)
+        valid_until = int(row.get("valid_until_ms", 0) or 0)
+        if accepted_at <= now_ms <= valid_until:
+            fresh.append(str(venue))
+    minimum = int(cash.get("minimum_fresh_venues", 0) or 0)
+    if minimum <= 0 or len(fresh) < minimum:
+        return False, "CURRENT_CASH_AUTHORITY_EXPIRED", {
+            "fresh_cash_venues": fresh,
+            "minimum_fresh_venues": minimum,
+        }
+
+    if basis == "BIAS_ALIGNED":
+        if str(
+            getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN"
+        ).upper() != str(side).upper():
+            return False, "BIAS_SIDE_CHANGED", {}
+        if _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONFIDENCE:
+            return False, "BIAS_CONFIDENCE_DROPPED", {}
+        bias_age = float(now) - _f(getattr(state, "bias_updated_at", 0.0))
+        if bias_age < 0.0 or bias_age > BIAS_MAX_AGE_SECONDS:
+            return False, "BIAS_STALE", {
+                "age_seconds": max(0.0, bias_age)
+            }
+    else:
+        transition = dict(dependencies.get("transition") or {})
+        accepted = {
+            str(value) for value in transition.get(
+                "accepted_cash_venues", ()
+            )
+        }
+        if not (
+            transition.get("old_side_failure")
+            and transition.get("new_side_cash_control")
+            and transition.get("dual_cash_acceptance")
+            and {"binance_spot", "coinbase_spot"}.issubset(accepted)
+            and {"binance_spot", "coinbase_spot"}.issubset(set(fresh))
+        ):
+            return False, "TRANSITION_AUTHORITY_DEPENDENCY_INVALID", {}
+    return True, "PASS", {
+        "authority_basis": basis,
+        "fresh_cash_venues": fresh,
+    }
 
 
 def _material(row):
@@ -201,13 +285,11 @@ def validate_submit(state, side, result, now):
     ):
         return False, "CAUSAL_EPISODE_CHANGED", {}
 
-    if str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper() != side:
-        return False, "BIAS_SIDE_CHANGED", {}
-    if _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONFIDENCE:
-        return False, "BIAS_CONFIDENCE_DROPPED", {}
-    bias_age = now - _f(getattr(state, "bias_updated_at", 0.0))
-    if bias_age < 0.0 or bias_age > BIAS_MAX_AGE_SECONDS:
-        return False, "BIAS_STALE", {"age_seconds": max(0.0, bias_age)}
+    ok, reason, authority_detail = _authority_contract(
+        state, side, result, now,
+    )
+    if not ok:
+        return ok, reason, authority_detail
 
     decision_ts = _f(result.get("ts"))
     proof_age = now - decision_ts
@@ -232,6 +314,7 @@ def validate_submit(state, side, result, now):
     if not ok:
         return ok, reason, detail
     return True, "PASS", {
+        **authority_detail,
         "proof_age_seconds": round(proof_age, 6),
         "bbo_age_seconds": round(bbo_age, 6),
         "post_result_rows": {name: len(value) for name, value in rows.items()},

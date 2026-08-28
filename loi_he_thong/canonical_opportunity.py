@@ -191,6 +191,13 @@ def _reservation_context(state, opportunity_id, now):
         "result_ts": float(result.get("ts", 0.0) or 0.0),
         "reserved_at": float(now),
         "execution_cost_contract": cost_contract,
+        "authority_basis": str(result.get("authority_basis") or ""),
+        "authority_dependencies": dict(
+            result.get("authority_dependencies") or {}
+        ),
+        "authority_proof_hash": str(
+            result.get("authority_proof_hash") or ""
+        ),
         "active_opportunity_id": int(
             getattr(state, "canonical_opportunity_count", 0) or 0
         ),

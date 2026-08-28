@@ -12,6 +12,29 @@ def go(side="LONG", mode="NORMAL", phase="ACCEPTANCE"):
 
 
 class CanonicalOpportunityTests(unittest.TestCase):
+    def test_reservation_freezes_authority_proof(self):
+        dependencies = {
+            "version": "ENTRY_AUTHORITY_DEPENDENCIES_V1",
+            "side": "LONG", "causal_episode_id": "episode-proof",
+        }
+        state = SimpleNamespace(entry_shadow_council={
+            **go(), "causal_episode_id": "episode-proof",
+            "authority_basis": "BIAS_ALIGNED",
+            "authority_dependencies": dependencies,
+            "authority_proof_hash": "proof-hash",
+            "ignition": {},
+        })
+        row = opportunity.observe(
+            state, state.entry_shadow_council, qualified=True, now=100.0,
+        )
+        self.assertTrue(opportunity.reserve(
+            state, row["opportunity_id"], now=100.1,
+        ))
+        frozen = state.canonical_reserved_context
+        self.assertEqual(frozen["authority_basis"], "BIAS_ALIGNED")
+        self.assertEqual(frozen["authority_dependencies"], dependencies)
+        self.assertEqual(frozen["authority_proof_hash"], "proof-hash")
+
     def test_same_go_episode_is_claimed_once_across_exit_and_restart_state(self):
         state = SimpleNamespace()
         first = opportunity.observe(state, go(), qualified=True, now=100.0)

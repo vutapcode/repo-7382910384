@@ -675,6 +675,15 @@ def _transition_snapshot(pending, histories, now_ms):
         name: str((row or {}).get("state") or "UNKNOWN").upper()
         for name, row in dict(old_flow.get("venues") or {}).items()
     }
+    current_old_flow = _flow_efficiency_snapshot(
+        histories, background, CASH,
+    )
+    current_old_states = {
+        name: str((row or {}).get("state") or "UNKNOWN").upper()
+        for name, row in dict(
+            current_old_flow.get("venues") or {}
+        ).items()
+    }
 
     for venue in sorted(CASH):
         rows = [
@@ -687,7 +696,7 @@ def _transition_snapshot(pending, histories, now_ms):
             row for row in rows
             if int(row.get("receive_time_ms", 0) or 0) < started_ms
             and str(row.get("side") or "").upper() == background
-            and _material_flow(row)
+            and _directional_material_flow(row, background)
         ]
         pre_rows = [
             row for row in rows
@@ -698,7 +707,7 @@ def _transition_snapshot(pending, histories, now_ms):
             row for row in rows
             if int(row.get("receive_time_ms", 0) or 0) >= started_ms
             and str(row.get("side") or "").upper() == side
-            and _material_flow(row)
+            and _directional_material_flow(row, side)
         ]
         old_extreme = None
         anchor_source = "UNAVAILABLE"
@@ -716,32 +725,35 @@ def _transition_snapshot(pending, histories, now_ms):
         elif pre_rows:
             old_extreme = _f(pre_rows[-1].get("price"))
             anchor_source = "PRE_TRANSITION_CASH_CLOSE"
-        latest_new = new_rows[-1] if new_rows else None
+        qualified_new_rows = []
+        for row in new_rows:
+            row_reclaim = (
+                sign * _bps(_f(row.get("price")), old_extreme)
+                if _f(old_extreme) > 0.0 else 0.0
+            )
+            if row_reclaim >= MATERIAL_PRICE_BPS:
+                qualified_new_rows.append(row)
+        latest_new = qualified_new_rows[-1] if qualified_new_rows else None
         reclaim_bps = (
             sign * _bps(_f(latest_new.get("price")), old_extreme)
             if latest_new is not None and _f(old_extreme) > 0.0 else 0.0
         )
-        accepted = bool(
-            latest_new is not None
-            and reclaim_bps >= MATERIAL_PRICE_BPS
-            and sign * _f(latest_new.get("imbalance")) >= 0.20
-            and sign * _f(latest_new.get("price_conversion_bps"))
-                >= MATERIAL_PRICE_BPS
-        )
+        accepted = bool(latest_new is not None)
         if accepted:
             accepted_venues.append(venue)
-            first_accept_ms.append(min(
-                int(row.get("receive_time_ms", 0) or 0) for row in new_rows
+            first_accept_ms.append(int(
+                qualified_new_rows[0].get("receive_time_ms", 0) or 0
             ))
         latest_new_ms = max((
-            int(row.get("receive_time_ms", 0) or 0) for row in new_rows
+            int(row.get("receive_time_ms", 0) or 0)
+            for row in qualified_new_rows
         ), default=0)
         returned = [
             row for row in rows
             if latest_new_ms > 0
             and int(row.get("receive_time_ms", 0) or 0) > latest_new_ms
             and str(row.get("side") or "").upper() == background
-            and _material_flow(row)
+            and _directional_material_flow(row, background)
         ]
         if returned:
             opposing_return_venues.append(venue)
@@ -753,10 +765,17 @@ def _transition_snapshot(pending, histories, now_ms):
             "reclaim_bps": round(reclaim_bps, 6),
             "new_side_converts": accepted,
             "first_accept_ms": (
-                min(int(row.get("receive_time_ms", 0) or 0) for row in new_rows)
-                if new_rows else None
+                int(qualified_new_rows[0].get("receive_time_ms", 0) or 0)
+                if qualified_new_rows else None
+            ),
+            "first_qualified_accept_ms": (
+                int(qualified_new_rows[0].get("receive_time_ms", 0) or 0)
+                if qualified_new_rows else None
             ),
             "opposing_flow_state_at_onset": old_states.get(venue, "UNKNOWN"),
+            "current_old_side_flow_state": current_old_states.get(
+                venue, "UNKNOWN"
+            ),
         }
 
     dual_cash = set(accepted_venues) == set(CASH)
@@ -779,7 +798,13 @@ def _transition_snapshot(pending, histories, now_ms):
     old_failure_venues = sorted(
         set(old_impulse_venues) & old_failure_states
     )
-    old_side_failure_confirmed = bool(old_failure_venues)
+    old_side_continuing_venues = sorted(
+        venue for venue, state in current_old_states.items()
+        if state == "CONTINUING_CONFIRMED"
+    )
+    old_side_failure_confirmed = bool(
+        old_failure_venues and not old_side_continuing_venues
+    )
     new_side_cash_control_confirmed = synchronous
     failed_continuation = old_side_failure_confirmed
     hard_contradiction = set(opposing_return_venues) == set(CASH)
@@ -810,6 +835,7 @@ def _transition_snapshot(pending, histories, now_ms):
         "old_failure_state_observed": old_side_failure_confirmed,
         "old_side_failure_confirmed": old_side_failure_confirmed,
         "old_failure_venues": old_failure_venues,
+        "old_side_continuing_venues": old_side_continuing_venues,
         "new_side_cash_control_confirmed": new_side_cash_control_confirmed,
         "old_impulse_venues": sorted(old_impulse_venues),
         "accepted_cash_venues": sorted(accepted_venues),
@@ -1391,6 +1417,96 @@ def _current_cash_conversion(histories, side, now_ms):
         "authority": "ENTRY_TIMING_ONLY",
         "policy": "CURRENT_EXECUTED_CASH_FLOW_AND_PRICE_CONVERSION",
     }
+
+
+def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
+    """Freeze the exact causal dependencies that granted one GO decision.
+
+    Downstream may verify freshness, epochs and contradictions, but must not
+    reinterpret Bias/Transition strategy semantics.  The digest makes any
+    accidental mutation between decision, reservation and submit fail closed.
+    """
+    payload = dict(payload or {})
+    side = str(side or "ABSTAIN").upper()
+    current_cash = dict(payload.get("current_cash_conversion") or {})
+    transition = dict(payload.get("transition_authority") or {})
+    transition_cash = {
+        str(value) for value in transition.get("accepted_cash_venues") or ()
+    }
+    transition_confirmed = bool(
+        payload.get("transition_confirmed")
+        and transition.get("status") == "REVERSAL_CONFIRMED"
+        and str(transition.get("side") or "ABSTAIN").upper() == side
+        and transition.get("old_side_failure_confirmed")
+        and transition.get("new_side_cash_control_confirmed")
+        and transition.get("cash_synchronous_transition")
+        and not transition.get("hard_contradiction")
+        and CASH.issubset(transition_cash)
+    )
+    basis = "TRANSITION_CONFIRMED" if transition_confirmed else "BIAS_ALIGNED"
+    accepted = {}
+    for venue, row in sorted(dict(current_cash.get("venues") or {}).items()):
+        row = dict(row or {})
+        accepted_at_ms = int(row.get("receive_time_ms", 0) or 0)
+        if accepted_at_ms <= 0:
+            continue
+        accepted[str(venue)] = {
+            "accepted_at_ms": accepted_at_ms,
+            "valid_until_ms": accepted_at_ms + FOLLOW_MAX_MS,
+            "epoch": int(row.get("epoch", 0) or 0),
+            "imbalance": _f(row.get("imbalance")),
+            "price_conversion_bps": _f(row.get("price_conversion_bps")),
+        }
+    frozen_bias = dict(payload.get("bias_snapshot") or {})
+    dependencies = {
+        "version": "ENTRY_AUTHORITY_DEPENDENCIES_V1",
+        "causal_episode_id": str(causal_episode_id or ""),
+        "side": side,
+        "proof_type": str(proof_type or ""),
+        "proof_venue": str(payload.get("proof_venue") or ""),
+        "frozen_bias": {
+            "side": str(frozen_bias.get("direction") or "ABSTAIN").upper(),
+            "confidence": _f(frozen_bias.get("confidence")),
+            "updated_at": _f(frozen_bias.get("updated_at")),
+        },
+        "current_cash_conversion": {
+            "accepted_cash_venues": sorted(accepted),
+            "minimum_fresh_venues": 2 if transition_confirmed else 1,
+            "qualified_acceptances": accepted,
+            "max_age_ms": FOLLOW_MAX_MS,
+        },
+        "causal_epochs": {
+            str(name): int((row or {}).get("epoch", 0) or 0)
+            for name, row in sorted(
+                dict(payload.get("clock_quality") or {}).items()
+            )
+            if isinstance(row, dict) and int(row.get("epoch", 0) or 0) > 0
+        },
+    }
+    if transition_confirmed:
+        dependencies["transition"] = {
+            "old_side": str(
+                transition.get("background_side") or "ABSTAIN"
+            ).upper(),
+            "old_side_failure": True,
+            "old_failure_venues": sorted(
+                transition.get("old_failure_venues") or ()
+            ),
+            "new_side": side,
+            "new_side_cash_control": True,
+            "dual_cash_acceptance": True,
+            "qualified_acceptance_span_ms": transition.get(
+                "cash_acceptance_span_ms"
+            ),
+            "accepted_cash_venues": sorted(
+                transition.get("accepted_cash_venues") or ()
+            ),
+        }
+    encoded = json.dumps(
+        {"authority_basis": basis, "authority_dependencies": dependencies},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    return basis, dependencies, hashlib.sha256(encoded).hexdigest()
 
 
 def _venue_anchor(history, started_receive_ms):
@@ -2230,6 +2346,14 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "clock_quality": clock_quality,
     }
     confidence = min(0.90, 0.64 + 0.04 * len(payload["supporting_venues"]))
+    authority_basis, authority_dependencies, authority_proof_hash = (
+        _freeze_authority_proof(
+            payload, side, payload.get("proof_type"), candidate_id,
+        )
+    )
+    payload["authority_basis"] = authority_basis
+    payload["authority_dependencies"] = authority_dependencies
+    payload["authority_proof_hash"] = authority_proof_hash
     state._ignition_pending_capture_id = candidate_id
     return {
         "version": VERSION,
@@ -2249,6 +2373,9 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "freshness": freshness,
         "ts": now,
         "causal_episode_id": candidate_id,
+        "authority_basis": authority_basis,
+        "authority_dependencies": authority_dependencies,
+        "authority_proof_hash": authority_proof_hash,
     }
 
 
@@ -2653,6 +2780,14 @@ def _result_from_episode(state, episode, histories, freshness, now):
     payload["state"] = "PROVE"
     execution = "MAKER" if proof_type == "FAILED_REVERSION" else "TAKER"
     confidence = min(0.92, 0.62 + 0.05 * len(payload["supporting_venues"]) + 0.05 * (proof_type == "FAILED_REVERSION"))
+    authority_basis, authority_dependencies, authority_proof_hash = (
+        _freeze_authority_proof(
+            payload, side, proof_type, episode["causal_episode_id"],
+        )
+    )
+    payload["authority_basis"] = authority_basis
+    payload["authority_dependencies"] = authority_dependencies
+    payload["authority_proof_hash"] = authority_proof_hash
     result = {
         "version": VERSION, "decision": "GO", "entry_mode": "IGNITION",
         "execution_policy": execution,
@@ -2663,6 +2798,9 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "s_quorum": 2, "ignition": payload, "causal": _causal(payload),
         "s_votes": _compat_votes(True, payload), "freshness": freshness, "ts": now,
         "causal_episode_id": episode["causal_episode_id"],
+        "authority_basis": authority_basis,
+        "authority_dependencies": authority_dependencies,
+        "authority_proof_hash": authority_proof_hash,
     }
     # GO is a proposal, not an execution capture. Keep the episode retryable
     # across verified pre-order failures (for example a transient BBO outage).

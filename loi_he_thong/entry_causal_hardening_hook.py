@@ -1,4 +1,9 @@
-"""Hardening for the active Ignition -> execution handoff."""
+"""RETIRED / NON_AUTHORITY compatibility experiment.
+
+The canonical launcher does not install this hook. Active submit semantics
+live exclusively in ``execution_causal_revalidation.py``; this file must not
+be imported as strategy or execution authority.
+"""
 import time
 
 ATR_MAX_AGE_SECONDS = 120.0

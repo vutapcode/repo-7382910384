@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from loi_he_thong import ignition_signals
+from loi_he_thong import ignition_core, ignition_signals
 
 
 path = Path(__file__).parents[1] / '3_thuc_thi' / 'wstrade_live_execution.py'
@@ -106,8 +106,42 @@ class LiveExecutionTests(unittest.TestCase):
             "ts": 9.5,
             "canonical_opportunity_id": 7,
             "causal_episode_id": "episode-7",
-            "ignition": {"cash_venues": ["binance_spot"]},
+            "ignition": {
+                "cash_venues": ["binance_spot"],
+                "proof_type": "METAORDER_CONTINUATION",
+                "proof_venue": "binance_spot",
+                "bias_snapshot": {
+                    "direction": "LONG", "confidence": 0.8,
+                    "updated_at": 9.0,
+                },
+                "current_cash_conversion": {
+                    "confirmed": True,
+                    "venues": {"binance_spot": {
+                        "receive_time_ms": 9_800, "epoch": 1,
+                        "imbalance": 0.8,
+                        "price_conversion_bps": 0.3,
+                    }},
+                },
+                "clock_quality": {
+                    "binance_spot": {"epoch": 1},
+                    "futures": {"epoch": 1},
+                },
+            },
         }
+        basis, dependencies, proof_hash = ignition_core._freeze_authority_proof(
+            result["ignition"], "LONG", "METAORDER_CONTINUATION",
+            "episode-7",
+        )
+        result.update({
+            "authority_basis": basis,
+            "authority_dependencies": dependencies,
+            "authority_proof_hash": proof_hash,
+        })
+        s.canonical_reserved_context.update({
+            "authority_basis": basis,
+            "authority_dependencies": dependencies,
+            "authority_proof_hash": proof_hash,
+        })
         ok, reason = live._revalidate_before_submit(
             s, "LONG", result, now=10.0,
         )

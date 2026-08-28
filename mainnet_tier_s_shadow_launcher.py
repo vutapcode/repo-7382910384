@@ -1275,6 +1275,25 @@ async def _open_position(side, result, now):
     if not bool(getattr(app.state, "mainnet_shadow_ready", False)):
         app.state.mainnet_shadow_last_skip = "STALE_ENTRY_RUNTIME_HEALTH"
         return None
+    # Demo and live share the same causal submit contract. Live repeats this
+    # check after account/REST latency; shadow performs it here so the sample
+    # population cannot include decisions that real execution would reject.
+    if int((result or {}).get("canonical_opportunity_id", 0) or 0) > 0:
+        causal_ok, causal_reason, causal_detail = (
+            execution_causal_revalidation.validate_submit(
+                app.state, side, result, float(now),
+            )
+        )
+        app.state.wstrade_last_causal_revalidation = {
+            "ok": causal_ok,
+            "reason": causal_reason,
+            "detail": causal_detail,
+            "checked_at": float(now),
+            "scope": "SHARED_SHADOW_LIVE_CONTRACT",
+        }
+        if not causal_ok:
+            app.state.mainnet_shadow_last_skip = causal_reason
+            return None
     if bool(getattr(app.state, "wstrade_live_armed", False)):
         if not bool(getattr(app.state, "mainnet_live_entry_ready", False)) or not (
             host_cpu_governor.entry_allowed(app.state)

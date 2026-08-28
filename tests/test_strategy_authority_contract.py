@@ -92,6 +92,25 @@ class StrategyAuthorityContractTests(unittest.TestCase):
         self.assertNotIn("WHALE_EXHAUSTION", risk)
         self.assertIn("must not infer Whale Intent", risk)
 
+    def test_go_carries_one_proof_into_shared_shadow_live_revalidation(self):
+        ignition = self.text("loi_he_thong/ignition_core.py")
+        reservation = self.text("loi_he_thong/canonical_opportunity.py")
+        execution = self.text("loi_he_thong/execution_causal_revalidation.py")
+        shadow = self.text("mainnet_tier_s_shadow_launcher.py")
+        for marker in (
+            '"authority_basis"', '"authority_dependencies"',
+            '"authority_proof_hash"',
+        ):
+            self.assertIn(marker, ignition)
+            self.assertIn(marker, reservation)
+        self.assertIn("_authority_contract", execution)
+        self.assertIn("TRANSITION_CONFIRMED", execution)
+        self.assertIn("SHARED_SHADOW_LIVE_CONTRACT", shadow)
+
+    def test_old_causal_hardening_hook_is_explicitly_non_authority(self):
+        source = self.text("loi_he_thong/entry_causal_hardening_hook.py")
+        self.assertIn("RETIRED / NON_AUTHORITY", source[:500])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from loi_he_thong import execution_causal_revalidation as recheck
-from loi_he_thong import ignition_signals, verified_cost_model
+from loi_he_thong import ignition_core, ignition_signals, verified_cost_model
 
 
 def material(venue, bucket, side, acceleration=1.0, price=None):
@@ -32,11 +32,7 @@ def fixture():
         venue.clock_valid = True
     state = SimpleNamespace(
         _ignition_signal_engine=engine,
-        canonical_reserved_context={
-            "opportunity_id": 9,
-            "causal_episode_id": "episode-9",
-            "epochs": {"binance_spot": 1, "futures": 1},
-        },
+        canonical_reserved_context={},
         bias_state="LONG",
         bias_confidence=0.8,
         bias_updated_at=10.0,
@@ -59,7 +55,40 @@ def fixture():
             "cash_venues": ["binance_spot"],
             "venue_anchor_prices": {"binance_spot": 100.0},
             "phase_measurement": {"precursor_cash_displacement_bps": 0.0},
+            "proof_type": "METAORDER_CONTINUATION",
+            "proof_venue": "binance_spot",
+            "bias_snapshot": {
+                "direction": "LONG", "confidence": 0.8,
+                "updated_at": 9.0,
+            },
+            "current_cash_conversion": {
+                "confirmed": True,
+                "venues": {"binance_spot": {
+                    "receive_time_ms": 9_800, "epoch": 1,
+                    "imbalance": 0.8, "price_conversion_bps": 0.3,
+                }},
+            },
+            "clock_quality": {
+                "binance_spot": {"epoch": 1},
+                "futures": {"epoch": 1},
+            },
         },
+    }
+    basis, dependencies, proof_hash = ignition_core._freeze_authority_proof(
+        result["ignition"], "LONG", "METAORDER_CONTINUATION", "episode-9",
+    )
+    result.update({
+        "authority_basis": basis,
+        "authority_dependencies": dependencies,
+        "authority_proof_hash": proof_hash,
+    })
+    state.canonical_reserved_context = {
+        "opportunity_id": 9,
+        "causal_episode_id": "episode-9",
+        "epochs": {"binance_spot": 1, "futures": 1},
+        "authority_basis": basis,
+        "authority_dependencies": dependencies,
+        "authority_proof_hash": proof_hash,
     }
     result["execution_cost_contract"] = (
         verified_cost_model.freeze_execution_cost_contract(result, state)
@@ -68,6 +97,86 @@ def fixture():
 
 
 class ExecutionCausalRevalidationTests(unittest.TestCase):
+    def test_transition_proof_does_not_recheck_opposite_slow_bias(self):
+        state, result = fixture()
+        state.bias_state = "SHORT"
+        ignition = dict(result["ignition"])
+        ignition["cash_venues"] = ["binance_spot", "coinbase_spot"]
+        ignition["current_cash_conversion"] = {
+            "confirmed": True,
+            "venues": {
+                "binance_spot": {
+                    "receive_time_ms": 9_800, "epoch": 1,
+                    "imbalance": 0.8, "price_conversion_bps": 0.3,
+                },
+                "coinbase_spot": {
+                    "receive_time_ms": 9_850, "epoch": 1,
+                    "imbalance": 0.7, "price_conversion_bps": 0.25,
+                },
+            },
+        }
+        ignition["clock_quality"] = {
+            "binance_spot": {"epoch": 1},
+            "coinbase_spot": {"epoch": 1},
+            "futures": {"epoch": 1},
+        }
+        ignition["transition_confirmed"] = True
+        ignition["transition_authority"] = {
+            "status": "REVERSAL_CONFIRMED", "side": "LONG",
+            "background_side": "SHORT",
+            "old_side_failure_confirmed": True,
+            "old_failure_venues": ["binance_spot"],
+            "new_side_cash_control_confirmed": True,
+            "cash_synchronous_transition": True,
+            "accepted_cash_venues": ["binance_spot", "coinbase_spot"],
+            "cash_acceptance_span_ms": 50,
+            "hard_contradiction": False,
+        }
+        basis, dependencies, proof_hash = ignition_core._freeze_authority_proof(
+            ignition, "LONG", "METAORDER_CONTINUATION", "episode-9",
+        )
+        result.update({
+            "ignition": ignition,
+            "authority_basis": basis,
+            "authority_dependencies": dependencies,
+            "authority_proof_hash": proof_hash,
+        })
+        state.canonical_reserved_context.update({
+            "epochs": {
+                "binance_spot": 1, "coinbase_spot": 1, "futures": 1,
+            },
+            "authority_basis": basis,
+            "authority_dependencies": dependencies,
+            "authority_proof_hash": proof_hash,
+        })
+
+        ok, reason, detail = recheck.validate_submit(
+            state, "LONG", result, 10.0,
+        )
+
+        self.assertTrue(ok, (reason, detail))
+        self.assertEqual(basis, "TRANSITION_CONFIRMED")
+        self.assertEqual(detail["authority_basis"], "TRANSITION_CONFIRMED")
+
+    def test_mutated_authority_dependencies_fail_closed(self):
+        state, result = fixture()
+        result["authority_dependencies"] = dict(
+            result["authority_dependencies"], side="SHORT"
+        )
+        ok, reason, _ = recheck.validate_submit(
+            state, "LONG", result, 10.0,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "RESERVED_AUTHORITY_DEPENDENCIES_CHANGED")
+
+    def test_current_cash_dependency_expires_without_rerunning_strategy(self):
+        state, result = fixture()
+        ok, reason, _ = recheck.validate_submit(
+            state, "LONG", result, 10.5,
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "CURRENT_CASH_AUTHORITY_EXPIRED")
+
     def test_isolated_opposing_cash_bucket_cannot_veto(self):
         state, result = fixture()
         state._ignition_signal_engine.venues["binance_spot"].history.append(

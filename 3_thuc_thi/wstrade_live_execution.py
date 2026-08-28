@@ -535,6 +535,11 @@ def _entry_causal_thesis(result):
         elif "coinbase" in cash_aliases: primary="coinbase"
         return {
             "version":"IGNITION_CAUSAL_THESIS_V1",
+            "authority_basis":(result or {}).get("authority_basis"),
+            "authority_dependencies":dict(
+                (result or {}).get("authority_dependencies") or {}
+            ),
+            "authority_proof_hash":(result or {}).get("authority_proof_hash"),
             "primary_cash_anchor":primary,
             "cash_anchors":sorted(cash_aliases),
             "handoff_status":str(ignition.get("leader") or "UNKNOWN"),
