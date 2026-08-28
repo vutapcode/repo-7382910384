@@ -18,6 +18,8 @@ class MissTaxonomyTests(unittest.TestCase):
                 "transition_authority": {
                     "status": "REVERSAL_CONFIRMED",
                     "side": "LONG",
+                    "old_side_failure_confirmed": True,
+                    "new_side_cash_control_confirmed": True,
                     "cash_synchronous_transition": True,
                     "accepted_cash_venues": [
                         "binance_spot", "coinbase_spot",
@@ -28,6 +30,16 @@ class MissTaxonomyTests(unittest.TestCase):
         self.assertTrue(
             launcher._bias_or_transition_authorized(transition, state)
         )
+
+        transition["ignition"]["transition_authority"][
+            "old_side_failure_confirmed"
+        ] = False
+        self.assertFalse(
+            launcher._bias_or_transition_authorized(transition, state)
+        )
+        transition["ignition"]["transition_authority"][
+            "old_side_failure_confirmed"
+        ] = True
 
         transition["ignition"]["transition_authority"][
             "accepted_cash_venues"

@@ -444,6 +444,8 @@ def _bias_or_transition_authorized(result, state):
         ignition.get("transition_confirmed")
         and transition.get("status") == "REVERSAL_CONFIRMED"
         and str(transition.get("side") or "").upper() == side
+        and transition.get("old_side_failure_confirmed")
+        and transition.get("new_side_cash_control_confirmed")
         and transition.get("cash_synchronous_transition")
         and {"binance_spot", "coinbase_spot"}.issubset(accepted)
     )

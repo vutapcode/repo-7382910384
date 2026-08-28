@@ -38,6 +38,8 @@ def _bias_question(result, ignition):
         ignition.get("transition_confirmed")
         and transition.get("status") == "REVERSAL_CONFIRMED"
         and str(transition.get("side") or "ABSTAIN").upper() == side
+        and transition.get("old_side_failure_confirmed")
+        and transition.get("new_side_cash_control_confirmed")
         and transition.get("cash_synchronous_transition")
         and not transition.get("hard_contradiction")
     )

@@ -768,20 +768,25 @@ def _transition_snapshot(pending, histories, now_ms):
         dual_cash and acceptance_span_ms is not None
         and acceptance_span_ms <= FOLLOW_MAX_MS
     )
-    old_failure_state = any(
-        state in {
+    old_failure_states = {
+        venue
+        for venue, state in old_states.items()
+        if state in {
             "FADING", "DECAYING", "ABSORBED", "EXHAUSTED",
             "REACCELERATION_UNCONFIRMED",
         }
-        for state in old_states.values()
+    }
+    old_failure_venues = sorted(
+        set(old_impulse_venues) & old_failure_states
     )
-    failed_continuation = bool(
-        old_impulse_venues
-        and (old_failure_state or synchronous)
-    )
+    old_side_failure_confirmed = bool(old_failure_venues)
+    new_side_cash_control_confirmed = synchronous
+    failed_continuation = old_side_failure_confirmed
     hard_contradiction = set(opposing_return_venues) == set(CASH)
     confirmed = bool(
-        failed_continuation and synchronous and not hard_contradiction
+        old_side_failure_confirmed
+        and new_side_cash_control_confirmed
+        and not hard_contradiction
     )
     if hard_contradiction:
         status = "TRANSITION_FAILED"
@@ -802,7 +807,10 @@ def _transition_snapshot(pending, histories, now_ms):
         "status": status, "confirmed": confirmed,
         "side": side, "background_side": background,
         "failed_continuation": failed_continuation,
-        "old_failure_state_observed": old_failure_state,
+        "old_failure_state_observed": old_side_failure_confirmed,
+        "old_side_failure_confirmed": old_side_failure_confirmed,
+        "old_failure_venues": old_failure_venues,
+        "new_side_cash_control_confirmed": new_side_cash_control_confirmed,
         "old_impulse_venues": sorted(old_impulse_venues),
         "accepted_cash_venues": sorted(accepted_venues),
         "cash_acceptance_span_ms": acceptance_span_ms,
@@ -843,6 +851,13 @@ def _start_pending_reversal(state, signal, bias, histories):
         )
         for name, rows in (histories or {}).items()
     }
+    histories_before_onset = {
+        name: tuple(
+            row for row in rows
+            if int(row.get("receive_time_ms", 0) or 0) < receive_ms
+        )
+        for name, rows in (histories or {}).items()
+    }
     pending = {
         "causal_episode_id": onset["episode_id"],
         "episode_id": onset["episode_id"],
@@ -864,7 +879,7 @@ def _start_pending_reversal(state, signal, bias, histories):
             histories_at_onset, side, cash,
         ),
         "opposing_flow_efficiency_at_onset": _flow_efficiency_snapshot(
-            histories_at_onset, frozen_side, CASH,
+            histories_before_onset, frozen_side, CASH,
         ),
         "precursor_measurement": precursor,
         "displacement_onset": dict(precursor),
@@ -1041,6 +1056,8 @@ def _strict_transition_side(episode):
         and episode.get("transition_confirmed")
         and transition.get("status") == "REVERSAL_CONFIRMED"
         and str(transition.get("side") or "ABSTAIN").upper() == side
+        and transition.get("old_side_failure_confirmed")
+        and transition.get("new_side_cash_control_confirmed")
         and transition.get("cash_synchronous_transition")
         and not transition.get("hard_contradiction")
         and CASH.issubset(accepted)

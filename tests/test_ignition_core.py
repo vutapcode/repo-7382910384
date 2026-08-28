@@ -436,6 +436,21 @@ class IgnitionCoreTests(unittest.TestCase):
             "coinbase_spot": (old_coinbase, coinbase_follow),
             "futures": (futures_follow,),
         }
+        # A synchronous new-side burst proves only new-side cash control.  It
+        # must not manufacture the independent fact that the old side failed.
+        premature = ignition_core._transition_snapshot(
+            pending, histories, 3_500,
+        )
+        self.assertFalse(premature["confirmed"])
+        self.assertFalse(premature["old_side_failure_confirmed"])
+        self.assertTrue(premature["new_side_cash_control_confirmed"])
+        self.assertEqual(premature["status"], "CROSS_CASH_ACCEPTED")
+
+        # The old-side conversion classifier is independent evidence captured
+        # at onset.  Once present, the same immutable episode may promote.
+        pending["opposing_flow_efficiency_at_onset"]["venues"][
+            "binance_spot"
+        ] = {"state": "DECAYING"}
         ignition_core._observe_pending_reversal(
             s, [binance_follow, coinbase_follow, futures_follow], histories,
         )
@@ -454,6 +469,14 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertTrue(
             promoted["transition_authority"]["cash_synchronous_transition"]
         )
+        self.assertTrue(
+            promoted["transition_authority"]["old_side_failure_confirmed"]
+        )
+        self.assertTrue(
+            promoted["transition_authority"][
+                "new_side_cash_control_confirmed"
+            ]
+        )
         self.assertEqual(promoted["bias_snapshot"]["direction"], "SHORT")
         self.assertEqual(promoted["side"], "LONG")
 
@@ -469,6 +492,8 @@ class IgnitionCoreTests(unittest.TestCase):
             "transition_confirmed": True,
             "transition_authority": {
                 "status": "REVERSAL_CONFIRMED", "side": "LONG",
+                "old_side_failure_confirmed": True,
+                "new_side_cash_control_confirmed": True,
                 "cash_synchronous_transition": True,
                 "accepted_cash_venues": [
                     "binance_spot", "coinbase_spot",
@@ -592,6 +617,8 @@ class IgnitionCoreTests(unittest.TestCase):
             "transition_confirmed": True,
             "transition_authority": {
                 "status": "REVERSAL_CONFIRMED", "side": "LONG",
+                "old_side_failure_confirmed": True,
+                "new_side_cash_control_confirmed": True,
                 "cash_synchronous_transition": True,
                 "hard_contradiction": False,
             },
@@ -1526,6 +1553,9 @@ class IgnitionCoreTests(unittest.TestCase):
                 "futures_follow_ok": True,
                 "consumed_fraction": 0.20, "residual_edge_proxy_bps": 1.0,
                 "venue_moves_bps": {"binance_spot": 0.5, "futures": 0.2},
+                "flow_efficiency": {"venues": {
+                    "binance_spot": {"state": "CONTINUING_CONFIRMED"},
+                }},
             },
         }
         allowed, report = entry_edge_tier.authorize(result, s)
@@ -1550,6 +1580,9 @@ class IgnitionCoreTests(unittest.TestCase):
             "residual_edge_proxy_bps": 0.0,
             "venue_moves_bps": {"binance_spot": 0.5, "futures": 0.4},
             "flow_by_venue": {"binance_spot": {"signed_imbalance": 0.6}},
+            "flow_efficiency": {"venues": {
+                "binance_spot": {"state": "CONTINUING_CONFIRMED"},
+            }},
         }
         result = {
             "decision": "GO", "side": "LONG", "entry_mode": "IGNITION",

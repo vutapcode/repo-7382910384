@@ -243,6 +243,8 @@ class EntryThesisGateTests(unittest.TestCase):
         candidate["ignition"]["transition_confirmed"] = True
         candidate["ignition"]["transition_authority"] = {
             "status": "REVERSAL_CONFIRMED", "side": "LONG",
+            "old_side_failure_confirmed": True,
+            "new_side_cash_control_confirmed": True,
             "cash_synchronous_transition": True,
             "hard_contradiction": False,
         }

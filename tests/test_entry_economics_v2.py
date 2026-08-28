@@ -76,6 +76,8 @@ class EntryEconomicsV2Tests(unittest.TestCase):
                 "transition_confirmed": True,
                 "transition_authority": {
                     "status": "REVERSAL_CONFIRMED", "side": "LONG",
+                    "old_side_failure_confirmed": True,
+                    "new_side_cash_control_confirmed": True,
                     "cash_synchronous_transition": True,
                 },
             },
