@@ -529,7 +529,7 @@ class IgnitionCoreTests(unittest.TestCase):
         transition = promoted["transition_authority"]
         self.assertEqual(
             transition["version"],
-            "FAST_TRANSITION_V2_PROOF_NODE_LIFETIMES",
+            "FAST_TRANSITION_V3_STATEFUL_FAILURE_TIME",
         )
         self.assertTrue(transition["control_transfer_memory_valid"])
         self.assertTrue(
@@ -753,6 +753,71 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(transition["confirmed"])
         self.assertEqual(
             transition["old_side_continuing_venues"], ["coinbase_spot"],
+        )
+
+    def test_old_side_failure_is_timestamped_when_it_actually_emerges(self):
+        pending = {
+            "side": "LONG", "started_receive_ms": 3_200,
+            "pre_impulse_bias_snapshot": {"direction": "SHORT"},
+            "opposing_flow_efficiency_at_onset": {"venues": {
+                "binance_spot": {
+                    "state": "CONTINUING_CONFIRMED",
+                    "observed_end_ms": 3_200,
+                },
+            }},
+        }
+        old_binance = evidence_row(3_000, "SHORT", 99.80)
+        histories = {
+            "binance_spot": (old_binance,),
+            "coinbase_spot": (), "futures": (),
+        }
+
+        def flow_snapshot(_histories, side, _cash, now_ms=None):
+            if side == "SHORT":
+                return {"venues": {"binance_spot": {
+                    "state": "FADING", "fresh": True,
+                    "observed_end_ms": 3_450,
+                }}}
+            return {"venues": {}}
+
+        with patch.object(
+            ignition_core, "_flow_efficiency_snapshot",
+            side_effect=flow_snapshot,
+        ):
+            transition = ignition_core._transition_snapshot(
+                pending, histories, 3_500,
+            )
+        node = transition["proof_nodes"]["old_side_failure"]
+        self.assertTrue(node["proved"])
+        self.assertEqual(node["observed_at_ms"], 3_450)
+        self.assertNotEqual(node["observed_at_ms"], 3_200)
+        self.assertEqual(
+            node["observations"]["binance_spot"]["source"],
+            "OBSERVED_AFTER_TRANSITION_ONSET",
+        )
+
+        # Later evaluations may refine the state but cannot rewrite the first
+        # causal observation timestamp.
+        pending["opposing_flow_efficiency_at_onset"]["venues"] = {}
+
+        def later_flow(_histories, side, _cash, now_ms=None):
+            if side == "SHORT":
+                return {"venues": {"binance_spot": {
+                    "state": "EXHAUSTED", "fresh": True,
+                    "observed_end_ms": 3_600,
+                }}}
+            return {"venues": {}}
+
+        with patch.object(
+            ignition_core, "_flow_efficiency_snapshot",
+            side_effect=later_flow,
+        ):
+            later = ignition_core._transition_snapshot(
+                pending, histories, 3_650,
+            )
+        self.assertEqual(
+            later["proof_nodes"]["old_side_failure"]["observed_at_ms"],
+            3_450,
         )
 
     def test_confirmed_cash_transition_survives_current_bias_abstain(self):

@@ -948,23 +948,74 @@ def _transition_snapshot(pending, histories, now_ms):
         dual_cash and acceptance_span_ms is not None
         and acceptance_span_ms <= FOLLOW_MAX_MS
     )
-    old_failure_states = {
-        venue
-        for venue, state in old_states.items()
-        if state in {
-            "FADING", "DECAYING", "ABSORBED", "EXHAUSTED",
-            "REACCELERATION_UNCONFIRMED",
-        }
+    failure_states = {
+        "FADING", "DECAYING", "ABSORBED", "EXHAUSTED",
+        "REACCELERATION_UNCONFIRMED",
     }
-    old_failure_venues = sorted(
-        set(old_impulse_venues) & old_failure_states
+    failure_observations = {}
+    onset_venues = dict(old_flow.get("venues") or {})
+    current_old_venues = dict(current_old_flow.get("venues") or {})
+    for venue in sorted(set(old_impulse_venues)):
+        onset_row = dict(onset_venues.get(venue) or {})
+        current_row = dict(current_old_venues.get(venue) or {})
+        onset_state = str(onset_row.get("state") or "UNKNOWN").upper()
+        current_state = str(current_row.get("state") or "UNKNOWN").upper()
+        if onset_state in failure_states:
+            failure_observations[venue] = {
+                "state": onset_state,
+                "observed_at_ms": int(
+                    onset_row.get("observed_end_ms") or started_ms
+                ),
+                "source": "VISIBLE_AT_TRANSITION_ONSET",
+            }
+        if (
+            current_state in failure_states
+            and bool(current_row.get("fresh", True))
+        ):
+            observed_at_ms = int(
+                current_row.get("observed_end_ms") or now_ms
+            )
+            previous = failure_observations.get(venue)
+            if previous is None or observed_at_ms < int(
+                previous.get("observed_at_ms", observed_at_ms)
+            ):
+                failure_observations[venue] = {
+                    "state": current_state,
+                    "observed_at_ms": observed_at_ms,
+                    "source": "OBSERVED_AFTER_TRANSITION_ONSET",
+                }
+    stored_failure = dict(
+        (pending or {}).get("old_side_failure_node") or {}
     )
+    if failure_observations:
+        stored_observations = dict(stored_failure.get("observations") or {})
+        for venue, observation in sorted(failure_observations.items()):
+            if venue not in stored_observations:
+                stored_observations[venue] = dict(observation)
+        first_failure_ms = min(
+            int(row.get("observed_at_ms", now_ms) or now_ms)
+            for row in stored_observations.values()
+        )
+        stored_failure = {
+            "proved": True,
+            "side": background,
+            "observed_at_ms": int(
+                stored_failure.get("observed_at_ms") or first_failure_ms
+            ),
+            "observations": stored_observations,
+            "venues": sorted(stored_observations),
+            "authority": "CONTROL_TRANSFER_CONTEXT_ONLY",
+        }
+        if isinstance(pending, dict):
+            pending["old_side_failure_node"] = stored_failure
+    old_failure_venues = sorted(stored_failure.get("venues") or ())
     old_side_continuing_venues = sorted(
         venue for venue, state in current_old_states.items()
         if state == "CONTINUING_CONFIRMED"
     )
     old_side_failure_confirmed = bool(
-        old_failure_venues and not old_side_continuing_venues
+        stored_failure.get("proved")
+        and old_failure_venues and not old_side_continuing_venues
     )
     new_side_cash_control_confirmed = synchronous
     failed_continuation = old_side_failure_confirmed
@@ -1010,6 +1061,9 @@ def _transition_snapshot(pending, histories, now_ms):
     else:
         control_phase = "STABLE_OLD_SIDE"
     old_failure_valid_until_ms = started_ms + EPISODE_MAX_MS
+    old_failure_observed_at_ms = (
+        int(stored_failure.get("observed_at_ms") or 0) or None
+    )
     latest_futures_alert_ms = max((
         int(row.get("receive_time_ms", 0) or 0)
         for row in futures_alerts
@@ -1023,7 +1077,11 @@ def _transition_snapshot(pending, histories, now_ms):
             "proved": old_side_failure_confirmed,
             "side": background,
             "venues": old_failure_venues,
-            "observed_at_ms": started_ms if old_side_failure_confirmed else None,
+            "observed_at_ms": (
+                old_failure_observed_at_ms
+                if old_side_failure_confirmed else None
+            ),
+            "observations": dict(stored_failure.get("observations") or {}),
             "valid_until_ms": (
                 old_failure_valid_until_ms
                 if old_side_failure_confirmed else None
@@ -1068,7 +1126,7 @@ def _transition_snapshot(pending, histories, now_ms):
         },
     }
     return {
-        "version": "FAST_TRANSITION_V2_PROOF_NODE_LIFETIMES",
+        "version": "FAST_TRANSITION_V3_STATEFUL_FAILURE_TIME",
         "status": status, "confirmed": confirmed,
         "control_phase": control_phase,
         "side": side, "background_side": background,
@@ -1076,6 +1134,7 @@ def _transition_snapshot(pending, histories, now_ms):
         "old_failure_state_observed": old_side_failure_confirmed,
         "old_side_failure_confirmed": old_side_failure_confirmed,
         "old_failure_venues": old_failure_venues,
+        "old_side_failure_node": stored_failure,
         "old_side_continuing_venues": old_side_continuing_venues,
         "new_side_cash_control_confirmed": new_side_cash_control_confirmed,
         "old_impulse_venues": sorted(old_impulse_venues),
