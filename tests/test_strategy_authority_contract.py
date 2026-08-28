@@ -70,7 +70,7 @@ class StrategyAuthorityContractTests(unittest.TestCase):
     def test_active_journal_records_decision_inputs_outputs_and_misses(self):
         active = self.text("mainnet_tier_s_shadow_launcher.py")
         for marker in (
-            "TIER_S_DECISION_RECORD_V2", '"cycle_id"',
+            "TIER_S_DECISION_RECORD_V3", '"cycle_id"',
             '"s1_price_quorum"', '"s2_executed_flow_quorum"',
             '"exchange_independence"', '"miss_taxonomy"',
             '"counterfactual"', "TIER_S_SHADOW_EXECUTION_V1",

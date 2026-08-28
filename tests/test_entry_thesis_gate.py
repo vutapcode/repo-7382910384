@@ -39,7 +39,7 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
         "venue_moves_bps": {venue: 0.50 for venue in cash} | {"futures": 0.40},
         "flow_by_venue": flow,
         "flow_efficiency": {
-            "version": "FLOW_EFFICIENCY_V4_SURVIVAL_CONFIRMATION",
+            "version": "FLOW_EFFICIENCY_V5_VENUE_FRESHNESS",
             "venues": {
                 venue: {
                     "state": (flow_states or {}).get(
@@ -73,6 +73,7 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
     return {
         "decision": "GO", "side": "SHORT",
         "entry_mode": "PERSISTENT_METAORDER", "phase": "RELEASE",
+        "execution_policy": "TAKER",
         "price_threshold_bps": 0.15, "ignition": ignition,
         "ts": 100.0, "s_votes": {},
     }
@@ -230,6 +231,7 @@ class EntryThesisGateTests(unittest.TestCase):
         )
         candidate["entry_mode"] = "IGNITION"
         candidate["phase"] = "ACCEPTANCE"
+        candidate["execution_policy"] = "MAKER"
         candidate["ignition"]["proof_type"] = "FAILED_REVERSION"
         allowed, report = entry_edge_tier.authorize(
             candidate,

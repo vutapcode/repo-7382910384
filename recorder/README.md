@@ -53,7 +53,7 @@ và không đọc state chiến thuật của bot.
 Mỗi record V2 có `code_version` và `config_version`. Với runtime Tier-S hiện
 tại, recorder ưu tiên ba lớp bằng chứng:
 
-1. `DECISION_EVALUATED` mang `TIER_S_DECISION_RECORD_V2`: cùng một `cycle_id`
+1. `DECISION_EVALUATED` mang `TIER_S_DECISION_RECORD_V3`: cùng một `cycle_id`
    và `causal_episode_id` chứa input Bias/S1/S2/OI 60 giây/5 phút, nhóm
    cash/derivative, persistence 2 bucket, chase/lead-lag, regime,
    Spot-Perp/Coinbase/exchange-independence và output

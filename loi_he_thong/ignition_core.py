@@ -136,19 +136,32 @@ def _efficiency_window(rows, side, start_ms, end_ms):
     }
 
 
-def _flow_efficiency_snapshot(histories, side, cash_venues):
+def _flow_efficiency_snapshot(histories, side, cash_venues, now_ms=None):
     """Return current marginal conversion without reusing episode progress.
 
     Prefer three sliding 500 ms windows. Persistent metaorders with sparse
     trades may use three contiguous 1 s windows from the same exact 100 ms
     executed-flow rows; the lower resolution is explicit in telemetry.
     """
+    observed_at_ms = int(now_ms or 0)
+    if observed_at_ms <= 0:
+        observed_at_ms = max((
+            int(row.get("receive_time_ms", 0) or 0)
+            for rows in (histories or {}).values() for row in rows
+        ), default=0)
     venues = {}
     for venue in sorted(set(cash_venues or ()) & CASH):
         rows = list(histories.get(venue, ()))
         latest_end_ms = max(
             (int(row.get("receive_time_ms", 0) or 0) for row in rows),
             default=0,
+        )
+        age_ms = (
+            observed_at_ms - latest_end_ms
+            if observed_at_ms > 0 and latest_end_ms > 0 else None
+        )
+        fresh = bool(
+            age_ms is not None and 0 <= age_ms <= FOLLOW_MAX_MS
         )
         resolution_ms = 500
         windows = [
@@ -270,6 +283,9 @@ def _flow_efficiency_snapshot(histories, side, cash_venues):
                 classification_reason = "NO_DURABLE_CONVERSION_CLASSIFICATION"
         venues[venue] = {
             "state": state,
+            "observed_end_ms": latest_end_ms or None,
+            "age_ms": age_ms,
+            "fresh": fresh,
             "classification_reason": classification_reason,
             "diagnostics": diagnostics,
             "windows": windows,
@@ -284,8 +300,10 @@ def _flow_efficiency_snapshot(histories, side, cash_venues):
             "policy": "THREE_CONTIGUOUS_WINDOWS_EXACT_EXECUTED_FLOW_NO_EPISODE_FALLBACK",
         }
     return {
-        "version": "FLOW_EFFICIENCY_V4_SURVIVAL_CONFIRMATION",
+        "version": "FLOW_EFFICIENCY_V5_VENUE_FRESHNESS",
         "side": side,
+        "observed_at_ms": observed_at_ms or None,
+        "freshness_horizon_ms": FOLLOW_MAX_MS,
         "venues": venues,
         "authority": "ENTRY_COMPOSITE_ONLY",
     }
@@ -298,7 +316,14 @@ def flow_efficiency_state(snapshot, primary_cash=None, cash_venues=None):
     Execution may observe this value at submit time, but it cannot use this
     helper to create direction or override the frozen Entry authority proof.
     """
-    venues = dict((snapshot or {}).get("venues") or {})
+    all_venues = dict((snapshot or {}).get("venues") or {})
+    # Old synthetic/replay fixtures without explicit freshness retain their
+    # prior meaning. Active V4 snapshots always publish ``fresh`` and stale
+    # venue classifiers are excluded from aggregate authority.
+    venues = {
+        name: row for name, row in all_venues.items()
+        if bool((row or {}).get("fresh", True))
+    }
     cash = set(cash_venues or venues) & CASH
     primary = str(primary_cash or "").lower()
     if primary not in cash:
@@ -332,6 +357,11 @@ def flow_efficiency_state(snapshot, primary_cash=None, cash_venues=None):
         "primary_state": primary_state,
         "other_cash_states": other_states,
         "independent_cash_continuation": independent_continuation,
+        "fresh_cash_venues": sorted(set(venues) & CASH),
+        "stale_cash_venues": sorted(
+            name for name, row in all_venues.items()
+            if name in CASH and not bool((row or {}).get("fresh", True))
+        ),
         "policy": "SAME_CLASSIFIER_SEMANTICS_AS_ENTRY_THESIS",
     }
 
@@ -352,7 +382,7 @@ def causal_wave_snapshot(
     flow = dict(
         flow_snapshot
         if isinstance(flow_snapshot, dict)
-        else _flow_efficiency_snapshot(histories, side, cash)
+        else _flow_efficiency_snapshot(histories, side, cash, now_ms=now_ms)
     )
     aggregate = flow_efficiency_state(flow, primary_cash, cash)
     current_cash = dict(
@@ -794,7 +824,7 @@ def _transition_snapshot(pending, histories, now_ms):
         for name, row in dict(old_flow.get("venues") or {}).items()
     }
     current_old_flow = _flow_efficiency_snapshot(
-        histories, background, CASH,
+        histories, background, CASH, now_ms=now_ms,
     )
     current_old_states = {
         name: str((row or {}).get("state") or "UNKNOWN").upper()
@@ -802,7 +832,9 @@ def _transition_snapshot(pending, histories, now_ms):
             current_old_flow.get("venues") or {}
         ).items()
     }
-    current_new_flow = _flow_efficiency_snapshot(histories, side, CASH)
+    current_new_flow = _flow_efficiency_snapshot(
+        histories, side, CASH, now_ms=now_ms,
+    )
     new_flow_summary = flow_efficiency_state(
         current_new_flow, (pending or {}).get("proposer"), CASH,
     )
@@ -1117,10 +1149,10 @@ def _start_pending_reversal(state, signal, bias, histories):
         "onset_evidence": onset,
         "executed_flow_evidence": [dict(signal)],
         "flow_efficiency_at_onset": _flow_efficiency_snapshot(
-            histories_at_onset, side, cash,
+            histories_at_onset, side, cash, now_ms=receive_ms,
         ),
         "opposing_flow_efficiency_at_onset": _flow_efficiency_snapshot(
-            histories_before_onset, frozen_side, CASH,
+            histories_before_onset, frozen_side, CASH, now_ms=receive_ms,
         ),
         "precursor_measurement": precursor,
         "displacement_onset": dict(precursor),
@@ -1285,7 +1317,7 @@ def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
     )
     pending["promotion_ts"] = now_ms / 1000.0
     pending["flow_efficiency_at_promotion"] = _flow_efficiency_snapshot(
-        histories, pending.get("side"), CASH,
+        histories, pending.get("side"), CASH, now_ms=now_ms,
     )
     state._ignition_pending_reversal_episode = None
     state._ignition_episode = pending
@@ -2564,7 +2596,9 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     current_cash = _current_cash_conversion(
         histories, side, int(now * 1000.0),
     )
-    flow_efficiency = _flow_efficiency_snapshot(histories, side, cash)
+    flow_efficiency = _flow_efficiency_snapshot(
+        histories, side, cash, now_ms=int(now * 1000.0),
+    )
     shared_wave = causal_wave_snapshot(
         histories, side, int(now * 1000.0),
         causal_wave_id=candidate_id,
@@ -2949,7 +2983,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
         or (futures_response_ms and futures_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
     ) and not futures_reversal_confirmed
     flow_efficiency = _flow_efficiency_snapshot(
-        histories, side, cash_venues,
+        histories, side, cash_venues, now_ms=int(now * 1000.0),
     )
     shared_wave = causal_wave_snapshot(
         histories, side, int(now * 1000.0),

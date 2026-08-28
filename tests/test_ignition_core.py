@@ -266,6 +266,37 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(venue["state"], "CONTINUING_CONFIRMED")
         self.assertTrue(venue["diagnostics"]["conversion_survived"])
 
+    def test_stale_coinbase_cannot_override_fresh_binance_fading(self):
+        binance = self._efficiency_rows(
+            (5_975.0, 11_141.0, 1_390.0),
+            (0.103, 1.136, 0.248),
+        )
+        for row in binance:
+            row["bucket_start_ms"] += 3_000
+            row["receive_time_ms"] += 3_000
+        coinbase = self._efficiency_rows(
+            (10_000.0, 11_000.0, 12_000.0),
+            (0.20, 0.30, 0.35),
+        )
+        for row in coinbase:
+            row["venue"] = "coinbase_spot"
+        snapshot = ignition_core._flow_efficiency_snapshot(
+            {
+                "binance_spot": binance,
+                "coinbase_spot": coinbase,
+            },
+            "LONG", ("binance_spot", "coinbase_spot"), now_ms=4_500,
+        )
+        self.assertTrue(snapshot["venues"]["binance_spot"]["fresh"])
+        self.assertFalse(snapshot["venues"]["coinbase_spot"]["fresh"])
+        self.assertEqual(snapshot["venues"]["coinbase_spot"]["age_ms"], 3_000)
+        aggregate = ignition_core.flow_efficiency_state(
+            snapshot, "binance_spot", ("binance_spot", "coinbase_spot"),
+        )
+        self.assertEqual(aggregate["state"], "FADING")
+        self.assertEqual(aggregate["fresh_cash_venues"], ["binance_spot"])
+        self.assertEqual(aggregate["stale_cash_venues"], ["coinbase_spot"])
+
     def test_current_cash_conversion_requires_flow_and_price_same_direction(self):
         good = evidence_row(9_800, "LONG", 100.01)
         wrong = evidence_row(9_900, "LONG", 100.02)
@@ -2007,7 +2038,7 @@ class IgnitionCoreTests(unittest.TestCase):
         s = state()
         result = {
             "decision": "GO", "side": "LONG", "entry_mode": "IGNITION",
-            "phase": "RELEASE", "s_votes": {},
+            "phase": "RELEASE", "execution_policy": "TAKER", "s_votes": {},
             "ignition": {
                 "state": "PROVE", "proof_type": "METAORDER_CONTINUATION",
                 "cash_venues": ["binance_spot"], "proposer": "binance_spot",
@@ -2055,7 +2086,8 @@ class IgnitionCoreTests(unittest.TestCase):
         }
         result = {
             "decision": "GO", "side": "LONG", "entry_mode": "IGNITION",
-            "phase": "RELEASE", "ignition": ignition,
+            "phase": "RELEASE", "execution_policy": "TAKER",
+            "ignition": ignition,
             "s_votes": ignition_core._compat_votes(True, ignition),
         }
         empirical = {
