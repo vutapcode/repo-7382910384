@@ -1019,6 +1019,36 @@ def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
     return pending
 
 
+def _strict_transition_side(episode):
+    """Return the side of the one transition allowed to outlive slow Bias.
+
+    A confirmed cash transition is deliberately narrower than ordinary Bias
+    alignment: both independent cash venues must accept the same executed-flow
+    reclaim inside the follower window and the old side must not have returned.
+    This helper exists so the evaluator and downstream launcher cannot silently
+    disagree when the slow council temporarily falls to ABSTAIN during a real
+    handover of control.
+    """
+    episode = dict(episode or {})
+    transition = dict(episode.get("transition_authority") or {})
+    side = str(episode.get("side") or "ABSTAIN").upper()
+    accepted = {
+        str(value).lower()
+        for value in transition.get("accepted_cash_venues") or ()
+    }
+    if not (
+        side in ("LONG", "SHORT")
+        and episode.get("transition_confirmed")
+        and transition.get("status") == "REVERSAL_CONFIRMED"
+        and str(transition.get("side") or "ABSTAIN").upper() == side
+        and transition.get("cash_synchronous_transition")
+        and not transition.get("hard_contradiction")
+        and CASH.issubset(accepted)
+    ):
+        return None
+    return side
+
+
 def _bias_bucket_at(buckets, target, max_age=2.0):
     """Return one receive-time snapshot with a bounded direct lookup."""
     if not isinstance(buckets, dict):
@@ -2441,6 +2471,15 @@ def evaluate(state, now=None, side=None):
     if promoted is not None:
         episode = promoted
 
+    # Bias remains the normal direction authority.  The sole exception is the
+    # canonical cash handover already proved above.  Do not erase that episode
+    # merely because the slower 15/60/180 s council is temporarily ABSTAIN or
+    # low-confidence while changing side; doing so made the transition lane
+    # observational only even though downstream explicitly understands it.
+    transition_side = _strict_transition_side(episode)
+    if transition_side is not None:
+        side = transition_side
+
     if episode is not None:
         live_venues = ignition_signals.engine(state).venues
         epoch_changed = any(
@@ -2459,7 +2498,10 @@ def evaluate(state, now=None, side=None):
             now, side, "BIAS_ABSTAIN",
             episode=_research_payload(state) or None, freshness=freshness,
         )
-    if _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF:
+    if (
+        transition_side is None
+        and _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF
+    ):
         state._ignition_episode = None
         _remember_bias(state, now)
         return _wait(
@@ -2467,7 +2509,10 @@ def evaluate(state, now=None, side=None):
             episode=_research_payload(state) or None, freshness=freshness,
         )
     bias_ts = _f(getattr(state, "bias_updated_at", 0.0))
-    if bias_ts <= 0.0 or now - bias_ts > BIAS_MAX_AGE:
+    if (
+        transition_side is None
+        and (bias_ts <= 0.0 or now - bias_ts > BIAS_MAX_AGE)
+    ):
         state._ignition_episode = None
         return _wait(
             now, side, "BIAS_STALE",

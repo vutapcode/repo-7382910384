@@ -432,7 +432,7 @@ def _bias_or_transition_authorized(result, state):
     bias_side = str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
     if side not in ("LONG", "SHORT"):
         return False
-    if bias_side not in ("LONG", "SHORT") or side == bias_side:
+    if side == bias_side:
         return True
     ignition = dict((result or {}).get("ignition") or {})
     transition = dict(ignition.get("transition_authority") or {})

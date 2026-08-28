@@ -902,6 +902,68 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertFalse(result["kill_fast"])
         self.assertIsNotNone(result["pullback_start_ms"])
 
+    def test_partial_reclaim_with_returning_cash_opens_recovery_test(self):
+        """Path reclaim need not cross the moving SUPPORTIVE vote threshold."""
+        state = self._state(100.0, 99.98, sell=True)
+        pos = SimpleNamespace(
+            position_cycle_id="partial-reclaim", side="LONG", opened_at=90.0,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot",
+                "cash_anchors": ["spot", "coinbase"],
+            },
+        )
+        first = self._assess_with_votes(
+            state, pos, 100.0, self._causal_votes(price=-2.0, flow=-0.30)
+        )
+        self.assertEqual(first["guardian_phase"], "FIRST_PULLBACK")
+
+        for key, value in vars(self._state(100.2, 99.99, sell=False)).items():
+            setattr(state, key, value)
+        neutral_price = guardian._vote(
+            "NEUTRAL", 0.10, "PARTIAL_PRICE_RECLAIM", horizons={}
+        )
+        returning_flow = guardian._vote(
+            "SUPPORTIVE", 0.65, "PRIMARY_CASH_RETURNED",
+            signed_imbalances={
+                "spot": 0.35, "coinbase": 0.30, "futures": 0.20,
+            }, venues=[],
+        )
+        neutral_oi = guardian._vote(
+            "NEUTRAL", 0.10, "NO_OPPOSITE_BUILD", oi_pct=0.0
+        )
+        result = self._assess_with_votes(
+            state, pos, 100.2,
+            (neutral_price, returning_flow, neutral_oi),
+        )
+        self.assertEqual(result["guardian_phase"], "RECOVERY_TEST")
+        self.assertEqual(result["reason"], "RECOVERY_TEST_IN_PROGRESS")
+
+    def test_unconfirmed_first_pullback_cannot_use_generic_causal_exit(self):
+        state = self._state(100.0, 99.97, sell=True)
+        pos = SimpleNamespace(
+            position_cycle_id="no-generic-bypass", side="LONG", opened_at=90.0,
+            entry_causal_thesis={
+                "primary_cash_anchor": "spot",
+                "cash_anchors": ["spot", "coinbase"],
+            },
+        )
+        uncertain = {
+            "classification": "UNCERTAIN", "reason": "TEST_UNCERTAIN",
+            "cash_acceptance": {"dual_cash_adverse": False},
+            "oi": {"state": "NEUTRAL"}, "kill_fast_eligible": False,
+        }
+        votes = self._causal_votes(price=-3.0, flow=-0.70)
+        with patch.object(
+            guardian, "_classify_adverse_event", return_value=uncertain,
+        ):
+            first = self._assess_with_votes(state, pos, 100.0, votes)
+            later = self._assess_with_votes(state, pos, 100.30, votes)
+        self.assertEqual(first["guardian_phase"], "FIRST_PULLBACK")
+        self.assertNotEqual(later["decision"], "EXIT")
+        self.assertEqual(
+            later["reason"], "THESIS_BREAK_AWAITING_PATH_CONFIRMATION",
+        )
+
     def _open_recovery_test(self, state, pos):
         adverse = self._causal_votes(price=-2.0, flow=-0.30)
         first = self._assess_with_votes(state, pos, 100.0, adverse)

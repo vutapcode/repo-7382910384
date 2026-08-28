@@ -36,6 +36,17 @@ class MissTaxonomyTests(unittest.TestCase):
             launcher._bias_or_transition_authorized(transition, state)
         )
 
+        # ABSTAIN is not a blanket authorization. It may pass only through the
+        # same canonical dual-cash transition contract above.
+        state.bias_state = "ABSTAIN"
+        self.assertFalse(launcher._bias_or_transition_authorized(base, state))
+        transition["ignition"]["transition_authority"][
+            "accepted_cash_venues"
+        ] = ["binance_spot", "coinbase_spot"]
+        self.assertTrue(
+            launcher._bias_or_transition_authorized(transition, state)
+        )
+
     def test_frozen_bias_mismatch_has_distinct_taxonomy(self):
         result = {
             "decision": "WAIT",

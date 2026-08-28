@@ -4,7 +4,7 @@ import time
 
 from loi_he_thong import liquidation_context
 
-VERSION="GUARDIAN_S_TIER_V10_RECOVERY_PATH"
+VERSION="GUARDIAN_S_TIER_V11_PATH_AUTHORITY"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -23,6 +23,7 @@ RUNNER_MIN_BEST_R=1.0
 COINBASE_STRICT_AGE_SECONDS=2.5
 RECOVERY_PHASES={
     "HEALTHY","FIRST_PULLBACK","RECOVERY_TEST","RECOVERED","FAILED_RECOVERY",
+    "DIRECT_THESIS_BREAK",
 }
 
 def _clamp(x): return max(0.0,min(1.0,float(x)))
@@ -679,10 +680,17 @@ def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event)
     )
     pos.guardian_s_reclaim_peak_fraction=peak
 
+    # An attempted reclaim is still a recovery test when opposing cash flow is
+    # present.  Requiring that flow to disappear before opening RECOVERY_TEST
+    # erased the most informative path: price tries to recover, cannot convert,
+    # then loses the reclaimed area. Opposing-flow decay belongs to SUCCESS,
+    # not to recognizing that a test occurred.
     recovery_attempt=bool(
-        price_supportive and favorable_cash and opposing!="PERSISTENT"
+        favorable_cash and (price_supportive or reclaim_fraction>0.0)
     )
-    if phase in {"FIRST_PULLBACK","FAILED_RECOVERY"} and recovery_attempt:
+    if phase in {
+        "FIRST_PULLBACK","FAILED_RECOVERY","DIRECT_THESIS_BREAK",
+    } and recovery_attempt:
         phase="RECOVERY_TEST"
         pos.guardian_s_reclaim_hold_since=now
         pos.guardian_s_recovery_result="IN_PROGRESS"
@@ -710,11 +718,16 @@ def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event)
             pos.guardian_s_failed_recovery_reason=None
             pos.guardian_s_signature=()
             pos.guardian_s_candidate_since=0.0
-        elif lost_reclaim or failed_conversion or (
+        elif (
+            adverse_event.get("classification")=="THESIS_BREAK_CONFIRMED"
+            or lost_reclaim or failed_conversion or (
             new_extreme and price_adverse and opposing=="PERSISTENT"
+            )
         ):
             phase="FAILED_RECOVERY"
-            failed_reason=("RECLAIM_LOST_WITH_PERSISTENT_OPPOSING_FLOW"
+            failed_reason=("BROAD_CASH_BREAK_DURING_RECOVERY_TEST"
+                           if adverse_event.get("classification")=="THESIS_BREAK_CONFIRMED" else
+                           "RECLAIM_LOST_WITH_PERSISTENT_OPPOSING_FLOW"
                            if lost_reclaim else
                            "FAVORABLE_FLOW_FAILED_TO_CONVERT"
                            if failed_conversion else
@@ -728,6 +741,17 @@ def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event)
     opposite_build=bool(
         (adverse_event.get("oi") or {}).get("state")=="OPPOSITE_POSITION_BUILD"
     )
+    direct_break=bool(
+        phase=="FIRST_PULLBACK"
+        and adverse_event.get("classification")=="THESIS_BREAK_CONFIRMED"
+        and not recovery_attempt
+    )
+    if direct_break:
+        phase="DIRECT_THESIS_BREAK"
+        pos.guardian_s_recovery_result="DIRECT_BREAK"
+        pos.guardian_s_failed_recovery_reason=(
+            "BROAD_CASH_ACCEPTANCE_WITHOUT_RECOVERY"
+        )
     second_adverse_kill=bool(
         previous_phase=="FAILED_RECOVERY" and phase=="FAILED_RECOVERY"
         and price_adverse and dual_cash and opposing=="PERSISTENT"
@@ -752,6 +776,7 @@ def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event)
         "failed_recovery_reason":failed_reason or getattr(pos,"guardian_s_failed_recovery_reason",None),
         "new_adverse_extreme":new_extreme,
         "second_adverse_kill_eligible":second_adverse_kill,
+        "direct_thesis_break":direct_break or phase=="DIRECT_THESIS_BREAK",
         "time_only_authority":False,
         "single_venue_kill_authority":False,
     }
@@ -776,7 +801,7 @@ def assess(state,pos,now=None):
             pos.guardian_s_scout_since=now
     else:
         pos.guardian_s_scout_since=0.0
-    causal_exit=bool(
+    causal_candidate=bool(
         raw_causal_exit and thesis["broken"]
         and not external_guard["blocks_binance_only_exit"]
     )
@@ -791,9 +816,58 @@ def assess(state,pos,now=None):
     recovery_path=_advance_recovery_path(
         pos,now,p,s1,s2,s3,profile,thesis,adverse_event
     )
+    candidate_since=float(
+        getattr(pos,"guardian_s_candidate_since",0.0) or 0.0
+    )
+    causal_persistence_seconds=(
+        max(0.0,now-candidate_since) if candidate_since>0.0 else 0.0
+    )
+    # A recovery attempt is not mandatory when adverse cash price and flow
+    # simply keep converting without relief.  That ordered persistence is a
+    # direct thesis break, not a time stop: the timer has no authority unless
+    # the same price+executed-flow causal candidate remains present and the
+    # classifier found no flush, absorption, or cross-evidence conflict.
+    persisted_direct_break=bool(
+        causal_candidate
+        and recovery_path["guardian_phase"]=="FIRST_PULLBACK"
+        and (
+            adverse_event["classification"]=="UNCERTAIN"
+            or (
+                adverse_event["classification"]=="ABSORBED_PULLBACK"
+                and not external_guard["coinbase_strict_fresh"]
+                and not thesis.get("primary_cash_anchor")
+            )
+        )
+        and causal_persistence_seconds>=MIN_DETERIORATION_SECONDS
+        and s1["status"]=="ADVERSE" and s2["status"]=="ADVERSE"
+    )
+    if persisted_direct_break:
+        recovery_path["guardian_phase"]="DIRECT_THESIS_BREAK"
+        recovery_path["direct_thesis_break"]=True
+        recovery_path["recovery_result"]="DIRECT_BREAK"
+        recovery_path["failed_recovery_reason"]=(
+            "PERSISTENT_CAUSAL_BREAK_WITHOUT_RECLAIM"
+        )
+        pos.guardian_s_phase="DIRECT_THESIS_BREAK"
+        pos.guardian_s_recovery_result="DIRECT_BREAK"
+        pos.guardian_s_failed_recovery_reason=(
+            "PERSISTENT_CAUSAL_BREAK_WITHOUT_RECLAIM"
+        )
+    path_break_authorized=bool(
+        adverse_event["classification"]=="THESIS_BREAK_CONFIRMED"
+        or recovery_path["guardian_phase"] in {
+            "FAILED_RECOVERY","DIRECT_THESIS_BREAK",
+        }
+    )
+    # Retire the old generic price+cause exit that could bypass recovery
+    # semantics. A first pullback remains deterioration until either broad
+    # independent cash confirms a direct break or an actual recovery test
+    # fails. Hard Risk remains outside this classifier and is unchanged.
+    causal_exit=bool(causal_candidate and path_break_authorized)
     preserve_deterioration=bool(
         recovery_path["guardian_phase"] in {
             "FIRST_PULLBACK","RECOVERY_TEST","FAILED_RECOVERY",
+            "DIRECT_THESIS_BREAK",
         }
     )
     def clear_deterioration_if_path_complete():
@@ -817,9 +891,9 @@ def assess(state,pos,now=None):
         recovery_path["guardian_phase"] in {"RECOVERY_TEST","RECOVERED"}
         and adverse_event["classification"]!="THESIS_BREAK_CONFIRMED"
     )
-    runner_shield=bool(causal_exit and runner_active and not kill_fast)
+    runner_shield=bool(causal_candidate and runner_active and not kill_fast)
     trend_shield=bool(
-        causal_exit and (trend_context["active"] or classifier_shield)
+        causal_candidate and (trend_context["active"] or classifier_shield)
         and not kill_fast
     )
     if recovery_shield:
@@ -835,8 +909,12 @@ def assess(state,pos,now=None):
               if trend_shield else
               max(RUNNER_DETERIORATION_SECONDS,base_hold)
               if runner_shield else base_hold)
-        exit_profile=("KILL_FAST" if kill_fast else "RUNNER_SHIELD" if runner_shield
-                      else "TREND_SHIELD" if trend_shield else "CAUSAL_CONFIRM")
+        exit_profile=("KILL_FAST" if kill_fast else
+                      "RUNNER_SHIELD" if runner_shield else
+                      "TREND_SHIELD" if trend_shield else
+                      "DIRECT_THESIS_BREAK" if recovery_path["guardian_phase"]=="DIRECT_THESIS_BREAK" else
+                      "FAILED_RECOVERY" if recovery_path["guardian_phase"]=="FAILED_RECOVERY" else
+                      "CAUSAL_CONFIRM")
         sig=tuple(sorted(confirmed))+(exit_profile,)
         if getattr(pos,"guardian_s_signature",())!=sig:
             scout_since=float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0)
@@ -865,6 +943,11 @@ def assess(state,pos,now=None):
         decision,reason,hold="DETERIORATING","ENTRY_THESIS_NOT_BROKEN",0.0
         exit_profile="THESIS_HOLDS"
         clear_deterioration_if_path_complete()
+    elif causal_candidate and not path_break_authorized:
+        decision,reason,hold=(
+            "DETERIORATING","THESIS_BREAK_AWAITING_PATH_CONFIRMATION",0.0
+        )
+        exit_profile="FIRST_PULLBACK_PATH_PENDING"
     elif s1["status"]=="ADVERSE":
         decision,reason,hold="DETERIORATING","PRICE_ADVERSE_AWAITING_FLOW_OR_OI",0.0
         clear_deterioration_if_path_complete()

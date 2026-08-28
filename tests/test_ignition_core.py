@@ -457,6 +457,65 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(promoted["bias_snapshot"]["direction"], "SHORT")
         self.assertEqual(promoted["side"], "LONG")
 
+    def test_confirmed_cash_transition_survives_current_bias_abstain(self):
+        """Slow Bias may go neutral during handover; strict cash proof survives."""
+        s = state(now=3.6)
+        s.bias_state = "ABSTAIN"
+        s.bias_confidence = 0.0
+        s._ignition_episode = {
+            "causal_episode_id": "ign:binance_spot:LONG:3200",
+            "side": "LONG", "started_receive_ms": 3_200,
+            "last_evidence_ms": 3_550, "epochs": {},
+            "transition_confirmed": True,
+            "transition_authority": {
+                "status": "REVERSAL_CONFIRMED", "side": "LONG",
+                "cash_synchronous_transition": True,
+                "accepted_cash_venues": [
+                    "binance_spot", "coinbase_spot",
+                ],
+                "hard_contradiction": False,
+            },
+        }
+        expected = {"decision": "GO", "side": "LONG"}
+        empty = {
+            "binance_spot": (), "coinbase_spot": (), "futures": (),
+        }
+        with patch.object(
+            ignition_signals, "snapshot", return_value=empty,
+        ), patch.object(
+            ignition_core, "_new_signals", return_value=[],
+        ), patch.object(
+            ignition_core, "_result_from_episode", return_value=expected,
+        ):
+            result = ignition_core.evaluate(s, now=3.6)
+        self.assertEqual(result, expected)
+        self.assertIsNotNone(s._ignition_episode)
+
+    def test_incomplete_transition_does_not_bypass_current_bias_abstain(self):
+        s = state(now=3.6)
+        s.bias_state = "ABSTAIN"
+        s.bias_confidence = 0.0
+        s._ignition_episode = {
+            "causal_episode_id": "ign:binance_spot:LONG:3200",
+            "side": "LONG", "started_receive_ms": 3_200,
+            "last_evidence_ms": 3_550, "epochs": {},
+            "transition_confirmed": False,
+            "transition_authority": {
+                "status": "NEW_SIDE_CONVERTS", "side": "LONG",
+                "cash_synchronous_transition": False,
+                "accepted_cash_venues": ["binance_spot"],
+            },
+        }
+        empty = {
+            "binance_spot": (), "coinbase_spot": (), "futures": (),
+        }
+        with patch.object(
+            ignition_signals, "snapshot", return_value=empty,
+        ), patch.object(ignition_core, "_new_signals", return_value=[]):
+            result = ignition_core.evaluate(s, now=3.6)
+        self.assertEqual(result["reason"], "BIAS_ABSTAIN")
+        self.assertIsNone(s._ignition_episode)
+
     def test_single_cash_reclaim_cannot_bypass_frozen_bias(self):
         s = state(now=3.6)
         self._freeze_bias_before_wave(s, side="SHORT", captured_at=2.0)
