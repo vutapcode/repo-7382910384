@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import mainnet_tier_s_shadow_launcher as launcher
 from loi_he_thong import ignition_core
@@ -7,6 +8,30 @@ from recorder.decision_outcomes import DecisionOutcomeTracker
 
 
 class MissTaxonomyTests(unittest.TestCase):
+    def test_post_go_rejection_has_full_attribution_contract(self):
+        result = {
+            "decision": "GO", "side": "LONG",
+            "decision_cycle_id": "cycle-1",
+            "causal_episode_id": "episode-1",
+            "authority_basis": "TRANSITION_CONFIRMED",
+            "authority_proof_hash": "proof-1",
+            "execution_policy": "TAKER",
+            "ignition": {"proof_type": "METAORDER_CONTINUATION"},
+        }
+        with patch.object(launcher, "_append_event") as append:
+            self.assertTrue(launcher._record_post_go_rejection(
+                result, "AUTHORITY_REVALIDATION", "TEST_REJECT",
+                "current_cash_conversion",
+            ))
+        event, payload = append.call_args.args
+        self.assertEqual(event, "ENTRY_POST_GO_REJECTED")
+        for key in (
+            "reject_stage", "blocking_reason", "authority_basis",
+            "proof_hash", "failed_dependency",
+        ):
+            self.assertIn(key, payload)
+        self.assertEqual(payload["proof_hash"], "proof-1")
+
     def test_launcher_allows_only_canonical_dual_cash_transition_bypass(self):
         state = SimpleNamespace(bias_state="SHORT")
         base = {"decision": "GO", "side": "LONG", "ignition": {}}

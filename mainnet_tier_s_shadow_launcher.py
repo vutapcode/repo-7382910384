@@ -477,6 +477,30 @@ def _append_event(event, payload):
         handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def _record_post_go_rejection(
+    result, reject_stage, blocking_reason, failed_dependency=None,
+):
+    """Make every strategic GO rejection attributable to one dependency."""
+    result = dict(result or {})
+    if result.get("decision") != "GO":
+        return False
+    ignition = dict(result.get("ignition") or {})
+    _append_event("ENTRY_POST_GO_REJECTED", {
+        "schema_version": "POST_GO_REJECTION_V1",
+        "cycle_id": result.get("decision_cycle_id"),
+        "causal_episode_id": result.get("causal_episode_id"),
+        "side": result.get("side"),
+        "reject_stage": str(reject_stage or "UNKNOWN"),
+        "blocking_reason": str(blocking_reason or "UNKNOWN"),
+        "authority_basis": result.get("authority_basis"),
+        "proof_hash": result.get("authority_proof_hash"),
+        "failed_dependency": failed_dependency,
+        "proof_type": ignition.get("proof_type"),
+        "execution_policy": result.get("execution_policy"),
+    })
+    return True
+
+
 def _decision_cycle_id(state, now):
     return "decision:%s:%d:%d" % (
         str(getattr(state, "run_id", "missing-run") or "missing-run")[:12],
@@ -1889,6 +1913,14 @@ async def _entry_loop():
                 decision_event_emitted = True
 
             if not quorum_ok:
+                structural = dict(
+                    getattr(s, "entry_structural_contract", {}) or {}
+                )
+                _record_post_go_rejection(
+                    result, "STRUCTURAL_CONTRACT",
+                    structural.get("reason", "ENTRY_QUORUM_FAIL"),
+                    structural.get("detail") or "FROZEN_ENTRY_CONTRACT",
+                )
                 await asyncio.sleep(ENTRY_POLL)
                 continue
 
@@ -1896,17 +1928,33 @@ async def _entry_loop():
                 result.get("side") or getattr(s, "bias_state", "ABSTAIN")
             ).upper()
             if side not in ("LONG", "SHORT"):
+                _record_post_go_rejection(
+                    result, "SIDE_VALIDATION", "ENTRY_SIDE_INVALID", "side",
+                )
                 await asyncio.sleep(ENTRY_POLL)
                 continue
             if not _bias_or_transition_authorized(result, s):
                 s.mainnet_shadow_entry_state = "WAIT_BIAS_OR_TRANSITION_AUTHORITY"
                 s.mainnet_shadow_last_skip = "BIAS_ALIGNMENT_FAIL"
+                authority = dict(
+                    getattr(s, "entry_authority_validation", {}) or {}
+                )
+                _record_post_go_rejection(
+                    result, "AUTHORITY_REVALIDATION",
+                    authority.get("reason", "BIAS_ALIGNMENT_FAIL"),
+                    authority.get("detail") or result.get("authority_basis"),
+                )
                 await asyncio.sleep(ENTRY_POLL)
                 continue
 
             if daily_locked:
                 s.mainnet_shadow_entry_state = "WAIT_DAILY_LOSS_LOCKED"
                 s.mainnet_shadow_last_skip = "DAILY_LOSS_LOCKED"
+                _record_post_go_rejection(
+                    result, "RISK_ADMISSION", "DAILY_LOSS_LOCKED",
+                    "real_money_daily_loss_policy" if _live_entry_authority(s)
+                    else "shadow_policy_configuration",
+                )
                 # Pair every persisted, otherwise executable GO decision with
                 # an explicit execution outcome. This keeps the funnel honest:
                 # a risk lock is not an unexplained strategy miss.
@@ -1949,6 +1997,10 @@ async def _entry_loop():
                 )
                 s.mainnet_shadow_entry_state = "WAIT_" + reserve_reason
                 s.mainnet_shadow_last_skip = reserve_reason
+                _record_post_go_rejection(
+                    result, "CANONICAL_RESERVATION", reserve_reason,
+                    "canonical_opportunity_id",
+                )
                 await asyncio.sleep(ENTRY_POLL)
                 continue
             result = dict(result)
