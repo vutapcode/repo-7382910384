@@ -130,10 +130,12 @@ class CashRecorderTests(unittest.TestCase):
         self.assertNotIn('@bookTicker', config.spot_stream_url)
         self.assertNotIn('@kline_', config.market_stream_url)
 
-    def test_coinbase_recorder_subscribes_only_to_executed_matches(self):
+    def test_coinbase_recorder_subscribes_to_matches_and_ticker(self):
         source = Path(__file__).resolve().parents[1] / 'recorder' / 'collector.py'
         text = source.read_text(encoding='utf-8')
-        self.assertIn("'channels': ['matches']", text)
+        self.assertIn("'channels': ['matches', 'ticker']", text)
+        self.assertIn("elif message_type == 'ticker'", text)
+        self.assertIn("'coinbase_spot_ticker'", text)
 
     def test_oi_polling_is_independent_from_bot_strategy_state(self):
         with tempfile.TemporaryDirectory() as temp:

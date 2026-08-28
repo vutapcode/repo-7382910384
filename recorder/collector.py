@@ -416,13 +416,13 @@ class BinanceRecorder:
                 await asyncio.sleep(3)
 
     async def coinbase_spot_loop(self):
-        """Record Coinbase executed matches; the live bot owns its BBO feed."""
+        """Record Coinbase executed matches and contemporaneous BBO ticker."""
         name = 'coinbase_spot_ws'
         previous_trade_id = None
         subscribe = orjson.dumps({
             'type': 'subscribe',
             'product_ids': [self.config.coinbase_product],
-            'channels': ['matches'],
+            'channels': ['matches', 'ticker'],
         })
         while True:
             batcher = CashTradeBatcher(self.config.cash_batch_ms)
