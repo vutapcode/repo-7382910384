@@ -71,6 +71,39 @@ class MissTaxonomyTests(unittest.TestCase):
         self.assertIn("BIAS_ALIGNMENT_FAIL", failed)
         self.assertNotIn("BIAS_NOT_READY", failed)
 
+    def test_compatibility_votes_are_diagnostics_not_live_blockers(self):
+        result = {
+            "decision": "WAIT",
+            "reason": "WAIT_FUTURES_ALERT_CASH_RESPONSE",
+            "side": "SHORT",
+            "s_votes": {
+                "S1_cross_venue_price_acceptance": {"status": "FAIL"},
+                "S2_multi_venue_executed_flow": {"status": "FAIL"},
+            },
+        }
+        details = launcher._miss_taxonomy_details(
+            result, {"bootstrap_shadow_allowed": True}, False,
+        )
+        self.assertEqual(details["blocking_reason"], "WAIT_CASH_RESPONSE")
+        self.assertEqual(details["blocking_reasons"], ["WAIT_CASH_RESPONSE"])
+        self.assertEqual(
+            details["diagnostic_reasons"],
+            ["PRICE_QUORUM_FAIL", "FLOW_QUORUM_FAIL"],
+        )
+
+    def test_go_contract_failure_has_canonical_blocker(self):
+        result = {
+            "decision": "GO", "reason": "IGNITION_METAORDER_CONTINUATION",
+            "side": "LONG", "s_votes": {},
+        }
+        details = launcher._miss_taxonomy_details(
+            result, {"bootstrap_shadow_allowed": True}, False,
+        )
+        self.assertEqual(
+            details["blocking_reason"], "ENTRY_AUTHORITY_CONTRACT_FAIL"
+        )
+        self.assertEqual(details["diagnostic_reasons"], [])
+
     def test_snapshot_oi_freshness_uses_poll_aware_contract(self):
         state = SimpleNamespace(
             open_interest=100.0, thoi_gian_vi_mo_cuoi=83.0,

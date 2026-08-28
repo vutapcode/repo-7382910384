@@ -506,8 +506,14 @@ def _execution_mid(state):
         return 0.0
 
 
-def _miss_taxonomy(result, edge_report, quorum_ok):
-    """Map active council/edge behavior to one stable primary miss reason."""
+def _miss_taxonomy_details(result, edge_report, quorum_ok):
+    """Separate live blockers from compatibility-only diagnostics.
+
+    S1/S2 vote metadata remains useful when auditing the inputs visible in a
+    decision cycle, but Ignition is the active Entry authority.  Mixing those
+    compatibility votes into ``failed_gates`` made a specific causal WAIT look
+    as if three independent gates had rejected the trade.
+    """
     reason = str((result or {}).get("reason", "") or "").upper()
     votes = (result or {}).get("s_votes") or {}
     s1 = votes.get("S1_cross_venue_price_acceptance") or {}
@@ -518,6 +524,7 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
     thesis_audit = (edge_report or {}).get("entry_thesis_audit") or {}
     would_enter = (result or {}).get("decision") == "GO"
     failed = []
+    diagnostic = []
     if "STALE" in reason or "FEED_NOT_READY" in reason:
         failed.append("WAIT_STALE_DATA")
     if "EXTERNAL" in reason:
@@ -558,9 +565,9 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
     elif "BIAS" in reason or str((result or {}).get("side", "")).upper() not in ("LONG", "SHORT"):
         failed.append("BIAS_NOT_READY")
     if s1 and str(s1.get("status", "MISSING")) != "PASS":
-        failed.append("PRICE_QUORUM_FAIL")
+        diagnostic.append("PRICE_QUORUM_FAIL")
     if s2 and str(s2.get("status", "MISSING")) != "PASS":
-        failed.append("FLOW_QUORUM_FAIL")
+        diagnostic.append("FLOW_QUORUM_FAIL")
     # Bootstrap shadow is intentionally allowed to trade so outcomes can make
     # the empirical gate measurable.  It is not a miss merely because the old
     # structural residual proxy is zero.  Only a final rejected GO is tagged.
@@ -579,7 +586,7 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         elif not bool((edge_report or {}).get("cost_ok")) and not bootstrap:
             failed.append("EDGE_COST_FAIL")
     if would_enter and not quorum_ok and not failed:
-        failed.append("FLOW_QUORUM_FAIL")
+        failed.append("ENTRY_AUTHORITY_CONTRACT_FAIL")
     priority = (
         "WAIT_STALE_DATA", "WAIT_EXTERNAL_CORROBORATION", "WAIT_CHASE",
         "WAIT_CASH_RESPONSE", "WAIT_LEADER_UNCERTAIN", "WAIT_LATE_IMPULSE",
@@ -595,11 +602,22 @@ def _miss_taxonomy(result, edge_report, quorum_ok):
         "EMPIRICAL_ALPHA_NOT_READY",
         "EDGE_COST_FAIL",
         "BIAS_THESIS_FAIL", "BIAS_ALIGNMENT_FAIL", "BIAS_NOT_READY",
-        "PRICE_QUORUM_FAIL", "FLOW_QUORUM_FAIL",
+        "ENTRY_AUTHORITY_CONTRACT_FAIL",
     )
     unique = list(dict.fromkeys(failed))
+    diagnostic = list(dict.fromkeys(diagnostic))
     primary = next((name for name in priority if name in unique), None)
-    return primary, unique
+    return {
+        "blocking_reason": primary,
+        "blocking_reasons": unique,
+        "diagnostic_reasons": diagnostic,
+    }
+
+
+def _miss_taxonomy(result, edge_report, quorum_ok):
+    """Compatibility tuple for callers that only consume live blockers."""
+    details = _miss_taxonomy_details(result, edge_report, quorum_ok)
+    return details["blocking_reason"], details["blocking_reasons"]
 
 
 def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opportunity=None):
@@ -613,7 +631,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
     reference = _execution_mid(state)
     side = str((result or {}).get("side", "ABSTAIN") or "ABSTAIN").upper()
     causal = dict((result or {}).get("causal") or {})
-    miss, failed = _miss_taxonomy(result, edge_report, quorum_ok)
+    taxonomy = _miss_taxonomy_details(result, edge_report, quorum_ok)
+    miss = taxonomy["blocking_reason"]
+    failed = taxonomy["blocking_reasons"]
     hard_sl_bps = None
     if reference > 0.0 and side in ("LONG", "SHORT"):
         try:
@@ -646,7 +666,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "strategy_authority": "IGNITION_CORE_V1",
         "strategy_code_version": getattr(state, "code_version", None),
         "strategy_config_version": getattr(state, "strategy_config_version", None),
-        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V5_ENTRY_ECONOMICS",
+        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V6_BLOCKER_DIAGNOSTIC_SPLIT",
         "causal_episode_id": (opportunity or {}).get("causal_episode_id"),
         "inputs": {
             "bias": {
@@ -701,7 +721,10 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "edge_class": (edge_report or {}).get("edge_class"),
             "cost": cost_snapshot,
             "miss_taxonomy": miss,
+            "blocking_reason": miss,
+            "blocking_reasons": failed,
             "failed_gates": failed,
+            "diagnostic_reasons": taxonomy["diagnostic_reasons"],
         },
         "counterfactual": {
             "eligible": bool(miss and reference > 0.0 and side in ("LONG", "SHORT")),
