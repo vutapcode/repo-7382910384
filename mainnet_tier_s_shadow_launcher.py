@@ -430,28 +430,21 @@ def _entry_quorum_ok(result, state, now):
 
 
 def _bias_or_transition_authorized(result, state):
-    """Allow only the canonical dual-cash transition to bypass old Bias."""
+    """Revalidate only dependencies owned by the frozen authority basis."""
     side = str((result or {}).get("side") or "ABSTAIN").upper()
     bias_side = str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
     if side not in ("LONG", "SHORT"):
         return False
-    if side == bias_side:
-        return True
-    ignition = dict((result or {}).get("ignition") or {})
-    transition = dict(ignition.get("transition_authority") or {})
-    accepted = {
-        str(value).lower()
-        for value in (transition.get("accepted_cash_venues") or ())
+    valid, reason, detail = entry_council.validate_frozen_authority(result)
+    state.entry_authority_validation = {
+        "ok": valid, "reason": reason, "detail": detail,
     }
-    return bool(
-        ignition.get("transition_confirmed")
-        and transition.get("status") == "REVERSAL_CONFIRMED"
-        and str(transition.get("side") or "").upper() == side
-        and transition.get("old_side_failure_confirmed")
-        and transition.get("new_side_cash_control_confirmed")
-        and transition.get("cash_synchronous_transition")
-        and {"binance_spot", "coinbase_spot"}.issubset(accepted)
-    )
+    if not valid:
+        return False
+    basis = str((result or {}).get("authority_basis") or "").upper()
+    if basis == "TRANSITION_CONFIRMED":
+        return True
+    return bool(basis == "BIAS_ALIGNED" and side == bias_side)
 
 
 def _entry_feasibility(price):

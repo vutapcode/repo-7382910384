@@ -1753,6 +1753,66 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
     return basis, dependencies, hashlib.sha256(encoded).hexdigest()
 
 
+def validate_frozen_authority(result):
+    """Validate one immutable GO authority proof without rerunning strategy.
+
+    The launcher may revalidate a still-required live dependency (current Bias
+    for ``BIAS_ALIGNED``), but it must not reconstruct Transition semantics
+    from mutable Ignition fields after the proof has been frozen.
+    """
+    result = dict(result or {})
+    ignition = dict(result.get("ignition") or {})
+    basis = str(result.get("authority_basis") or "").upper()
+    dependencies = dict(result.get("authority_dependencies") or {})
+    proof_hash = str(result.get("authority_proof_hash") or "")
+    side = str(result.get("side") or "ABSTAIN").upper()
+    episode_id = str(
+        result.get("causal_episode_id")
+        or ignition.get("causal_episode_id") or ""
+    )
+    if basis not in {"BIAS_ALIGNED", "TRANSITION_CONFIRMED"}:
+        return False, "AUTHORITY_BASIS_INVALID", {}
+    if not dependencies or not proof_hash:
+        return False, "AUTHORITY_PROOF_MISSING", {}
+    encoded = json.dumps(
+        {"authority_basis": basis, "authority_dependencies": dependencies},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    if hashlib.sha256(encoded).hexdigest() != proof_hash:
+        return False, "AUTHORITY_PROOF_HASH_INVALID", {}
+    if side not in {"LONG", "SHORT"} or str(
+        dependencies.get("side") or ""
+    ).upper() != side:
+        return False, "AUTHORITY_SIDE_CHANGED", {}
+    if not episode_id or str(
+        dependencies.get("causal_episode_id") or ""
+    ) != episode_id:
+        return False, "AUTHORITY_EPISODE_CHANGED", {}
+    if str(dependencies.get("proof_type") or "") != str(
+        ignition.get("proof_type") or ""
+    ):
+        return False, "AUTHORITY_PROOF_TYPE_CHANGED", {}
+    if basis == "TRANSITION_CONFIRMED":
+        transition = dict(dependencies.get("transition") or {})
+        accepted = {
+            str(value) for value in transition.get(
+                "accepted_cash_venues", ()
+        )}
+        if not (
+            transition.get("old_side_failure")
+            and transition.get("new_side_cash_control")
+            and transition.get("dual_cash_acceptance")
+            and CASH.issubset(accepted)
+            and str(transition.get("new_side") or "").upper() == side
+        ):
+            return False, "TRANSITION_AUTHORITY_DEPENDENCY_INVALID", {}
+    return True, "PASS", {
+        "authority_basis": basis,
+        "authority_proof_hash": proof_hash,
+        "causal_episode_id": episode_id,
+    }
+
+
 def _venue_anchor(history, started_receive_ms):
     """Return a venue-local pre-episode reference; never borrow another venue's basis."""
     rows = [row for row in history if _f(row.get("price")) > 0.0 or _f(row.get("first_price")) > 0.0]

@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 import mainnet_tier_s_shadow_launcher as launcher
+from loi_he_thong import ignition_core
 from recorder.decision_outcomes import DecisionOutcomeTracker
 
 
@@ -11,52 +12,65 @@ class MissTaxonomyTests(unittest.TestCase):
         base = {"decision": "GO", "side": "LONG", "ignition": {}}
         self.assertFalse(launcher._bias_or_transition_authorized(base, state))
 
+        payload = {
+            "causal_episode_id": "transition-1",
+            "proof_type": "METAORDER_CONTINUATION",
+            "proof_venue": "binance_spot",
+            "transition_confirmed": True,
+            "current_cash_conversion": {"venues": {
+                "binance_spot": {"receive_time_ms": 1_000, "epoch": 1},
+                "coinbase_spot": {"receive_time_ms": 1_100, "epoch": 1},
+            }},
+            "transition_authority": {
+                "status": "REVERSAL_CONFIRMED",
+                "side": "LONG",
+                "background_side": "SHORT",
+                "old_side_failure_confirmed": True,
+                "old_failure_venues": ["binance_spot"],
+                "new_side_cash_control_confirmed": True,
+                "cash_synchronous_transition": True,
+                "cash_acceptance_span_ms": 100,
+                "accepted_cash_venues": [
+                    "binance_spot", "coinbase_spot",
+                ],
+            },
+        }
+        basis, dependencies, proof_hash = (
+            ignition_core._freeze_authority_proof(
+                payload, "LONG", payload["proof_type"], "transition-1",
+            )
+        )
         transition = {
             **base,
-            "ignition": {
-                "transition_confirmed": True,
-                "transition_authority": {
-                    "status": "REVERSAL_CONFIRMED",
-                    "side": "LONG",
-                    "old_side_failure_confirmed": True,
-                    "new_side_cash_control_confirmed": True,
-                    "cash_synchronous_transition": True,
-                    "accepted_cash_venues": [
-                        "binance_spot", "coinbase_spot",
-                    ],
-                },
-            },
+            "causal_episode_id": "transition-1",
+            "authority_basis": basis,
+            "authority_dependencies": dependencies,
+            "authority_proof_hash": proof_hash,
+            "ignition": payload,
         }
         self.assertTrue(
             launcher._bias_or_transition_authorized(transition, state)
         )
 
-        transition["ignition"]["transition_authority"][
-            "old_side_failure_confirmed"
-        ] = False
-        self.assertFalse(
-            launcher._bias_or_transition_authorized(transition, state)
-        )
-        transition["ignition"]["transition_authority"][
-            "old_side_failure_confirmed"
-        ] = True
-
-        transition["ignition"]["transition_authority"][
-            "accepted_cash_venues"
-        ] = ["binance_spot"]
-        self.assertFalse(
-            launcher._bias_or_transition_authorized(transition, state)
-        )
-
-        # ABSTAIN is not a blanket authorization. It may pass only through the
-        # same canonical dual-cash transition contract above.
-        state.bias_state = "ABSTAIN"
-        self.assertFalse(launcher._bias_or_transition_authorized(base, state))
-        transition["ignition"]["transition_authority"][
-            "accepted_cash_venues"
-        ] = ["binance_spot", "coinbase_spot"]
+        # Mutable Transition telemetry may decay after GO. The launcher must
+        # preserve the frozen proof instead of reconstructing strategy.
+        transition["ignition"]["transition_authority"] = {}
         self.assertTrue(
             launcher._bias_or_transition_authorized(transition, state)
+        )
+
+        # Transition authority does not depend on the later slow-Bias value.
+        state.bias_state = "ABSTAIN"
+        self.assertFalse(launcher._bias_or_transition_authorized(base, state))
+        self.assertTrue(
+            launcher._bias_or_transition_authorized(transition, state)
+        )
+
+        tampered = dict(transition)
+        tampered["authority_dependencies"] = dict(dependencies)
+        tampered["authority_dependencies"]["side"] = "SHORT"
+        self.assertFalse(
+            launcher._bias_or_transition_authorized(tampered, state)
         )
 
     def test_frozen_bias_mismatch_has_distinct_taxonomy(self):
