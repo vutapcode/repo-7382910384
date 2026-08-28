@@ -1066,6 +1066,19 @@ def _strict_transition_side(episode):
     return side
 
 
+def _strict_frozen_episode_side(episode):
+    """Keep a valid pre-impulse Bias snapshot authoritative for its 5 s wave."""
+    if not isinstance(episode, dict):
+        return None
+    side = str(episode.get("side") or "ABSTAIN").upper()
+    frozen = dict(episode.get("bias_snapshot") or {})
+    return side if bool(
+        side in ("LONG", "SHORT")
+        and str(frozen.get("direction") or "ABSTAIN").upper() == side
+        and _f(frozen.get("confidence")) >= BIAS_MIN_CONF
+    ) else None
+
+
 def _bias_bucket_at(buckets, target, max_age=2.0):
     """Return one receive-time snapshot with a bounded direct lookup."""
     if not isinstance(buckets, dict):
@@ -1275,6 +1288,8 @@ def _start_episode(state, signal, histories=None):
         "proposer": signal.get("venue"), "leader": signal.get("venue"),
         "started_receive_ms": int(signal.get("receive_time_ms", 0)),
         "last_evidence_ms": int(signal.get("receive_time_ms", 0)),
+        "current_segment_started_ms": int(signal.get("receive_time_ms", 0)),
+        "evidence_segment_count": 1,
         "bias_snapshot": bias, "signals": [dict(signal)],
         "epochs": {signal.get("venue"): int(signal.get("epoch", 0))},
         "precursor_measurement": _precursor_cash_progress(state, signal),
@@ -1308,6 +1323,74 @@ def _material_flow(row):
         and abs(_f(row.get("price_conversion_bps"))) >= MATERIAL_PRICE_BPS
         and row.get("clock_valid")
     )
+
+
+def _directional_material_flow(row, side=None):
+    side = str(side or row.get("side") or "ABSTAIN").upper()
+    if side not in ("LONG", "SHORT") or not _material_flow(row):
+        return False
+    sign = _sign(side)
+    return bool(
+        str(row.get("side") or "").upper() == side
+        and sign * _f(row.get("imbalance")) >= 0.20
+        and sign * _f(row.get("price_conversion_bps"))
+            >= MATERIAL_PRICE_BPS
+    )
+
+
+def _current_cash_conversion(histories, side, now_ms):
+    """Measure present-tense directional cash conversion without lookahead.
+
+    A bounded wave may preserve older causal context, but only an executed
+    cash bucket that is still inside the existing follower window can grant
+    Entry timing authority.  Futures never participates in this decision.
+    """
+    side = str(side or "ABSTAIN").upper()
+    sign = _sign(side)
+    accepted = {}
+    for venue in sorted(CASH):
+        rows = []
+        for row in histories.get(venue, ()):
+            receive_ms = int(row.get("receive_time_ms", 0) or 0)
+            if (
+                receive_ms <= 0 or receive_ms > int(now_ms)
+                or int(now_ms) - receive_ms > FOLLOW_MAX_MS
+                or not _directional_material_flow(row, side)
+            ):
+                continue
+            rows.append(row)
+        if not rows:
+            continue
+        latest = max(rows, key=lambda row: int(
+            row.get("receive_time_ms", 0) or 0
+        ))
+        receive_ms = int(latest.get("receive_time_ms", 0) or 0)
+        accepted[venue] = {
+            "receive_time_ms": receive_ms,
+            "age_ms": int(now_ms) - receive_ms,
+            "imbalance": round(sign * _f(latest.get("imbalance")), 6),
+            "price_conversion_bps": round(
+                sign * _f(latest.get("price_conversion_bps")), 6
+            ),
+            "epoch": int(latest.get("epoch", 0) or 0),
+        }
+    times = [row["receive_time_ms"] for row in accepted.values()]
+    span = max(times) - min(times) if len(times) == len(CASH) else None
+    dual = bool(
+        set(accepted) == CASH and span is not None and span <= FOLLOW_MAX_MS
+    )
+    return {
+        "version": "CURRENT_CASH_CONVERSION_V1",
+        "side": side,
+        "confirmed": bool(accepted),
+        "accepted_cash_venues": sorted(accepted),
+        "venues": accepted,
+        "dual_cash_synchronous_control": dual,
+        "acceptance_span_ms": span,
+        "max_age_ms": FOLLOW_MAX_MS,
+        "authority": "ENTRY_TIMING_ONLY",
+        "policy": "CURRENT_EXECUTED_CASH_FLOW_AND_PRICE_CONVERSION",
+    }
 
 
 def _venue_anchor(history, started_receive_ms):
@@ -1441,6 +1524,10 @@ def _failed_reversion(history, side, proposer_ms):
 
 def _proof(episode, histories):
     side = episode["side"]
+    proof_segment_start = max(
+        int(episode.get("started_receive_ms", 0) or 0),
+        int(episode.get("current_segment_started_ms", 0) or 0),
+    )
     cash_venues = sorted({
         row["venue"] for row in episode["signals"]
         if row["venue"] in CASH and row["side"] == side
@@ -1452,7 +1539,7 @@ def _proof(episode, histories):
         rows = [
             row for row in venue_history
             if row.get("side") == side
-            and int(row.get("receive_time_ms", 0)) >= episode["started_receive_ms"]
+            and int(row.get("receive_time_ms", 0)) >= proof_segment_start
         ]
         if len(rows) >= 2 and rows[-1].get("strong") and rows[-2].get("strong"):
             if _f(rows[-1].get("flow_acceleration")) >= 0.0:
@@ -1497,7 +1584,9 @@ def _proof(episode, histories):
                     "proof_policy": "OBSERVED_BRIEF_PAUSE_ONLY_MAX_CAUSAL_DECAY",
                 }
                 candidates.append(("METAORDER_CONTINUATION", proof, venue))
-        failed = _failed_reversion(venue_history, side, episode["started_receive_ms"])
+        failed = _failed_reversion(
+            venue_history, side, proof_segment_start,
+        )
         if failed is not None:
             candidates.append(("FAILED_REVERSION", failed, venue))
 
@@ -1726,6 +1815,102 @@ def _persistent_metaorder_shadow(histories, side, now_ms):
     }
 
 
+def _bounded_wave_ledger_view(snapshot, now_ms, previous=None):
+    """Expose the existing persistent-wave lifecycle as an evidence ledger.
+
+    This is not a second signal engine.  It gives every asynchronous evidence
+    group its own timestamp/freshness while reusing the bounded 6.4 s executed
+    flow history and the already-enforced 3 s gap / 15 s safety lifetime.
+    """
+    candidate_side = str(
+        (snapshot or {}).get("candidate_side") or "ABSTAIN"
+    ).upper()
+    side = (
+        candidate_side if candidate_side in ("LONG", "SHORT")
+        else str((snapshot or {}).get("wave_side") or "ABSTAIN").upper()
+    )
+    report = dict(
+        (((snapshot or {}).get("sides") or {}).get(side)) or {}
+    )
+    venues = dict(report.get("venues") or {})
+    previous = dict(previous or {})
+    previous_by_venue = {
+        str(row.get("venue") or ""): dict(row)
+        for row in (
+            previous.get("primary_cash"),
+            previous.get("secondary_cash"),
+            previous.get("futures_follow"),
+        )
+        if isinstance(row, dict) and row.get("venue")
+    }
+
+    def evidence(name):
+        row = dict(venues.get(name) or {})
+        last_ms = int(row.get("last_aligned_ms") or 0)
+        if last_ms <= 0 and name in previous_by_venue:
+            carried = dict(previous_by_venue[name])
+            carried_last = int(carried.get("last_evidence_ms") or 0)
+            carried_age = int(now_ms) - carried_last if carried_last > 0 else None
+            carried.update({
+                "age_ms": carried_age,
+                "fresh": bool(
+                    carried_age is not None
+                    and 0 <= carried_age <= PERSISTENT_WAVE_GAP_MS
+                ),
+                "carried_across_lull": True,
+            })
+            return carried
+        age_ms = int(now_ms) - last_ms if last_ms > 0 else None
+        return {
+            "venue": name,
+            "observed": bool(last_ms > 0),
+            "structural_candidate": bool(row.get("structural_candidate")),
+            "first_evidence_ms": row.get("first_aligned_ms"),
+            "last_evidence_ms": last_ms or None,
+            "age_ms": age_ms,
+            "fresh": bool(
+                age_ms is not None and 0 <= age_ms <= PERSISTENT_WAVE_GAP_MS
+            ),
+            "carried_across_lull": False,
+            "epoch": row.get("epoch"),
+            "clock_valid": bool(row.get("clock_valid")),
+            "price_progress_bps": row.get("price_progress_bps"),
+            "recent_1s_price_progress_bps": row.get(
+                "recent_1s_price_progress_bps"
+            ),
+        }
+
+    proposer = str(
+        report.get("proposer")
+        or (previous.get("primary_cash") or {}).get("venue")
+        or ""
+    )
+    secondary = next((name for name in sorted(CASH) if name != proposer), None)
+    return {
+        "version": "BOUNDED_WAVE_LEDGER_V1",
+        "causal_wave_id": (snapshot or {}).get("candidate_id"),
+        "side": side,
+        "wave_started_at_ms": (snapshot or {}).get("wave_started_at_ms"),
+        "wave_last_confirmed_at_ms": (
+            snapshot or {}
+        ).get("wave_last_confirmed_at_ms"),
+        "wave_bridge_active": bool(
+            (snapshot or {}).get("wave_bridge_active")
+        ),
+        "wave_expired": bool((snapshot or {}).get("wave_expired")),
+        "primary_cash": evidence(proposer) if proposer in CASH else None,
+        "secondary_cash": evidence(secondary) if secondary else None,
+        "futures_follow": evidence("futures"),
+        "old_side_failure": "OWNED_BY_FAST_TRANSITION",
+        "new_side_conversion": "MEASURED_AT_ENTRY_TIME",
+        "oi_context": "ATTACHED_TO_CAUSAL_EPISODE_NOT_DIRECTION_AUTHORITY",
+        "evidence_gap_ms": PERSISTENT_WAVE_GAP_MS,
+        "max_lifetime_ms": PERSISTENT_WAVE_MAX_MS,
+        "authority": False,
+        "policy": "PER_FIELD_FRESHNESS_NO_WHOLE_WAVE_RESET_ON_ONE_LATE_FOLLOWER",
+    }
+
+
 def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
     """Observe one stable slow causal wave independently from fast Ignition.
 
@@ -1793,8 +1978,8 @@ def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
     elif bridge_previous:
         candidate_started_at_ms = wave_started_at_ms
         candidate_id = "pmeta:%s:%d" % (wave_side, wave_started_at_ms)
-    return {
-        "version": "PERSISTENT_METAORDER_SHADOW_V2",
+    snapshot = {
+        "version": "PERSISTENT_METAORDER_SHADOW_V3_BOUNDED_WAVE_LEDGER",
         "status": status,
         "candidate_side": candidate_side,
         "candidate_id": candidate_id,
@@ -1810,6 +1995,11 @@ def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
         "policy": "SHADOW_BOOTSTRAP_LIVE_EMPIRICAL_ONLY",
         "transition": identity != previous_identity,
     }
+    snapshot["bounded_wave_ledger"] = _bounded_wave_ledger_view(
+        snapshot, now_ms,
+        previous=(previous or {}).get("bounded_wave_ledger"),
+    )
+    return snapshot
 
 
 def _persistent_entry_result(state, snapshot, histories, freshness, now):
@@ -1875,6 +2065,9 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
 
     venue_reports = report.get("venues") or {}
     names = set(cash) | {"futures"}
+    current_cash = _current_cash_conversion(
+        histories, side, int(now * 1000.0),
+    )
     moves = {
         name: _f((venue_reports.get(name) or {}).get("price_progress_bps"))
         for name in names
@@ -1905,6 +2098,9 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     )
     consumed = _f(phase.get("consumed_fraction"), 1.0)
     if not phase.get("valid") or consumed > MAX_CONSUMED_FRACTION:
+        return None
+    if not current_cash.get("confirmed"):
+        state._ignition_last_reject = "WAIT_CURRENT_CASH_CONVERSION"
         return None
     oi = _oi_intent(state, side, now, frozen)
     oi_verification = _oi_verification(
@@ -1995,6 +2191,13 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "futures_follow_invalidated": False,
         "futures_cash_response_ok": True,
         "last_evidence_ms": latest_evidence_ms,
+        "current_cash_conversion": current_cash,
+        "dual_cash_synchronous_control": bool(
+            current_cash.get("dual_cash_synchronous_control")
+        ),
+        "bounded_wave_ledger": dict(
+            (snapshot or {}).get("bounded_wave_ledger") or {}
+        ),
         "flow_by_venue": flow_by_venue,
         "flow_efficiency": _flow_efficiency_snapshot(histories, side, cash),
         "venue_moves_bps": moves,
@@ -2180,6 +2383,9 @@ def _result_from_episode(state, episode, histories, freshness, now):
     cash_discovery = _cash_discovery(episode)
     episode["leader"] = leader
     side = episode["side"]
+    current_cash = _current_cash_conversion(
+        histories, side, int(now * 1000.0),
+    )
     persistent_snapshot = dict(
         getattr(state, "persistent_metaorder_shadow", {}) or {}
     )
@@ -2277,6 +2483,28 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "futures_follow_invalidated": futures_reversal_confirmed,
         "futures_reversal_buckets": len(futures_reversals),
         "last_evidence_ms": int(episode.get("last_evidence_ms", 0) or 0),
+        "current_cash_conversion": current_cash,
+        "dual_cash_synchronous_control": bool(
+            current_cash.get("dual_cash_synchronous_control")
+        ),
+        "bounded_wave_ledger": {
+            "version": "BOUNDED_WAVE_LEDGER_V1",
+            "causal_wave_id": episode.get("causal_episode_id"),
+            "side": side,
+            "wave_started_at_ms": episode.get("started_receive_ms"),
+            "last_evidence_ms": episode.get("last_evidence_ms"),
+            "evidence_segment_count": int(
+                episode.get("evidence_segment_count", 1) or 1
+            ),
+            "current_segment_started_ms": episode.get(
+                "current_segment_started_ms"
+            ),
+            "evidence_gap_open": bool(episode.get("evidence_gap_open")),
+            "current_cash_conversion": current_cash,
+            "oi_context": "ATTACHED_TO_CAUSAL_EPISODE_NOT_DIRECTION_AUTHORITY",
+            "max_lifetime_ms": EPISODE_MAX_MS,
+            "authority": False,
+        },
         "futures_cash_response_ok": futures_cash_ok,
         "flow_by_venue": {row["venue"]: {
             "signed_imbalance": round(_sign(side) * _f(row.get("imbalance")), 6),
@@ -2388,14 +2616,23 @@ def _result_from_episode(state, episode, histories, freshness, now):
             "cash_synchronous_transition"
         )
     )
+    synchronous_cash_control = bool(
+        current_cash.get("dual_cash_synchronous_control")
+    )
     if (
         leader == "SIMULTANEOUS"
         and proof_type != "FAILED_REVERSION"
         and not synchronous_transition
+        and not synchronous_cash_control
     ):
         return _wait(now, side, "WAIT_CAUSAL_LEADER_UNCERTAIN", "PROBE", payload, freshness)
     if proof_type is None:
         return _wait(now, side, "WAIT_IGNITION_PROOF", "PROBE", payload, freshness)
+    if not current_cash.get("confirmed"):
+        return _wait(
+            now, side, "WAIT_CURRENT_CASH_CONVERSION",
+            "PROBE", payload, freshness,
+        )
     if freshness["coinbase_mode"] == "DEGRADED" and not (
         episode["proposer"] == "binance_spot"
         and proof_venue == "binance_spot"
@@ -2496,6 +2733,27 @@ def evaluate(state, now=None, side=None):
     transition_side = _strict_transition_side(episode)
     if transition_side is not None:
         side = transition_side
+    frozen_episode_side = _strict_frozen_episode_side(episode)
+    current_bias_side = str(
+        getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN"
+    ).upper()
+    current_bias_confidence = _f(
+        getattr(state, "bias_confidence", 0.0)
+    )
+    if transition_side is None and frozen_episode_side is not None:
+        if (
+            current_bias_side in ("LONG", "SHORT")
+            and current_bias_side != frozen_episode_side
+            and current_bias_confidence >= BIAS_MIN_CONF
+        ):
+            state._ignition_episode = None
+            episode = None
+            frozen_episode_side = None
+            state._ignition_last_reject = (
+                "FROZEN_BIAS_INVALIDATED_BY_CURRENT_BIAS"
+            )
+        else:
+            side = frozen_episode_side
 
     if episode is not None:
         live_venues = ignition_signals.engine(state).venues
@@ -2517,6 +2775,7 @@ def evaluate(state, now=None, side=None):
         )
     if (
         transition_side is None
+        and frozen_episode_side is None
         and _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF
     ):
         state._ignition_episode = None
@@ -2528,6 +2787,7 @@ def evaluate(state, now=None, side=None):
     bias_ts = _f(getattr(state, "bias_updated_at", 0.0))
     if (
         transition_side is None
+        and frozen_episode_side is None
         and (bias_ts <= 0.0 or now - bias_ts > BIAS_MAX_AGE)
     ):
         state._ignition_episode = None
@@ -2542,11 +2802,17 @@ def evaluate(state, now=None, side=None):
         # A newly completed receive-time bucket is evidence that existed before
         # this evaluator wake-up. Consume it before applying decay; otherwise a
         # 1 ms scheduler delay can erase a valid 300 ms cash response.
-        if age > EPISODE_MAX_MS or (gap > EVIDENCE_GAP_MS and not rows):
-            reason = "IGNITION_EPISODE_SAFETY_EXPIRED" if age > EPISODE_MAX_MS else "IGNITION_EVIDENCE_DECAYED"
+        if age > EPISODE_MAX_MS:
+            reason = "IGNITION_EPISODE_SAFETY_EXPIRED"
             state._ignition_episode = None
             episode = None
             state._ignition_last_reject = reason
+        elif gap > EVIDENCE_GAP_MS and not rows:
+            episode["evidence_gap_open"] = True
+            episode["evidence_gap_started_ms"] = int(
+                episode.get("last_evidence_ms", 0) or 0
+            )
+            state._ignition_last_reject = "IGNITION_EVIDENCE_DECAYED"
 
     for row in rows:
         token = (
@@ -2563,7 +2829,9 @@ def evaluate(state, now=None, side=None):
         if episode is not None and row.get("venue") in CASH | {"futures"}:
             if str(row.get("side")) != str(episode.get("side")) and _material_flow(row):
                 episode["signals"].append(dict(row))
-                episode["last_evidence_ms"] = int(row.get("receive_time_ms", now_ms))
+                episode["last_opposing_evidence_ms"] = int(
+                    row.get("receive_time_ms", now_ms)
+                )
                 continue
         appended = False
         # A proposer/proof still needs adaptive surprise (``strong``), while
@@ -2574,12 +2842,19 @@ def evaluate(state, now=None, side=None):
         if (
             episode is not None
             and str(row.get("side")) == str(episode.get("side"))
-            and _material_flow(row)
+            and _directional_material_flow(row, episode.get("side"))
             and int(row.get("receive_time_ms", 0))
                 - int(episode.get("started_receive_ms", 0)) <= EPISODE_MAX_MS
         ):
             episode["signals"].append(dict(row))
             episode["last_evidence_ms"] = int(row.get("receive_time_ms", now_ms))
+            if episode.pop("evidence_gap_open", False):
+                episode["evidence_segment_count"] = int(
+                    episode.get("evidence_segment_count", 1) or 1
+                ) + 1
+                episode["current_segment_started_ms"] = int(
+                    row.get("receive_time_ms", now_ms)
+                )
             episode["epochs"][row.get("venue")] = int(row.get("epoch", 0))
             appended = True
         if not row.get("strong"):
@@ -2593,9 +2868,21 @@ def evaluate(state, now=None, side=None):
             episode = _start_episode(state, row, histories)
             continue
         if not appended and str(row.get("side")) == str(episode.get("side")):
-            if int(row.get("receive_time_ms", 0)) - int(episode.get("started_receive_ms", 0)) <= EPISODE_MAX_MS:
+            if (
+                _directional_material_flow(row, episode.get("side"))
+                and int(row.get("receive_time_ms", 0))
+                    - int(episode.get("started_receive_ms", 0))
+                    <= EPISODE_MAX_MS
+            ):
                 episode["signals"].append(dict(row))
                 episode["last_evidence_ms"] = int(row.get("receive_time_ms", now_ms))
+                if episode.pop("evidence_gap_open", False):
+                    episode["evidence_segment_count"] = int(
+                        episode.get("evidence_segment_count", 1) or 1
+                    ) + 1
+                    episode["current_segment_started_ms"] = int(
+                        row.get("receive_time_ms", now_ms)
+                    )
                 episode["epochs"][row.get("venue")] = int(row.get("epoch", 0))
 
     if episode is None:
@@ -2611,11 +2898,16 @@ def evaluate(state, now=None, side=None):
             now, side, reason, episode=research or None, freshness=freshness
         )
     if now_ms - int(episode.get("last_evidence_ms", 0)) > EVIDENCE_GAP_MS:
-        state._ignition_episode = None
         state._ignition_last_reject = "IGNITION_EVIDENCE_DECAYED"
         return _wait(
-            now, side, "IGNITION_EVIDENCE_DECAYED", "INVALID",
-            {"causal_episode_id": episode.get("causal_episode_id")}, freshness,
+            now, side, "IGNITION_EVIDENCE_DECAYED", "PROBE",
+            {
+                "causal_episode_id": episode.get("causal_episode_id"),
+                "bounded_wave_retained": True,
+                "wave_started_at_ms": episode.get("started_receive_ms"),
+                "last_evidence_ms": episode.get("last_evidence_ms"),
+                "max_lifetime_ms": EPISODE_MAX_MS,
+            }, freshness,
         )
     result = _result_from_episode(state, episode, histories, freshness, now)
     if result.get("decision") == "GO":

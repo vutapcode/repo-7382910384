@@ -413,12 +413,15 @@ def _entry_quorum_ok(result, state, now):
     if not result or result.get("decision") != "GO":
         return False
     ignition = result.get("ignition") or {}
+    current_cash = dict(ignition.get("current_cash_conversion") or {})
     return bool(
         ignition.get("state") == "PROVE"
         and ignition.get("proof_type") in (
-            "METAORDER_CONTINUATION", "FAILED_REVERSION"
+            "METAORDER_CONTINUATION", "FAILED_REVERSION",
+            "PERSISTENT_METAORDER",
         )
         and ignition.get("cash_venues")
+        and current_cash.get("confirmed")
         and (
             ignition.get("proposer") != "futures"
             or ignition.get("futures_cash_response_ok")
@@ -533,8 +536,12 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         failed.append("WAIT_CHASE")
     if "ACCEPTANCE_PERSISTENCE" in reason:
         failed.append("WAIT_CAUSAL_PERSISTENCE")
-    if "IGNITION_PROOF" in reason or "EVIDENCE_DECAYED" in reason:
+    if "IGNITION_PROOF" in reason:
         failed.append("WAIT_IGNITION_PROOF")
+    if "EVIDENCE_DECAYED" in reason:
+        failed.append("WAIT_CAUSAL_EVIDENCE_REFRESH")
+    if "CURRENT_CASH_CONVERSION" in reason:
+        failed.append("WAIT_CURRENT_CASH_CONVERSION")
     if "FUTURES_ALERT_CASH_RESPONSE" in reason:
         failed.append("WAIT_CASH_RESPONSE")
     if "CAUSAL_LEADER_UNCERTAIN" in reason:
@@ -590,6 +597,7 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
     priority = (
         "WAIT_STALE_DATA", "WAIT_EXTERNAL_CORROBORATION", "WAIT_CHASE",
         "WAIT_CASH_RESPONSE", "WAIT_LEADER_UNCERTAIN", "WAIT_LATE_IMPULSE",
+        "WAIT_CURRENT_CASH_CONVERSION", "WAIT_CAUSAL_EVIDENCE_REFRESH",
         "WAIT_IGNITION_PROOF", "WAIT_CAUSAL_PERSISTENCE", "WAIT_OI_REFRESH",
         "WAIT_OI_CLOSING_CONTEXT",
         "WAIT_IGNITION_FLOW_EFFICIENCY", "WAIT_IGNITION_FLOW_FADING",
@@ -1832,7 +1840,16 @@ async def _entry_loop():
                     "spot_perp_basis": edge_report.get("spot_perp_basis"),
                     "governor_mode": getattr(s, "governor_mode", None),
                     "miss_taxonomy": recorder_snapshot["output"]["miss_taxonomy"],
+                    "blocking_reason": recorder_snapshot["output"][
+                        "blocking_reason"
+                    ],
+                    "blocking_reasons": recorder_snapshot["output"][
+                        "blocking_reasons"
+                    ],
                     "failed_gates": recorder_snapshot["output"]["failed_gates"],
+                    "diagnostic_reasons": recorder_snapshot["output"][
+                        "diagnostic_reasons"
+                    ],
                     "decision_record": recorder_snapshot,
                 })
                 decision_event_emitted = True

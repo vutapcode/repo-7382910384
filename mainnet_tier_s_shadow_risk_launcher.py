@@ -120,6 +120,7 @@ def _entry_quorum_ok(result, state, now):
     if not allowed:
         return False
     ignition = (result or {}).get("ignition") or {}
+    current_cash = dict(ignition.get("current_cash_conversion") or {})
     state.entry_tier_s_volume_quality = {
         "source": "IGNITION_100MS_SNAPSHOT",
         "venues": dict(ignition.get("flow_by_venue") or {}),
@@ -129,6 +130,7 @@ def _entry_quorum_ok(result, state, now):
     return bool(
         ignition.get("state") == "PROVE"
         and ignition.get("cash_venues")
+        and current_cash.get("confirmed")
         and ignition.get("proof_type") in (
             "METAORDER_CONTINUATION", "FAILED_REVERSION",
             "PERSISTENT_METAORDER",

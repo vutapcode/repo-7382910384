@@ -21,6 +21,13 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
         "proposer": cash[0] if cash else "futures",
         "cash_venues": list(cash), "supporting_venues": list(cash) + ["futures"],
         "futures_follow_ok": True, "futures_cash_response_ok": bool(cash),
+        "current_cash_conversion": {
+            "confirmed": bool(cash),
+            "accepted_cash_venues": list(cash),
+            "dual_cash_synchronous_control": set(cash) == {
+                "binance_spot", "coinbase_spot",
+            },
+        },
         "consumed_fraction": consumed,
         "phase_measurement": {
             "source": "HYBRID_PRECURSOR_AND_EPISODE_CASH_DISPLACEMENT_OVER_ATR_1M",
@@ -77,6 +84,11 @@ NO_LIQUIDATION = {"phase": "QUIET", "burst": False, "decelerating": False}
 
 
 class EntryThesisGateTests(unittest.TestCase):
+    def test_entry_contract_requires_present_tense_cash_conversion(self):
+        candidate = result(consumed=0.20, recent_progress=0.20)
+        candidate["ignition"].pop("current_cash_conversion")
+        self.assertFalse(entry_edge_tier.normal_contract_ok(candidate))
+
     def test_mature_unwind_with_strong_flow_but_no_price_conversion_waits(self):
         audit = entry_thesis_gate.evaluate(
             SimpleNamespace(), result(), PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION

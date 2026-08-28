@@ -104,6 +104,17 @@ class MissTaxonomyTests(unittest.TestCase):
         )
         self.assertEqual(details["diagnostic_reasons"], [])
 
+    def test_current_cash_refresh_has_specific_blocking_reason(self):
+        result = {
+            "decision": "WAIT", "reason": "WAIT_CURRENT_CASH_CONVERSION",
+            "side": "SHORT", "s_votes": {},
+        }
+        details = launcher._miss_taxonomy_details(result, {}, False)
+        self.assertEqual(
+            details["blocking_reason"], "WAIT_CURRENT_CASH_CONVERSION"
+        )
+        self.assertNotIn("FLOW_QUORUM_FAIL", details["blocking_reasons"])
+
     def test_snapshot_oi_freshness_uses_poll_aware_contract(self):
         state = SimpleNamespace(
             open_interest=100.0, thoi_gian_vi_mo_cuoi=83.0,

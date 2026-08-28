@@ -266,6 +266,24 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(venue["state"], "CONTINUING_CONFIRMED")
         self.assertTrue(venue["diagnostics"]["conversion_survived"])
 
+    def test_current_cash_conversion_requires_flow_and_price_same_direction(self):
+        good = evidence_row(9_800, "LONG", 100.01)
+        wrong = evidence_row(9_900, "LONG", 100.02)
+        wrong["price_conversion_bps"] = -0.20
+        report = ignition_core._current_cash_conversion(
+            {"binance_spot": (good, wrong), "coinbase_spot": ()},
+            "LONG", 10_000,
+        )
+        self.assertTrue(report["confirmed"])
+        self.assertEqual(
+            report["venues"]["binance_spot"]["receive_time_ms"], 9_800,
+        )
+        stale = ignition_core._current_cash_conversion(
+            {"binance_spot": (good,), "coinbase_spot": ()},
+            "LONG", 10_500,
+        )
+        self.assertFalse(stale["confirmed"])
+
     def test_bias_wait_reasons_are_diagnostic_only(self):
         abstain = state(now=3.0)
         abstain.bias_state = "ABSTAIN"
@@ -516,6 +534,93 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(result, expected)
         self.assertIsNotNone(s._ignition_episode)
 
+    def test_valid_frozen_bias_episode_survives_temporary_low_current_bias(self):
+        s = state(now=3.6)
+        s.bias_confidence = 0.40
+        s._ignition_episode = {
+            "causal_episode_id": "ign:binance_spot:LONG:3500",
+            "side": "LONG", "started_receive_ms": 3_500,
+            "last_evidence_ms": 3_550, "epochs": {},
+            "bias_snapshot": {"direction": "LONG", "confidence": 0.80},
+        }
+        expected = {"decision": "WAIT", "reason": "TEST", "side": "LONG"}
+        empty = {
+            "binance_spot": (), "coinbase_spot": (), "futures": (),
+        }
+        with patch.object(
+            ignition_signals, "snapshot", return_value=empty,
+        ), patch.object(
+            ignition_core, "_new_signals", return_value=[],
+        ), patch.object(
+            ignition_core, "_result_from_episode", return_value=expected,
+        ):
+            result = ignition_core.evaluate(s, now=3.6)
+        self.assertEqual(result, expected)
+        self.assertEqual(
+            s._ignition_episode["causal_episode_id"],
+            "ign:binance_spot:LONG:3500",
+        )
+
+    def test_evidence_lull_keeps_wave_id_but_starts_new_proof_segment(self):
+        s = state(now=3.5)
+        first = evidence_row(3_000, "LONG", 100.01)
+        s._ignition_episode = {
+            "causal_episode_id": "ign:binance_spot:LONG:3000",
+            "side": "LONG", "proposer": "binance_spot",
+            "started_receive_ms": 3_000, "last_evidence_ms": 3_000,
+            "current_segment_started_ms": 3_000,
+            "evidence_segment_count": 1,
+            "bias_snapshot": {"direction": "LONG", "confidence": 0.80},
+            "signals": [first], "epochs": {},
+        }
+        histories = {
+            "binance_spot": (first,), "coinbase_spot": (), "futures": (),
+        }
+        with patch.object(
+            ignition_signals, "snapshot", return_value=histories,
+        ), patch.object(ignition_core, "_new_signals", return_value=[]):
+            lull = ignition_core.evaluate(s, now=3.5)
+        self.assertEqual(lull["reason"], "IGNITION_EVIDENCE_DECAYED")
+        self.assertTrue(lull["ignition"]["bounded_wave_retained"])
+        self.assertEqual(
+            s._ignition_episode["causal_episode_id"],
+            "ign:binance_spot:LONG:3000",
+        )
+
+        resumed = evidence_row(3_600, "LONG", 100.02)
+        histories = dict(histories, binance_spot=(first, resumed))
+        expected = {"decision": "WAIT", "reason": "TEST", "side": "LONG"}
+        with patch.object(
+            ignition_signals, "snapshot", return_value=histories,
+        ), patch.object(
+            ignition_core, "_new_signals", return_value=[resumed],
+        ), patch.object(
+            ignition_core, "_result_from_episode", return_value=expected,
+        ):
+            result = ignition_core.evaluate(s, now=3.601)
+        self.assertEqual(result, expected)
+        self.assertEqual(s._ignition_episode["current_segment_started_ms"], 3_600)
+        self.assertEqual(s._ignition_episode["evidence_segment_count"], 2)
+
+    def test_new_segment_cannot_reuse_pre_lull_metaorder_proof(self):
+        old_a = evidence_row(3_000, "LONG", 100.01)
+        old_b = evidence_row(3_100, "LONG", 100.02)
+        new_a = evidence_row(3_600, "LONG", 100.03)
+        episode = {
+            "side": "LONG", "started_receive_ms": 3_000,
+            "current_segment_started_ms": 3_600,
+            "signals": [old_a, old_b, new_a],
+        }
+        histories = {
+            "binance_spot": (old_a, old_b, new_a),
+            "coinbase_spot": (), "futures": (),
+        }
+        self.assertIsNone(ignition_core._proof(episode, histories)[0])
+        new_b = evidence_row(3_700, "LONG", 100.04)
+        histories["binance_spot"] += (new_b,)
+        proof = ignition_core._proof(episode, histories)
+        self.assertEqual(proof[0], "METAORDER_CONTINUATION")
+
     def test_incomplete_transition_does_not_bypass_current_bias_abstain(self):
         s = state(now=3.6)
         s.bias_state = "ABSTAIN"
@@ -655,6 +760,107 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(result["decision"], "GO")
         self.assertTrue(result["ignition"]["transition_confirmed"])
         self.assertEqual(result["ignition"]["leader"], "SIMULTANEOUS")
+
+    def test_aligned_dual_cash_control_resolves_leader_without_reversal(self):
+        s = state(now=10.0)
+        first = evidence_row(9_600, "LONG", 100.01)
+        second = evidence_row(9_700, "LONG", 100.02)
+        second["venue"] = "coinbase_spot"
+        futures = evidence_row(9_800, "LONG", 100.02)
+        futures.update({"venue": "futures", "total_qty": 0.20})
+        episode = {
+            "causal_episode_id": "ign:binance_spot:LONG:9500",
+            "side": "LONG", "proposer": "binance_spot",
+            "started_receive_ms": 9_600, "last_evidence_ms": 9_800,
+            "bias_snapshot": {
+                "direction": "LONG", "confidence": 0.80,
+                "direction_context": {"phase": "ESTABLISHED_TREND"},
+            },
+            "signals": [first, second, futures],
+            "epochs": {
+                "binance_spot": 1, "coinbase_spot": 1, "futures": 1,
+            },
+            "precursor_measurement": {"valid": False},
+            "oi_before_snapshot": {},
+        }
+        histories = {
+            "binance_spot": (first,),
+            "coinbase_spot": (second,), "futures": (futures,),
+        }
+        freshness = {
+            "coinbase_mode": "FRESH", "binance_spot_ready": True,
+            "futures_ready": True,
+        }
+        phase = {
+            "valid": True, "source": "TEST", "phase_scale_bps": 10.0,
+            "cash_displacement_bps": 2.0,
+            "episode_cash_displacement_bps": 2.0,
+            "precursor_cash_displacement_bps": 0.0,
+            "consumed_fraction": 0.20,
+        }
+        with patch.object(
+            ignition_core, "_proof",
+            return_value=("METAORDER_CONTINUATION", first, "binance_spot"),
+        ), patch.object(
+            ignition_core, "_leader", return_value=("SIMULTANEOUS", -5.0),
+        ), patch.object(
+            ignition_core, "_phase_measurement", return_value=phase,
+        ), patch.object(
+            ignition_core, "_oi_verification",
+            return_value={"status": "UNCHANGED_UNKNOWN", "intent": "NEUTRAL"},
+        ):
+            result = ignition_core._result_from_episode(
+                s, episode, histories, freshness, 10.0,
+            )
+        self.assertEqual(result["decision"], "GO")
+        self.assertTrue(
+            result["ignition"]["dual_cash_synchronous_control"]
+        )
+        self.assertFalse(result["ignition"]["transition_confirmed"])
+
+    def test_proved_episode_waits_when_current_cash_conversion_has_expired(self):
+        s = state(now=10.0)
+        first = evidence_row(9_000, "LONG", 100.01)
+        futures = evidence_row(9_100, "LONG", 100.02)
+        futures.update({"venue": "futures", "total_qty": 0.20})
+        episode = {
+            "causal_episode_id": "ign:binance_spot:LONG:9000",
+            "side": "LONG", "proposer": "binance_spot",
+            "started_receive_ms": 9_000, "last_evidence_ms": 9_100,
+            "bias_snapshot": {
+                "direction": "LONG", "confidence": 0.80,
+                "direction_context": {"phase": "ESTABLISHED_TREND"},
+            },
+            "signals": [first, futures],
+            "epochs": {"binance_spot": 1, "futures": 1},
+            "precursor_measurement": {"valid": False},
+            "oi_before_snapshot": {},
+        }
+        histories = {
+            "binance_spot": (first,), "coinbase_spot": (),
+            "futures": (futures,),
+        }
+        freshness = {
+            "coinbase_mode": "FRESH", "binance_spot_ready": True,
+            "futures_ready": True,
+        }
+        phase = {"valid": True, "consumed_fraction": 0.20}
+        with patch.object(
+            ignition_core, "_proof",
+            return_value=("METAORDER_CONTINUATION", first, "binance_spot"),
+        ), patch.object(
+            ignition_core, "_leader", return_value=("binance_spot", 200.0),
+        ), patch.object(
+            ignition_core, "_phase_measurement", return_value=phase,
+        ), patch.object(
+            ignition_core, "_oi_verification",
+            return_value={"status": "UNCHANGED_UNKNOWN", "intent": "NEUTRAL"},
+        ):
+            result = ignition_core._result_from_episode(
+                s, episode, histories, freshness, 10.0,
+            )
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertEqual(result["reason"], "WAIT_CURRENT_CASH_CONVERSION")
 
     def test_late_bias_flip_cannot_reuse_expired_pending_episode(self):
         s = state(now=3.2)
@@ -987,6 +1193,18 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertTrue(lull["wave_bridge_active"])
         self.assertEqual(first["candidate_id"], resumed["candidate_id"])
         self.assertEqual(resumed["wave_started_at_ms"], 1_000)
+        self.assertEqual(
+            first["bounded_wave_ledger"]["causal_wave_id"],
+            lull["bounded_wave_ledger"]["causal_wave_id"],
+        )
+        self.assertTrue(
+            lull["bounded_wave_ledger"]["primary_cash"][
+                "carried_across_lull"
+            ]
+        )
+        self.assertTrue(
+            lull["bounded_wave_ledger"]["primary_cash"]["fresh"]
+        )
 
     def test_continuous_wave_expires_without_becoming_a_second_episode(self):
         first = ignition_core._persistent_metaorder_snapshot(
@@ -1551,6 +1769,10 @@ class IgnitionCoreTests(unittest.TestCase):
                 "state": "PROVE", "proof_type": "METAORDER_CONTINUATION",
                 "cash_venues": ["binance_spot"], "proposer": "binance_spot",
                 "futures_follow_ok": True,
+                "current_cash_conversion": {
+                    "confirmed": True,
+                    "accepted_cash_venues": ["binance_spot"],
+                },
                 "consumed_fraction": 0.20, "residual_edge_proxy_bps": 1.0,
                 "venue_moves_bps": {"binance_spot": 0.5, "futures": 0.2},
                 "flow_efficiency": {"venues": {
@@ -1577,6 +1799,10 @@ class IgnitionCoreTests(unittest.TestCase):
             "state": "PROVE", "proof_type": "METAORDER_CONTINUATION",
             "cash_venues": ["binance_spot"], "proposer": "binance_spot",
             "futures_follow_ok": True, "consumed_fraction": 0.20,
+            "current_cash_conversion": {
+                "confirmed": True,
+                "accepted_cash_venues": ["binance_spot"],
+            },
             "residual_edge_proxy_bps": 0.0,
             "venue_moves_bps": {"binance_spot": 0.5, "futures": 0.4},
             "flow_by_venue": {"binance_spot": {"signed_imbalance": 0.6}},
