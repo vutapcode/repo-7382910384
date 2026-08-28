@@ -183,6 +183,53 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertEqual(report["soft_wait_reasons"], [])
 
+    def test_ignition_metaorder_unknown_waits_instead_of_immediate_taker(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "UNKNOWN", "coinbase_spot": "UNKNOWN",
+            },
+        )
+        candidate["entry_mode"] = "IGNITION"
+        candidate["ignition"]["proof_type"] = "METAORDER_CONTINUATION"
+        allowed, report = entry_edge_tier.authorize(
+            candidate,
+            SimpleNamespace(
+                entry_economics_v3_replay_approved=False,
+                wstrade_live_armed=False,
+            ),
+        )
+        self.assertFalse(allowed)
+        self.assertEqual(report["execution_style"], "TAKER")
+        self.assertIn(
+            "WAIT_IGNITION_FLOW_EFFICIENCY",
+            report["soft_wait_reasons"],
+        )
+        self.assertNotIn(
+            "WAIT_IGNITION_FLOW_EFFICIENCY", report["hard_vetoes"]
+        )
+
+    def test_failed_reversion_maker_keeps_its_separate_proof_contract(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "UNKNOWN", "coinbase_spot": "UNKNOWN",
+            },
+        )
+        candidate["entry_mode"] = "IGNITION"
+        candidate["phase"] = "ACCEPTANCE"
+        candidate["ignition"]["proof_type"] = "FAILED_REVERSION"
+        allowed, report = entry_edge_tier.authorize(
+            candidate,
+            SimpleNamespace(
+                entry_economics_v3_replay_approved=False,
+                wstrade_live_armed=False,
+            ),
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(report["execution_style"], "MAKER")
+        self.assertEqual(report["soft_wait_reasons"], [])
+
     def test_confirmed_fast_transition_bypasses_only_bias_alignment(self):
         candidate = result(
             intent="POSITION_BUILD", consumed=0.20,

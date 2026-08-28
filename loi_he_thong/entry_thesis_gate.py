@@ -6,7 +6,7 @@ unwind tail cannot look like fresh whale commitment merely because sell/buy
 market orders are large.
 """
 
-VERSION = "ENTRY_THESIS_GATE_V5_FAST_TRANSITION"
+VERSION = "ENTRY_THESIS_GATE_V6_TAKER_FLOW_TIMING"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -277,6 +277,11 @@ def evaluate(state, result, impact, basis, liquidation):
     persistent = str((result or {}).get("entry_mode") or "").upper() == (
         "PERSISTENT_METAORDER"
     )
+    proof_type = str(ignition.get("proof_type") or "").upper()
+    immediate_taker_metaorder = bool(
+        str((result or {}).get("phase") or "").upper() == "RELEASE"
+        and proof_type in {"METAORDER_CONTINUATION", "PERSISTENT_METAORDER"}
+    )
 
     # Preserve good cash-led unwind opportunities. Forced closure becomes a
     # veto only when at least one independent symptom says the wave is ending:
@@ -307,12 +312,24 @@ def evaluate(state, result, impact, basis, liquidation):
     # taker entry is still timely now.  DECAYING/UNKNOWN may recover on a later
     # executed-flow window, so keep the episode retryable instead of turning
     # either state into a hard veto.
-    if persistent and q3["status"] in ("DECAYING", "UNKNOWN"):
-        soft_waits.append("WAIT_PERSISTENT_FLOW_EFFICIENCY")
-    elif persistent and q3["status"] == "FADING":
-        soft_waits.append("WAIT_PERSISTENT_FLOW_FADING")
-    elif persistent and q3["status"] == "REACCELERATION_UNCONFIRMED":
-        soft_waits.append("WAIT_PERSISTENT_REACCELERATION_CONFIRMATION")
+    if immediate_taker_metaorder and q3["status"] in ("DECAYING", "UNKNOWN"):
+        soft_waits.append(
+            "WAIT_PERSISTENT_FLOW_EFFICIENCY"
+            if persistent else "WAIT_IGNITION_FLOW_EFFICIENCY"
+        )
+    elif immediate_taker_metaorder and q3["status"] == "FADING":
+        soft_waits.append(
+            "WAIT_PERSISTENT_FLOW_FADING"
+            if persistent else "WAIT_IGNITION_FLOW_FADING"
+        )
+    elif (
+        immediate_taker_metaorder
+        and q3["status"] == "REACCELERATION_UNCONFIRMED"
+    ):
+        soft_waits.append(
+            "WAIT_PERSISTENT_REACCELERATION_CONFIRMATION"
+            if persistent else "WAIT_IGNITION_REACCELERATION_CONFIRMATION"
+        )
     return {
         "version": VERSION,
         "decision": "WAIT" if blockers or soft_waits else "PASS",
