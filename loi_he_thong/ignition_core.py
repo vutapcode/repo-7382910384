@@ -802,6 +802,17 @@ def _transition_snapshot(pending, histories, now_ms):
             current_old_flow.get("venues") or {}
         ).items()
     }
+    current_new_flow = _flow_efficiency_snapshot(histories, side, CASH)
+    new_flow_summary = flow_efficiency_state(
+        current_new_flow, (pending or {}).get("proposer"), CASH,
+    )
+    current_cash = _current_cash_conversion(histories, side, now_ms)
+    futures_alerts = [
+        row for row in histories.get("futures", ())
+        if started_ms <= int(row.get("receive_time_ms", 0) or 0) <= now_ms
+        and str(row.get("side") or "").upper() == side
+        and _directional_material_flow(row, side)
+    ]
 
     for venue in sorted(CASH):
         rows = [
@@ -945,9 +956,89 @@ def _transition_snapshot(pending, histories, now_ms):
         status = "OPPOSING_IMPULSE"
     else:
         status = "TRANSITION_WATCH"
+    new_flow_state = str(
+        new_flow_summary.get("state") or "UNKNOWN"
+    ).upper()
+    if hard_contradiction:
+        control_phase = "OLD_SIDE_RECLAIMED"
+    elif confirmed and new_flow_state == "CONTINUING_CONFIRMED":
+        control_phase = "NEW_SIDE_CONTINUING"
+    elif (confirmed or dual_cash) and new_flow_state in {
+        "FADING", "DECAYING", "REACCELERATION_UNCONFIRMED",
+    }:
+        control_phase = "NEW_SIDE_FADING"
+    elif confirmed or dual_cash:
+        control_phase = "NEW_SIDE_ACCEPTED"
+    elif accepted_venues:
+        control_phase = "CONTROL_TRANSFER"
+    elif old_side_failure_confirmed:
+        control_phase = "OLD_SIDE_FAILED"
+    elif old_impulse_venues:
+        control_phase = "OLD_SIDE_DEGRADING"
+    else:
+        control_phase = "STABLE_OLD_SIDE"
+    old_failure_valid_until_ms = started_ms + EPISODE_MAX_MS
+    latest_futures_alert_ms = max((
+        int(row.get("receive_time_ms", 0) or 0)
+        for row in futures_alerts
+    ), default=0)
+    control_transfer_memory_valid = bool(
+        old_side_failure_confirmed
+        and started_ms <= int(now_ms) <= old_failure_valid_until_ms
+    )
+    proof_nodes = {
+        "old_side_failure": {
+            "proved": old_side_failure_confirmed,
+            "side": background,
+            "venues": old_failure_venues,
+            "observed_at_ms": started_ms if old_side_failure_confirmed else None,
+            "valid_until_ms": (
+                old_failure_valid_until_ms
+                if old_side_failure_confirmed else None
+            ),
+            "fresh": control_transfer_memory_valid,
+            "authority": "CONTROL_TRANSFER_CONTEXT_ONLY",
+        },
+        "derivative_pressure": {
+            "observed": bool(futures_alerts),
+            "side": side,
+            "latest_at_ms": latest_futures_alert_ms or None,
+            "valid_until_ms": (
+                latest_futures_alert_ms + TRANSITION_EVIDENCE_GAP_MS
+                if latest_futures_alert_ms else None
+            ),
+            "fresh": bool(
+                latest_futures_alert_ms
+                and 0 <= now_ms - latest_futures_alert_ms
+                    <= TRANSITION_EVIDENCE_GAP_MS
+            ),
+            "authority": False,
+        },
+        "new_side_cash_acceptance": {
+            "accepted_venues": sorted(accepted_venues),
+            "first_acceptance_span_ms": acceptance_span_ms,
+            "dual_cash": dual_cash,
+            "synchronous": synchronous,
+            "current_cash_venues": current_cash.get(
+                "accepted_cash_venues", []
+            ),
+            "current_cash_confirmed": bool(current_cash.get("confirmed")),
+            "current_cash_dual": bool(
+                current_cash.get("dual_cash_synchronous_control")
+            ),
+            "max_age_ms": FOLLOW_MAX_MS,
+            "authority": "ENTRY_TIMING_ONLY",
+        },
+        "new_side_flow": {
+            "state": new_flow_state,
+            "summary": new_flow_summary,
+            "authority": "ENTRY_COMPOSITE_ONLY",
+        },
+    }
     return {
-        "version": "FAST_TRANSITION_V1",
+        "version": "FAST_TRANSITION_V2_PROOF_NODE_LIFETIMES",
         "status": status, "confirmed": confirmed,
+        "control_phase": control_phase,
         "side": side, "background_side": background,
         "failed_continuation": failed_continuation,
         "old_failure_state_observed": old_side_failure_confirmed,
@@ -961,6 +1052,12 @@ def _transition_snapshot(pending, histories, now_ms):
         "cash_synchronous_transition": synchronous,
         "opposing_return_venues": sorted(opposing_return_venues),
         "hard_contradiction": hard_contradiction,
+        "control_transfer_memory_valid": control_transfer_memory_valid,
+        "old_failure_valid_until_ms": (
+            old_failure_valid_until_ms
+            if old_side_failure_confirmed else None
+        ),
+        "proof_nodes": proof_nodes,
         "venues": reports,
         "authority": "BIAS_ALIGNMENT_BYPASS_ONLY" if confirmed else False,
         "policy": (
@@ -1122,9 +1219,12 @@ def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
         state._ignition_last_reject = "PENDING_REVERSAL_TRANSITION_FAILED"
         state._ignition_last_reject_payload = dict(pending)
         return None
+    control_memory = bool(
+        transition.get("control_transfer_memory_valid")
+    )
     if (
         epoch_changed or clock_invalid or age > EPISODE_MAX_MS
-        or gap > TRANSITION_EVIDENCE_GAP_MS
+        or (gap > TRANSITION_EVIDENCE_GAP_MS and not control_memory)
     ):
         reason = (
             "PENDING_REVERSAL_EPOCH_RESET" if epoch_changed else
@@ -1141,6 +1241,20 @@ def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
             "authority": False,
         }
         return None
+    # Raw opposite-side pressure is short-lived, but a proved failure of the
+    # old cash side remains causal context until the existing 5 s episode
+    # safety lifetime ends. Do not promote from stale flow: wait for a new
+    # same-side cash event, which resets ``last_evidence_ms`` and must still
+    # pass current-cash, flow-survival, maturity and economics downstream.
+    if gap > TRANSITION_EVIDENCE_GAP_MS:
+        pending["status"] = "CONTROL_TRANSFER_WAITING_FRESH_CASH"
+        pending["new_side_evidence_stale"] = True
+        state._ignition_last_reject = (
+            "PENDING_REVERSAL_CONTROL_TRANSFER_WAITING_FRESH_CASH"
+        )
+        state._ignition_last_reject_payload = dict(pending)
+        return None
+    pending["new_side_evidence_stale"] = False
     if not allow_promotion:
         state._ignition_last_reject_payload = dict(pending)
         return None

@@ -495,8 +495,139 @@ class IgnitionCoreTests(unittest.TestCase):
                 "new_side_cash_control_confirmed"
             ]
         )
+        transition = promoted["transition_authority"]
+        self.assertEqual(
+            transition["version"],
+            "FAST_TRANSITION_V2_PROOF_NODE_LIFETIMES",
+        )
+        self.assertTrue(transition["control_transfer_memory_valid"])
+        self.assertTrue(
+            transition["proof_nodes"]["old_side_failure"]["proved"]
+        )
+        self.assertTrue(
+            transition["proof_nodes"]["derivative_pressure"]["observed"]
+        )
+        self.assertIn(
+            transition["control_phase"],
+            {"NEW_SIDE_ACCEPTED", "NEW_SIDE_CONTINUING", "NEW_SIDE_FADING"},
+        )
         self.assertEqual(promoted["bias_snapshot"]["direction"], "SHORT")
         self.assertEqual(promoted["side"], "LONG")
+
+    def test_proved_old_side_failure_survives_new_side_evidence_lull(self):
+        s = state(now=2.5)
+        pending = {
+            "episode_id": "ign:futures:LONG:1000",
+            "episode_hash": "immutable-hash",
+            "causal_episode_id": "ign:futures:LONG:1000",
+            "side": "LONG",
+            "started_receive_ms": 1_000,
+            "last_evidence_ms": 1_200,
+            "epochs": {},
+            "executed_flow_evidence": [],
+        }
+        s._ignition_pending_reversal_episode = pending
+        transition = {
+            "status": "FAILED_CONTINUATION",
+            "confirmed": False,
+            "hard_contradiction": False,
+            "old_side_failure_confirmed": True,
+            "control_transfer_memory_valid": True,
+        }
+        with patch.object(
+            ignition_core, "_transition_snapshot", return_value=transition,
+        ), patch.object(
+            ignition_core, "_current_bias_confirmation", return_value=None,
+        ):
+            result = ignition_core._resolve_pending_reversal(
+                s, {}, 2_500, allow_promotion=True,
+            )
+
+        self.assertIsNone(result)
+        self.assertIs(
+            s._ignition_pending_reversal_episode, pending
+        )
+        self.assertEqual(
+            pending["status"], "CONTROL_TRANSFER_WAITING_FRESH_CASH"
+        )
+        self.assertEqual(
+            s._ignition_last_reject,
+            "PENDING_REVERSAL_CONTROL_TRANSFER_WAITING_FRESH_CASH",
+        )
+
+    def test_unproved_transition_still_expires_on_evidence_gap(self):
+        s = state(now=2.5)
+        s._ignition_pending_reversal_episode = {
+            "episode_id": "ign:futures:LONG:1000",
+            "episode_hash": "immutable-hash",
+            "causal_episode_id": "ign:futures:LONG:1000",
+            "side": "LONG",
+            "started_receive_ms": 1_000,
+            "last_evidence_ms": 1_200,
+            "epochs": {},
+            "executed_flow_evidence": [],
+        }
+        transition = {
+            "status": "TRANSITION_WATCH",
+            "confirmed": False,
+            "hard_contradiction": False,
+            "old_side_failure_confirmed": False,
+            "control_transfer_memory_valid": False,
+        }
+        with patch.object(
+            ignition_core, "_transition_snapshot", return_value=transition,
+        ):
+            result = ignition_core._resolve_pending_reversal(
+                s, {}, 2_500, allow_promotion=True,
+            )
+
+        self.assertIsNone(result)
+        self.assertIsNone(s._ignition_pending_reversal_episode)
+        self.assertEqual(
+            s._ignition_last_reject, "PENDING_REVERSAL_EVIDENCE_GAP"
+        )
+
+    def test_fresh_cash_resumes_same_control_transfer_episode(self):
+        s = state(now=2.7)
+        pending = {
+            "episode_id": "ign:futures:LONG:1000",
+            "episode_hash": "immutable-hash",
+            "causal_episode_id": "ign:futures:LONG:1000",
+            "side": "LONG",
+            "started_receive_ms": 1_000,
+            "last_evidence_ms": 2_600,
+            "epochs": {},
+            "executed_flow_evidence": [],
+            "pre_impulse_bias_snapshot": {"direction": "SHORT"},
+            "bias_snapshot": {"direction": "SHORT"},
+        }
+        s._ignition_pending_reversal_episode = pending
+        transition = {
+            "status": "REVERSAL_CONFIRMED",
+            "confirmed": True,
+            "side": "LONG",
+            "hard_contradiction": False,
+            "old_side_failure_confirmed": True,
+            "new_side_cash_control_confirmed": True,
+            "cash_synchronous_transition": True,
+            "accepted_cash_venues": ["binance_spot", "coinbase_spot"],
+            "control_transfer_memory_valid": True,
+        }
+        with patch.object(
+            ignition_core, "_transition_snapshot", return_value=transition,
+        ), patch.object(
+            ignition_core, "_current_bias_confirmation", return_value=None,
+        ), patch.object(
+            ignition_core, "_flow_efficiency_snapshot", return_value={},
+        ):
+            promoted = ignition_core._resolve_pending_reversal(
+                s, {}, 2_700, allow_promotion=True,
+            )
+
+        self.assertIs(promoted, pending)
+        self.assertEqual(promoted["episode_hash"], "immutable-hash")
+        self.assertTrue(promoted["transition_confirmed"])
+        self.assertIs(s._ignition_episode, pending)
 
     def test_transition_span_uses_first_qualified_acceptance_not_raw_flow(self):
         pending = {

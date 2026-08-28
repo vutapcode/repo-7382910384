@@ -54,6 +54,12 @@
      `CausalWaveSnapshot` representation. This does not merge their proof
      policies or extend their horizons; it prevents downstream modules from
      assigning different meanings to the same conversion/freshness evidence.
+   - Fast Transition uses a proof graph, not a weighted score. A proved old-side
+     cash failure may survive a brief new-side evidence lull inside the existing
+     five-second episode lifetime; Futures pressure and current cash conversion
+     keep their shorter lifetimes. Remembered failure cannot authorize Entry:
+     a fresh same-side cash event must return and all flow, maturity and
+     economics gates still apply.
 7. Execution and active position
    - Every reserved GO is measured again immediately before submit using the
      shared Ignition classifier. Journal telemetry records GO-to-submit delay,
