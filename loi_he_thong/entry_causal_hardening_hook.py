@@ -6,6 +6,8 @@ be imported as strategy or execution authority.
 """
 import time
 
+RETIRED_NON_AUTHORITY = True
+
 ATR_MAX_AGE_SECONDS = 120.0
 BIAS_MAX_AGE_SECONDS = 3.0
 BBO_MAX_AGE_SECONDS = 1.0

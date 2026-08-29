@@ -114,6 +114,18 @@ class StrategyAuthorityContractTests(unittest.TestCase):
         source = self.text("loi_he_thong/entry_causal_hardening_hook.py")
         self.assertIn("RETIRED / NON_AUTHORITY", source[:500])
 
+    def test_inactive_entry_hooks_are_retired_and_not_installed(self):
+        canonical = self.text("mainnet_tier_s_lean_launcher.py")
+        for relative in (
+            "loi_he_thong/entry_causal_hardening_hook.py",
+            "loi_he_thong/entry_exchange_independence_hook.py",
+            "loi_he_thong/entry_regime_threshold_hook.py",
+        ):
+            source = self.text(relative)
+            self.assertIn("RETIRED_NON_AUTHORITY", source[:500])
+            self.assertIn("RETIRED_NON_AUTHORITY = True", source[:500])
+            self.assertNotIn(Path(relative).stem, canonical)
+
     def test_persistent_lane_documentation_matches_shadow_bootstrap_behavior(self):
         source = self.text("STRATEGY_AUTHORITY.md")
         self.assertIn("shadow/demo bootstrap", source)

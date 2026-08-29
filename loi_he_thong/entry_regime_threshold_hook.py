@@ -1,6 +1,11 @@
-"""Install bounded regime adaptation onto Entry Council price threshold."""
+"""RETIRED_NON_AUTHORITY hook for the retired Entry Council threshold.
+
+The canonical launcher does not install this module. Active regime context is
+owned by Ignition/Entry Economics and cannot be monkey-patched here.
+"""
 from loi_he_thong import microstructure_regime
 
+RETIRED_NON_AUTHORITY = True
 VERSION = "ENTRY_REGIME_THRESHOLD_HOOK_V2_GENTLE_EXPANSION"
 
 def install(entry_council_module):

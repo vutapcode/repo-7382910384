@@ -1,6 +1,11 @@
-"""Reduce correlated Binance double-counting while preserving availability with evidence-strength fallbacks."""
+"""RETIRED_NON_AUTHORITY compatibility research for old Entry Council.
+
+The canonical launcher does not install this hook. Ignition Core owns current
+cash independence and degraded-Coinbase semantics directly.
+"""
 from __future__ import annotations
 
+RETIRED_NON_AUTHORITY = True
 VERSION = "ENTRY_EXCHANGE_INDEPENDENCE_V6_BALANCED_EXTERNAL_CORROBORATION"
 
 _BINANCE_PAIR = {"spot", "futures"}
