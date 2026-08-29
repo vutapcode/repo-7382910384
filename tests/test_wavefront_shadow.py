@@ -386,12 +386,18 @@ class OfflineLiquidityTests(unittest.TestCase):
             "payload": {"partial": True, "U": 3, "u": 3, "pu": 2,
                         "b": [["99", "100"]], "a": [["100", "90"]]},
         })
+        analyzer.observe({
+            "stream": "depth_diff", "receive_time_ms": 2_300,
+            "payload": {"partial": True, "U": 4, "u": 4, "pu": 3,
+                        "b": [["99", "100"]], "a": [["100", "95"]]},
+        })
         analyzer.observe({"stream": "mark_price", "receive_time_ms": 4_200,
                           "payload": {}})
         response = rows[-1][1]
         self.assertEqual(response["correlated_depletion_qty"], 10.0)
         self.assertEqual(response["refill_ratio"]["250"], 0.0)
         self.assertEqual(response["refill_ratio"]["1000"], 0.0)
+        self.assertEqual(response["refill_ratio"]["3000"], 0.5)
 
 
 class WavefrontReplayTests(unittest.TestCase):

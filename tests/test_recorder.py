@@ -137,6 +137,73 @@ class CashRecorderTests(unittest.TestCase):
         self.assertIn("elif message_type == 'ticker'", text)
         self.assertIn("'coinbase_spot_ticker'", text)
 
+    def test_coinbase_trade_and_ticker_coexist_with_valid_wal_timestamps(self):
+        published = []
+        sent = []
+
+        class Store:
+            @staticmethod
+            def publish(record):
+                published.append(record)
+                return True
+
+        class FakeWebSocket:
+            def __init__(self):
+                self.messages = [
+                    {
+                        'type': 'match', 'trade_id': 41, 'side': 'sell',
+                        'price': '100', 'size': '0.2',
+                        'time': '1970-01-01T00:00:01.500Z',
+                    },
+                    {
+                        'type': 'ticker', 'sequence': 42,
+                        'product_id': 'BTC-USD', 'price': '100.5',
+                        'best_bid': '100.4', 'best_ask': '100.6',
+                        'last_size': '0.1',
+                        'time': '1970-01-01T00:00:01.600Z',
+                    },
+                ]
+
+            async def send(self, payload):
+                sent.append(orjson.loads(payload))
+
+            async def recv(self):
+                if self.messages:
+                    return orjson.dumps(self.messages.pop(0))
+                raise asyncio.CancelledError
+
+        class Connection:
+            def __init__(self, websocket):
+                self.websocket = websocket
+
+            async def __aenter__(self):
+                return self.websocket
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+        config = replace(RecorderConfig(), cash_ticker_interval=0.0)
+        recorder = BinanceRecorder(config, Store(), HealthState(config))
+        connection = Connection(FakeWebSocket())
+        with mock.patch(
+            'recorder.collector.websockets.connect', return_value=connection
+        ), mock.patch.object(recorder, 'now_ms', return_value=2_000):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(recorder.coinbase_spot_loop())
+
+        self.assertEqual(sent[0]['channels'], ['matches', 'ticker'])
+        by_stream = {record['stream']: record for record in published}
+        self.assertIn('coinbase_spot_trade_100ms', by_stream)
+        self.assertIn('coinbase_spot_ticker', by_stream)
+        for record in by_stream.values():
+            self.assertGreater(record['event_time_ms'], 0)
+            self.assertGreaterEqual(
+                record['receive_time_ms'], record['event_time_ms']
+            )
+        self.assertEqual(
+            by_stream['coinbase_spot_ticker']['payload']['bid'], '100.4'
+        )
+
     def test_oi_polling_is_independent_from_bot_strategy_state(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'bot_runtime.json'
