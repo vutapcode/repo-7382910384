@@ -5,6 +5,7 @@ import os
 VERSION = "VERIFIED_COST_MODEL_V2_NO_POST_FILL_DOUBLE_COUNT"
 DEFAULT_FALLBACK_FEE_BPS_PER_SIDE = 9.0
 MAX_SANE_FEE_BPS_PER_SIDE = 20.0
+FROZEN_COST_PLAN_VERSION = "FROZEN_COST_PLAN_V1"
 
 
 def _f(value, default=0.0):
@@ -12,6 +13,14 @@ def _f(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def fallback_fee_bps_per_side():
+    """Return the one canonical fallback used when account fees are unknown."""
+    return max(0.0, _f(
+        os.getenv("SMC_SHADOW_FEE_BPS_PER_SIDE"),
+        DEFAULT_FALLBACK_FEE_BPS_PER_SIDE,
+    ))
 
 
 async def refresh_account_commission(api, state, symbol="BTCUSDT",
@@ -88,10 +97,7 @@ def estimate(result, state):
     phase = str((result or {}).get("phase") or "").upper()
     execution_style = "TAKER" if phase == "RELEASE" else "MAKER"
     verified = bool(getattr(state, "mainnet_commission_verified", False))
-    fallback = max(0.0, _f(
-        os.getenv("SMC_SHADOW_FEE_BPS_PER_SIDE"),
-        DEFAULT_FALLBACK_FEE_BPS_PER_SIDE,
-    ))
+    fallback = fallback_fee_bps_per_side()
     maker = _f(getattr(state, "mainnet_maker_fee_bps", fallback), fallback)
     taker = _f(getattr(state, "mainnet_taker_fee_bps", fallback), fallback)
     if not verified or maker < 0.0 or taker <= 0.0:
@@ -248,7 +254,7 @@ def shadow_execution_plan(result, state, execution_style):
         + float(modeled["exit_slippage_bps"])
     )
     return {
-        "version": "SHADOW_VERIFIED_COST_PLAN_V1",
+        "version": FROZEN_COST_PLAN_VERSION,
         "execution_style": "MAKER" if is_maker else "TAKER",
         "fill_style": style or "MARKET",
         "commission_verified": bool(modeled["commission_verified"]),
@@ -263,6 +269,15 @@ def shadow_execution_plan(result, state, execution_style):
         "exit_slippage_bps": float(modeled["exit_slippage_bps"]),
         "decision_total_cost_bps": float(modeled["total_cost_bps"]),
         "entry_execution_cost_embedded_in_fill": True,
+        "exit_execution_cost_embedded_in_fill": True,
+        "roundtrip_cost_bps": float(modeled["total_cost_bps"]),
+        "remaining_recovery_cost_bps": round(remaining, 6),
+        "ledger_fee_bps": round(
+            float(modeled["entry_fee_bps"]) + float(modeled["exit_fee_bps"]),
+            6,
+        ),
+        # Compatibility field: Guardian/Risk recover only costs not already
+        # embedded in the executable entry fill.
         "total_cost_bps": round(remaining, 6),
         "minimum_net_edge_bps": float(modeled["minimum_net_edge_bps"]),
     }
@@ -277,3 +292,27 @@ def position_total_cost_bps(position, fallback_bps=18.0):
     except (AttributeError, TypeError, ValueError):
         value = 0.0
     return value if value > 0.0 else max(0.0, float(fallback_bps or 0.0))
+
+
+def position_roundtrip_cost_bps(position, fallback_bps=None):
+    """Return immutable decision-time round-trip cost for audit/ledger parity."""
+    fallback = (
+        2.0 * fallback_fee_bps_per_side()
+        if fallback_bps is None else max(0.0, _f(fallback_bps))
+    )
+    plan = (getattr(position, "execution_cost_plan", None)
+            or getattr(position, "shadow_cost_plan", None) or {})
+    value = _f(plan.get("roundtrip_cost_bps"), 0.0)
+    if value <= 0.0:
+        value = _f(plan.get("decision_total_cost_bps"), 0.0)
+    return value if value > 0.0 else fallback
+
+
+def position_fee_components(position):
+    """Return frozen entry/exit commission; never mix 5/9/verified defaults."""
+    fallback = fallback_fee_bps_per_side()
+    plan = (getattr(position, "execution_cost_plan", None)
+            or getattr(position, "shadow_cost_plan", None) or {})
+    entry = _f(plan.get("entry_fee_bps"), fallback)
+    exit_ = _f(plan.get("exit_fee_bps"), fallback)
+    return max(0.0, entry), max(0.0, exit_)

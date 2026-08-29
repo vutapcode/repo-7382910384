@@ -44,7 +44,7 @@ IDLE = 60.0
 QTY_BTC = 0.001
 LEVERAGE = 20
 START_BALANCE_USDT = float(os.getenv("SMC_SHADOW_BALANCE_USDT", "5.4"))
-FEE_BPS_PER_SIDE = float(os.getenv("SMC_SHADOW_FEE_BPS_PER_SIDE", "5.0"))
+FEE_BPS_PER_SIDE = verified_cost_model.fallback_fee_bps_per_side()
 DAILY_LOSS_USDT = abs(float(os.getenv("WSTRADE_DAILY_LOSS_USDT", "0.60")))
 # Shadow must collect every eligible test outcome.  It audits this threshold
 # for comparison with live risk, but only real execution may enforce it.
@@ -441,10 +441,15 @@ def _bias_or_transition_authorized(result, state):
     return bool(basis == "BIAS_ALIGNED" and side == bias_side)
 
 
-def _entry_feasibility(price):
+def _entry_feasibility(price, frozen_cost_plan=None):
     notional = max(0.0, float(price)) * QTY_BTC
     margin = notional / max(LEVERAGE, 1)
-    roundtrip_fee_reserve = notional * (2.0 * FEE_BPS_PER_SIDE) / 10000.0
+    plan = dict(frozen_cost_plan or {})
+    roundtrip_fee_bps = float(
+        plan.get("ledger_fee_bps", 2.0 * FEE_BPS_PER_SIDE)
+        or 2.0 * FEE_BPS_PER_SIDE
+    )
+    roundtrip_fee_reserve = notional * roundtrip_fee_bps / 10000.0
     required = margin + roundtrip_fee_reserve
     return {
         "price": price,
@@ -453,6 +458,7 @@ def _entry_feasibility(price):
         "leverage_model": LEVERAGE,
         "initial_margin_usdt": margin,
         "roundtrip_fee_reserve_usdt": roundtrip_fee_reserve,
+        "roundtrip_fee_bps": roundtrip_fee_bps,
         "required_usdt": required,
         "balance_usdt": float(
             getattr(app.state, "mainnet_shadow_balance_usdt", START_BALANCE_USDT)
@@ -873,7 +879,12 @@ def _open_shadow(side, result, now):
         price = float(execution.get("fill_price", 0.0) or 0.0)
     else:
         price = shadow_execution_model.market_fill(side, bid, ask)
-    feasibility = _entry_feasibility(price)
+    shadow_cost_plan = verified_cost_model.shadow_execution_plan(
+        result,
+        app.state,
+        (execution or {}).get("style", "MARKET"),
+    )
+    feasibility = _entry_feasibility(price, shadow_cost_plan)
     app.state.mainnet_shadow_last_feasibility = feasibility
     if price <= 0 or not feasibility["feasible"]:
         app.state.mainnet_shadow_last_skip = "SHADOW_BALANCE_INSUFFICIENT"
@@ -927,11 +938,6 @@ def _open_shadow(side, result, now):
     risk_distance = abs(float(price) - float(hard_sl))
     entry_regime = dict(
         ((result.get("edge_tier") or {}).get("micro_regime") or {})
-    )
-    shadow_cost_plan = verified_cost_model.shadow_execution_plan(
-        result,
-        app.state,
-        (execution or {}).get("style", "MARKET"),
     )
     pos = SimpleNamespace(
         active=True,
@@ -1023,6 +1029,13 @@ def _open_shadow(side, result, now):
                     "SMC_SHADOW_MARKET_SLIPPAGE_BPS", "1.5"
                 )),
             },
+            "frozen_cost_contract": dict(
+                result.get("execution_cost_contract")
+                or (result.get("edge_tier") or {}).get(
+                    "execution_cost_contract"
+                ) or {}
+            ),
+            "execution_cost_plan": dict(shadow_cost_plan),
             "hard_sl": hard_sl,
             "hard_sl_distance_bps": (
                 risk_distance / price * 10000.0 if price > 0.0 else None
@@ -1194,11 +1207,8 @@ def _close_shadow(pos, guardian_result, now):
         else (entry - price) * qty
     )
     cost_plan = getattr(pos, "shadow_cost_plan", None) or {}
-    entry_fee_bps = float(
-        cost_plan.get("entry_fee_bps", FEE_BPS_PER_SIDE) or FEE_BPS_PER_SIDE
-    )
-    exit_fee_bps = float(
-        cost_plan.get("exit_fee_bps", FEE_BPS_PER_SIDE) or FEE_BPS_PER_SIDE
+    entry_fee_bps, exit_fee_bps = (
+        verified_cost_model.position_fee_components(pos)
     )
     fees = (
         entry * qty * entry_fee_bps / 10000.0
@@ -1242,6 +1252,10 @@ def _close_shadow(pos, guardian_result, now):
             "entry_fee_bps": entry_fee_bps,
             "exit_fee_bps": exit_fee_bps,
             "execution_cost_model": cost_plan or None,
+            "execution_cost_plan": dict(cost_plan),
+            "roundtrip_cost_bps": (
+                verified_cost_model.position_roundtrip_cost_bps(pos)
+            ),
             "net_pnl_usdt": net,
             "gross_pnl_bps": gross_bps,
             "net_pnl_bps": net_bps,

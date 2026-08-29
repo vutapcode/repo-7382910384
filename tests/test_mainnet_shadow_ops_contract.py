@@ -122,7 +122,13 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         self.assertIn("base._bias_loop = _bias_loop", text)
         self.assertIn("async def _account_init()", text)
         self.assertIn("await _orig_account_init()", text)
-        self.assertIn("risk.FEE_BPS = base.SHADOW_FEE_BPS_PER_SIDE", text)
+        self.assertIn(
+            "base.FEE_BPS_PER_SIDE = "
+            "base.verified_cost_model.fallback_fee_bps_per_side()",
+            text,
+        )
+        self.assertIn("risk.FEE_BPS = base.FEE_BPS_PER_SIDE", text)
+        self.assertNotIn("base.SHADOW_FEE_BPS_PER_SIDE", text)
         self.assertIn("futures_flow.install(base)", text)
         self.assertIn("FUTURES_FLOW_RING_SATURATED", text)
         self.assertNotIn("if pos is none", text)

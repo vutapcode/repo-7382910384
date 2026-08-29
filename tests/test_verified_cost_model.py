@@ -66,6 +66,8 @@ class VerifiedCostModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan["exit_fee_bps"], 5.0)
         self.assertEqual(plan["roundtrip_fee_bps"], 7.0)
         self.assertAlmostEqual(plan["total_cost_bps"], 9.5)
+        self.assertAlmostEqual(plan["roundtrip_cost_bps"], 9.5)
+        self.assertAlmostEqual(plan["remaining_recovery_cost_bps"], 9.5)
 
     async def test_shadow_market_fallback_uses_taker_entry_fee(self):
         state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)
@@ -77,7 +79,35 @@ class VerifiedCostModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plan["roundtrip_fee_bps"], 10.0)
         self.assertAlmostEqual(plan["decision_total_cost_bps"], 15.0)
         self.assertAlmostEqual(plan["total_cost_bps"], 12.5)
+        self.assertAlmostEqual(plan["roundtrip_cost_bps"], 15.0)
+        self.assertAlmostEqual(plan["ledger_fee_bps"], 10.0)
         self.assertTrue(plan["entry_execution_cost_embedded_in_fill"])
+
+    async def test_frozen_plan_is_one_cost_truth_for_risk_and_ledger(self):
+        state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)
+        await verified_cost_model.refresh_account_commission(FakeAPI(), state)
+        contract = verified_cost_model.freeze_execution_cost_contract(
+            {"phase": "RELEASE"}, state
+        )
+        plan = verified_cost_model.shadow_execution_plan(
+            {"phase": "RELEASE"}, state, "MARKET"
+        )
+        position = SimpleNamespace(execution_cost_plan=plan)
+        self.assertEqual(plan["version"], verified_cost_model.FROZEN_COST_PLAN_VERSION)
+        self.assertAlmostEqual(
+            plan["roundtrip_cost_bps"], contract["budgets_bps"]["TAKER"]
+        )
+        self.assertAlmostEqual(
+            verified_cost_model.position_total_cost_bps(position),
+            plan["remaining_recovery_cost_bps"],
+        )
+        self.assertAlmostEqual(
+            verified_cost_model.position_roundtrip_cost_bps(position),
+            plan["roundtrip_cost_bps"],
+        )
+        self.assertEqual(
+            verified_cost_model.position_fee_components(position), (5.0, 5.0)
+        )
 
     async def test_cost_contract_compares_the_same_execution_style(self):
         state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)

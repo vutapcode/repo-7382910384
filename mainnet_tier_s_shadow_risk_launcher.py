@@ -290,8 +290,8 @@ base._bias_loop = _bias_loop
 # Keep a conservative fallback for missing authenticated commission data.  When
 # Binance commission is verified, each position carries its actual maker/taker
 # cost plan and both shadow PnL and Risk use that same plan.
-base.SHADOW_FEE_BPS_PER_SIDE = max(float(getattr(base, "SHADOW_FEE_BPS_PER_SIDE", 0.0) or 0.0), 9.0)
-risk.FEE_BPS = base.SHADOW_FEE_BPS_PER_SIDE
+base.FEE_BPS_PER_SIDE = base.verified_cost_model.fallback_fee_bps_per_side()
+risk.FEE_BPS = base.FEE_BPS_PER_SIDE
 _cost_close = base._close_shadow
 def _close_and_persist(pos, result, now):
     state = base.app.state

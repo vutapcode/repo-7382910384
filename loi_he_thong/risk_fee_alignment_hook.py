@@ -1,19 +1,12 @@
 """Align shadow Risk fee accounting with the canonical shadow fee model."""
 from __future__ import annotations
 
-import os
-
 from loi_he_thong import verified_cost_model
 
 VERSION = "RISK_FEE_ALIGNMENT_V2"
 
-_DEFAULT_FEE_BPS_PER_SIDE = 9.0
-
-
 def _fee_bps_per_side():
-    raw = os.environ.get("SMC_SHADOW_FEE_BPS_PER_SIDE")
-    value = _DEFAULT_FEE_BPS_PER_SIDE if raw is None else float(raw)
-    return max(0.0, value)
+    return verified_cost_model.fallback_fee_bps_per_side()
 
 
 def _refresh_fee_r(position, fee_bps):

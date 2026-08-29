@@ -16,6 +16,13 @@ class RiskFeeAlignmentTest(unittest.TestCase):
         with patch.dict(os.environ, {"SMC_SHADOW_FEE_BPS_PER_SIDE": "7.5"}):
             self.assertEqual(hook._fee_bps_per_side(), 7.5)
 
+    def test_default_matches_canonical_cost_model(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                hook._fee_bps_per_side(),
+                hook.verified_cost_model.DEFAULT_FALLBACK_FEE_BPS_PER_SIDE,
+            )
+
     def test_position_verified_cost_plan_overrides_flat_fallback(self):
         p = SimpleNamespace(
             entry_price=100000.0,
