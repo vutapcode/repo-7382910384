@@ -7,6 +7,7 @@ the no-lookahead authority.
 """
 
 from collections import deque
+import hashlib
 import os
 
 
@@ -20,6 +21,11 @@ MIN_QTY = {
     "coinbase_spot": 0.002,
     "futures": 0.15,
 }
+
+
+def _raw_evidence_id(venue, epoch, bucket_start_ms):
+    raw = f"raw|{venue}|{int(epoch)}|{int(bucket_start_ms)}".encode("utf-8")
+    return "ev:" + hashlib.sha256(raw).hexdigest()[:24]
 
 
 def _f(value, default=0.0):
@@ -197,6 +203,15 @@ class _Venue:
             "bbo_qty_valid": qty_sum > 0.0,
             "bbo_receive_time_ms": self.bbo_receive_ms,
         }
+        evidence_id = _raw_evidence_id(
+            self.name, self.epoch, self.bucket_start_ms
+        )
+        row.update({
+            "evidence_id": evidence_id,
+            "parent_evidence_ids": [],
+            "root_evidence_id": evidence_id,
+            "evidence_role": "RAW_EXECUTED_FLOW_BUCKET",
+        })
         if self.samples == 0:
             self.mean_abs_quote = abs_quote
             self.mean_dev = abs_quote * 0.25

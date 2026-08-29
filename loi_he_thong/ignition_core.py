@@ -639,6 +639,9 @@ def _causal(ignition):
             "policy": "FAILED_REVERSION_OR_TWO_100MS_METAORDER_BUCKETS",
         },
         "oi_intent": dict(ignition.get("oi_intent") or {}),
+        "evidence_provenance": dict(
+            ignition.get("evidence_provenance") or {}
+        ),
         "ignition": ignition,
     }
 
@@ -770,6 +773,77 @@ def _episode_id(signal):
     return "ign:%s:%s:%d" % (
         signal.get("venue"), signal.get("side"), int(signal.get("bucket_start_ms", 0))
     )
+
+
+def _provenance_id(*parts):
+    raw = "|".join(str(part) for part in parts).encode("utf-8")
+    return "ev:" + hashlib.sha256(raw).hexdigest()[:24]
+
+
+def _evidence_provenance(causal_episode_id, rows, proof_type=None):
+    """Collapse repeated buckets into one root per venue for corroboration."""
+    episode_id = str(causal_episode_id or "UNKNOWN_EPISODE")
+    grouped = {}
+    for row in rows or ():
+        venue = str((row or {}).get("venue") or "UNKNOWN").lower()
+        if venue == "unknown":
+            continue
+        grouped.setdefault(venue, []).append(dict(row))
+    nodes = []
+    for venue in sorted(grouped):
+        parents = sorted({
+            str(row.get("evidence_id") or _provenance_id(
+                "raw", venue, row.get("epoch"), row.get("bucket_start_ms")
+            ))
+            for row in grouped[venue]
+        })
+        root = _provenance_id("venue-wave-root", episode_id, venue)
+        family = (
+            "BINANCE_CASH" if venue == "binance_spot"
+            else "COINBASE_CASH" if venue == "coinbase_spot"
+            else "BINANCE_DERIVATIVE" if venue == "futures"
+            else "UNKNOWN"
+        )
+        nodes.append({
+            "evidence_id": _provenance_id(
+                "venue-wave", episode_id, venue, *parents
+            ),
+            "parent_evidence_ids": parents,
+            "root_evidence_id": root,
+            "evidence_role": (
+                "CASH_VENUE_WAVE" if venue in CASH
+                else "DERIVATIVE_VENUE_WAVE"
+            ),
+            "venue": venue,
+            "causal_family": family,
+            "authority": venue in CASH,
+        })
+    proof_parents = [node["evidence_id"] for node in nodes]
+    if proof_type and proof_parents:
+        nodes.append({
+            "evidence_id": _provenance_id(
+                "proof", episode_id, proof_type, *proof_parents
+            ),
+            "parent_evidence_ids": proof_parents,
+            "root_evidence_id": _provenance_id(
+                "composite-proof-root", episode_id, proof_type
+            ),
+            "evidence_role": "COMPOSITE_ENTRY_PROOF",
+            "venue": None,
+            "causal_family": "MULTI_SOURCE_DERIVED",
+            "authority": False,
+        })
+    return {
+        "version": "EVIDENCE_PROVENANCE_V1",
+        "causal_episode_id": episode_id,
+        "nodes": nodes,
+        "root_evidence_ids": sorted({
+            node["root_evidence_id"] for node in nodes
+        }),
+        "consumer_invariant": (
+            "ONE_ROOT_EVIDENCE_ID_COUNTS_AT_MOST_ONCE_PER_CORROBORATION"
+        ),
+    }
 
 
 def _pending_reversal_identity(signal, bias):
@@ -1583,6 +1657,9 @@ def _research_reject_context(state, signal, bias, reason):
         "leader": "UNKNOWN",
         "observed_venues": sorted(venues),
         "research_reject_reason": str(reason),
+        "evidence_provenance": _evidence_provenance(
+            candidate_id, [signal], None
+        ),
     }
     state._ignition_last_reject_payload = payload
     return payload
@@ -2784,6 +2861,7 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     }
     payload = {
         "causal_episode_id": candidate_id,
+        "inference_version": INFERENCE_VERSION,
         "state": "PROVE",
         "side": side,
         "proposer": proposer,
@@ -2842,6 +2920,16 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "persistent_evidence": report,
         "clock_quality": clock_quality,
     }
+    persistent_rows = []
+    for venue in names:
+        persistent_rows.extend(
+            row for row in histories.get(venue, ())
+            if wave_started_ms <= int(row.get("receive_time_ms", 0) or 0)
+            <= int(now * 1000.0)
+        )
+    payload["evidence_provenance"] = _evidence_provenance(
+        candidate_id, persistent_rows, "PERSISTENT_METAORDER"
+    )
     confidence = min(0.90, 0.64 + 0.04 * len(payload["supporting_venues"]))
     authority_basis, authority_dependencies, authority_proof_hash = (
         _freeze_authority_proof(
@@ -3116,7 +3204,8 @@ def _result_from_episode(state, episode, histories, freshness, now):
         decision_time=now,
     )
     payload = {
-        "causal_episode_id": episode["causal_episode_id"], "state": "PROBE",
+        "causal_episode_id": episode["causal_episode_id"],
+        "inference_version": INFERENCE_VERSION, "state": "PROBE",
         "side": side, "proposer": episode["proposer"], "leader": leader,
         "lead_lower_bound_ms": round(lead_lower, 4) if lead_lower is not None else None,
         "spot_price_discovery": cash_discovery,
@@ -3212,6 +3301,9 @@ def _result_from_episode(state, episode, histories, freshness, now):
             "valid": rows[-1].get("clock_valid"), "epoch": rows[-1].get("epoch"),
         } for name, rows in histories.items() if rows},
     }
+    payload["evidence_provenance"] = _evidence_provenance(
+        episode["causal_episode_id"], episode["signals"], proof_type
+    )
     resolved_reversion_venue = None
     if proof_type == "FAILED_REVERSION" and isinstance(proof_signal, dict):
         resolved_reversion_venue = (

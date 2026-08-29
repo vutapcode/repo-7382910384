@@ -89,6 +89,39 @@ NO_LIQUIDATION = {"phase": "QUIET", "burst": False, "decelerating": False}
 
 
 class EntryThesisGateTests(unittest.TestCase):
+    def test_same_evidence_root_cannot_count_as_dual_cash_corroboration(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "PERSISTENT_NONCONVERSION",
+                "coinbase_spot": "CONTINUING_CONFIRMED",
+            },
+        )
+        candidate["ignition"]["evidence_provenance"] = {
+            "nodes": [
+                {
+                    "evidence_id": f"node-{venue}",
+                    "parent_evidence_ids": ["raw-shared"],
+                    "root_evidence_id": "same-root",
+                    "evidence_role": "CASH_VENUE_WAVE",
+                    "venue": venue,
+                }
+                for venue in ("binance_spot", "coinbase_spot")
+            ]
+        }
+        audit = entry_thesis_gate.evaluate(
+            SimpleNamespace(entry_economics_v5_replay_approved=True),
+            candidate, PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
+        )
+        corroboration = audit["questions"]["q6_cross_venue_corroboration"]
+        self.assertNotEqual(
+            corroboration["status"],
+            "DUAL_CASH_CROSS_VENUE_CORROBORATION",
+        )
+        self.assertEqual(corroboration["unique_cash_root_count"], 1)
+        flow = audit["questions"]["q3_flow_efficiency"]
+        self.assertFalse(flow["cross_venue_cash_continuation"])
+        self.assertEqual(flow["cross_venue_witness_venues"], [])
     def test_entry_contract_requires_present_tense_cash_conversion(self):
         candidate = result(consumed=0.20, recent_progress=0.20)
         candidate["ignition"].pop("current_cash_conversion")

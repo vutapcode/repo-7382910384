@@ -23,6 +23,38 @@ def _f(value, default=0.0):
         return default
 
 
+def _cash_evidence_roots(ignition):
+    """Return one corroboration root per cash venue, never per feature."""
+    provenance = dict((ignition or {}).get("evidence_provenance") or {})
+    nodes = list(provenance.get("nodes") or ())
+    roots = {}
+    malformed = False
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("evidence_role") != "CASH_VENUE_WAVE":
+            continue
+        venue = str(node.get("venue") or "").lower()
+        root = str(node.get("root_evidence_id") or "")
+        evidence_id = str(node.get("evidence_id") or "")
+        parents = node.get("parent_evidence_ids")
+        if venue not in CASH or not root or not evidence_id or not isinstance(parents, list):
+            malformed = True
+            continue
+        existing = roots.get(venue)
+        if existing is not None and existing != root:
+            malformed = True
+            continue
+        roots[venue] = root
+    if nodes:
+        return roots, "MALFORMED" if malformed else "VERIFIED"
+    # Synthetic/unit fixtures predating the V2 inference contract retain their
+    # old behavior. Active V2 payloads always carry explicit provenance.
+    roots = {
+        venue: f"legacy-fixture:{venue}"
+        for venue in set((ignition or {}).get("cash_venues") or ()) & CASH
+    }
+    return roots, "LEGACY_FIXTURE_ONLY"
+
+
 def _bias_question(result, ignition):
     side = str((result or {}).get("side") or "ABSTAIN").upper()
     frozen = dict(ignition.get("bias_snapshot") or {})
@@ -146,12 +178,19 @@ def _flow_question(result, ignition, impact):
         name: str((venue_efficiency.get(name) or {}).get("state") or "UNKNOWN").upper()
         for name in cash if name != primary
     }
-    cross_venue_continuation = bool(
+    shared_cross_venue_continuation = bool(
         shared_flow_state.get("cross_venue_cash_continuation")
     )
+    evidence_roots, provenance_status = _cash_evidence_roots(ignition)
+    primary_root = evidence_roots.get(primary)
     cross_venue_witnesses = sorted(
         name for name, state in other_states.items()
         if state == "CONTINUING_CONFIRMED"
+        and evidence_roots.get(name)
+        and evidence_roots.get(name) != primary_root
+    )
+    cross_venue_continuation = bool(
+        shared_cross_venue_continuation and cross_venue_witnesses
     )
     primary_continuation = primary_state == "CONTINUING_CONFIRMED"
     composite_veto = bool(
@@ -189,6 +228,8 @@ def _flow_question(result, ignition, impact):
             else "NONE"
         ),
         "cross_venue_witness_venues": cross_venue_witnesses,
+        "cash_evidence_root_ids": evidence_roots,
+        "evidence_provenance_status": provenance_status,
         "composite_veto": composite_veto,
         "converts": converts,
         "flow_efficiency": efficiency,
@@ -243,18 +284,32 @@ def _maturity_question(ignition):
 
 def _independence_question(ignition, basis):
     cash = set(ignition.get("cash_venues") or ()) & CASH
+    evidence_roots, provenance_status = _cash_evidence_roots(ignition)
+    corroborated_cash = {
+        venue for venue in cash if evidence_roots.get(venue)
+    }
+    unique_cash_roots = {
+        evidence_roots[venue] for venue in corroborated_cash
+    }
+    dual_cash_corroborated = bool(
+        corroborated_cash == CASH and len(unique_cash_roots) == 2
+    )
     proposer = str(ignition.get("proposer") or "UNKNOWN").lower()
     futures_self_led = bool(
         proposer == "futures" and not ignition.get("futures_cash_response_ok")
     )
     status = (
         "DERIVATIVES_LED_REJECT" if futures_self_led or (basis or {}).get("perp_expansion") else
-        "DUAL_CASH_CROSS_VENUE_CORROBORATION" if cash == CASH else
-        "SINGLE_CASH_ANCHOR" if cash else "NO_CASH_AUTHORITY"
+        "DUAL_CASH_CROSS_VENUE_CORROBORATION" if dual_cash_corroborated else
+        "SINGLE_CASH_ANCHOR" if corroborated_cash else "NO_CASH_AUTHORITY"
     )
     return {
         "question": "CROSS_VENUE_CORROBORATION",
         "status": status, "cash_venues": sorted(cash),
+        "corroborated_cash_venues": sorted(corroborated_cash),
+        "cash_evidence_root_ids": evidence_roots,
+        "evidence_provenance_status": provenance_status,
+        "unique_cash_root_count": len(unique_cash_roots),
         "proposer": proposer, "futures_self_led": futures_self_led,
         "spot_perp_basis": dict(basis or {}),
     }
@@ -337,7 +392,7 @@ def evaluate(state, result, impact, basis, liquidation):
         "questions": {
             "q1_bias": q1, "q2_intent": q2, "q3_flow_efficiency": q3,
             "q4_liquidity": q4, "q5_maturity": q5,
-            "q6_exchange_independence": q6,
+            "q6_cross_venue_corroboration": q6,
         },
         "blocking_reasons": blockers,
         "soft_wait_reasons": soft_waits,
