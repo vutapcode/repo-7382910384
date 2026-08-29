@@ -4,10 +4,32 @@ import time
 import unittest
 from unittest.mock import patch
 
-from loi_he_thong import flow_lead_engine, ignition_signals
+from loi_he_thong import flow_lead_engine, flow_weighting_hook, ignition_signals
 
 
 class FlowLeadScopeTests(unittest.TestCase):
+    def test_static_venue_priors_are_not_named_or_used_as_feed_reliability(self):
+        self.assertFalse(hasattr(flow_weighting_hook, "RELIABILITY"))
+        self.assertEqual(
+            set(flow_weighting_hook.VENUE_WEIGHT_PRIORS),
+            {"spot", "coinbase", "futures"},
+        )
+        module = SimpleNamespace(
+            analyze=lambda _state, _side: {
+                "freshness": {"aligned": False, "skew_s": 0.4}
+            }
+        )
+        flow_weighting_hook.install(module)
+        report = module.analyze(SimpleNamespace(), "LONG")
+        self.assertEqual(
+            report["venue_weight_priors"],
+            flow_weighting_hook.VENUE_WEIGHT_PRIORS,
+        )
+        self.assertFalse(report["dynamic_feed_quality"]["aligned"])
+        self.assertFalse(
+            report["dynamic_feed_quality"]["used_as_static_weight"]
+        )
+
     def test_warmup_cannot_claim_objective_spot_discovery(self):
         report = flow_lead_engine.analyze(SimpleNamespace(), "LONG")
         self.assertEqual(
