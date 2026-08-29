@@ -17,10 +17,11 @@ from types import SimpleNamespace
 
 from loi_he_thong import risk_ratchet_price_quality_hook
 from loi_he_thong import shadow_risk_guard
+from loi_he_thong import ignition_core, ignition_signals, verified_cost_model
 from recorder.residual_edge import ResidualEdgeBook
 
 
-VERSION = "WAVEFRONT_SHADOW_V2_TIME_TO_POSITIVE_NET"
+VERSION = "WAVEFRONT_SHADOW_V3_CANONICAL_MIRROR"
 AUTHORITY = False
 FOLLOW_MAX_MS = 1_200
 LEAD_FLOOR_MS = 100.0
@@ -39,6 +40,8 @@ TRADE_STREAMS = {
 }
 CASH_VENUES = frozenset({"binance_spot", "coinbase_spot"})
 MIN_QTY = {"binance_spot": 0.02, "coinbase_spot": 0.01, "futures": 0.02}
+CANONICAL_MIRROR_PROFILE = "CANONICAL_MIRROR"
+CANONICAL_MIRROR_VERSION = "CANONICAL_MIRROR_V1"
 
 
 def _f(value, default=0.0):
@@ -119,7 +122,10 @@ class FlowBaseline:
         self.mean_dev = 0.0
         self.last_price = 0.0
 
-    def score(self, payload, venue, warmup_samples):
+    def score(
+        self, payload, venue, warmup_samples, *, min_qty=None,
+        material_price_bps=0.15,
+    ):
         buy_qty = _f(payload.get("buy_qty"))
         sell_qty = _f(payload.get("sell_qty"))
         buy_quote = _f(payload.get("buy_quote"))
@@ -139,11 +145,11 @@ class FlowBaseline:
         sign = _side_sign(side) if side in ("LONG", "SHORT") else 0.0
         strong = bool(
             self.samples >= int(warmup_samples)
-            and total_qty >= MIN_QTY[venue]
+            and total_qty >= float((min_qty or MIN_QTY)[venue])
             and abs(imbalance) >= 0.20
             and abs_quote >= threshold
             and surprise_ratio >= 1.50
-            and sign * price_bps >= 0.15
+            and sign * price_bps >= float(material_price_bps)
         )
         result = {
             "venue": venue, "side": side, "strong": strong,
@@ -186,7 +192,7 @@ class WavefrontShadowEvaluator:
     def __init__(
         self, emit, *, warmup_samples=20, runtime_health_path=None,
         cpu_status_path=None, feed_health=None, state_path=None,
-        evidence_version=None,
+        evidence_version=None, profile="WAVEFRONT", ablation=None,
     ):
         self.emit = emit
         self.warmup_samples = max(2, int(warmup_samples))
@@ -195,6 +201,27 @@ class WavefrontShadowEvaluator:
         self.feed_health = feed_health
         self.state_path = Path(state_path) if state_path else None
         self.evidence_version = str(evidence_version or VERSION)
+        self.profile = str(profile or "WAVEFRONT").upper()
+        ablation = dict(ablation or {})
+        if len(ablation) > 1:
+            raise ValueError("CANONICAL_MIRROR_ABLATION_MUST_CHANGE_ONE_RULE")
+        self.ablation = ablation
+        if self.profile == CANONICAL_MIRROR_PROFILE:
+            self.follow_max_ms = int(ignition_core.FOLLOW_MAX_MS)
+            self.bucket_ms = int(ignition_signals.BUCKET_MS)
+            self.min_qty = dict(ignition_signals.MIN_QTY)
+            self.material_price_bps = float(ignition_core.MATERIAL_PRICE_BPS)
+            if "follow_max_ms" in ablation:
+                self.follow_max_ms = int(ablation["follow_max_ms"])
+            elif "material_price_bps" in ablation:
+                self.material_price_bps = float(ablation["material_price_bps"])
+        else:
+            if ablation:
+                raise ValueError("ABLATION_REQUIRES_CANONICAL_MIRROR")
+            self.follow_max_ms = FOLLOW_MAX_MS
+            self.bucket_ms = 100
+            self.min_qty = dict(MIN_QTY)
+            self.material_price_bps = 0.15
         self.guardian = _load_guardian()
         self.risk = shadow_risk_guard
         risk_ratchet_price_quality_hook.install(self.risk)
@@ -418,7 +445,11 @@ class WavefrontShadowEvaluator:
         event_ms = int(payload.get("last_event_time_ms") or record.get("event_time_ms", 0) or 0)
         receive_ms = int(record.get("receive_time_ms", 0) or 0)
         corrected = self.clock[venue].observe(event_ms, receive_ms)
-        signal = self.flow[venue].score(payload, venue, self.warmup_samples)
+        signal = self.flow[venue].score(
+            payload, venue, self.warmup_samples,
+            min_qty=self.min_qty,
+            material_price_bps=self.material_price_bps,
+        )
         signal.update({
             "event_time_ms": event_ms, "receive_time_ms": receive_ms,
             "corrected_event_time_ms": corrected,
@@ -521,7 +552,7 @@ class WavefrontShadowEvaluator:
         opposing_cash = self.last_signal.get(other_cash)
         if (
             opposing_cash and opposing_cash["side"] != side
-            and 0 <= signal["receive_time_ms"] - opposing_cash["receive_time_ms"] <= FOLLOW_MAX_MS
+            and 0 <= signal["receive_time_ms"] - opposing_cash["receive_time_ms"] <= self.follow_max_ms
         ):
             self._publish("wavefront_candidate", {
                 "causal_episode_id": self._episode_id(signal),
@@ -532,7 +563,7 @@ class WavefrontShadowEvaluator:
         futures = self.last_signal.get("futures")
         if futures and futures["side"] == side:
             delta = signal["corrected_event_time_ms"] - futures["corrected_event_time_ms"]
-            if 0.0 <= delta <= FOLLOW_MAX_MS:
+            if 0.0 <= delta <= self.follow_max_ms:
                 self._publish("wavefront_candidate", {
                     "causal_episode_id": self._episode_id(signal),
                     "decision": "REJECT", "reason": "FUTURES_LED",
@@ -589,7 +620,7 @@ class WavefrontShadowEvaluator:
             self._start_episode(signal)
             return
         episode = self.episode
-        if signal["receive_time_ms"] - episode["started_receive_ms"] > FOLLOW_MAX_MS:
+        if signal["receive_time_ms"] - episode["started_receive_ms"] > self.follow_max_ms:
             self._expire_episode(signal["receive_time_ms"], "FOLLOW_WINDOW_EXPIRED")
             self._start_episode(signal)
             return
@@ -607,7 +638,7 @@ class WavefrontShadowEvaluator:
             self._expire_episode(signal["receive_time_ms"], "OPPOSING_FUTURES_FLOW")
             return
         receive_delta = signal["receive_time_ms"] - episode["started_receive_ms"]
-        if receive_delta > FOLLOW_MAX_MS:
+        if receive_delta > self.follow_max_ms:
             self._expire_episode(signal["receive_time_ms"], "FOLLOW_WINDOW_EXPIRED")
             return
         proposal = episode["proposal"]
@@ -734,6 +765,29 @@ class WavefrontShadowEvaluator:
         maker = _f(self.commission.get("maker_fee_bps"), 9.0)
         taker = _f(self.commission.get("taker_fee_bps"), 9.0)
         is_maker = style == "MAKER_TWIN"
+        if self.profile == CANONICAL_MIRROR_PROFILE:
+            cost_state = SimpleNamespace(
+                execution_best_bid=bid,
+                execution_best_ask=ask,
+                mainnet_maker_fee_bps=maker,
+                mainnet_taker_fee_bps=taker,
+                mainnet_commission_verified=bool(
+                    self.commission.get("verified")
+                ),
+                mainnet_commission_source=self.commission.get("source"),
+            )
+            plan = verified_cost_model.shadow_execution_plan(
+                {"phase": "ACCEPTANCE" if is_maker else "RELEASE"},
+                cost_state,
+                "MAKER_TRADE_THROUGH" if is_maker else "MARKET",
+            )
+            return {
+                **plan,
+                "execution_twin": style,
+                "promotion_cost_verified": bool(
+                    plan.get("commission_verified")
+                ),
+            }
         entry_fee = maker if is_maker else taker
         entry_slippage = 0.0 if is_maker else half_spread + market_slippage
         exit_slippage = half_spread + market_slippage
@@ -795,7 +849,11 @@ class WavefrontShadowEvaluator:
             guardian_s_scout_since=0.0,
         )
         self.risk.arm(pos, price)
-        pos.fee_r = twin["cost_plan"]["total_cost_bps"] / (STOP_FRACTION * 10_000.0)
+        recovery_cost = _f(
+            twin["cost_plan"].get("remaining_recovery_cost_bps"),
+            twin["cost_plan"].get("total_cost_bps"),
+        )
+        pos.fee_r = recovery_cost / (STOP_FRACTION * 10_000.0)
         twin.update({
             "filled": True, "fill_ms": now_ms, "entry_price": float(price),
             "position": pos, "state": SimpleNamespace(), "fill_reason": fill_reason,
@@ -924,7 +982,11 @@ class WavefrontShadowEvaluator:
             gross_bps = _side_sign(twin["side"]) * (float(exit_price) - entry) / entry * 10_000.0
             fee_bps = twin["cost_plan"]["entry_fee_bps"] + twin["cost_plan"]["exit_fee_bps"]
             net_bps = gross_bps - fee_bps
-            threshold = twin["cost_plan"]["total_cost_bps"] + twin["cost_plan"]["minimum_net_edge_bps"]
+            roundtrip_cost = _f(
+                twin["cost_plan"].get("roundtrip_cost_bps"),
+                twin["cost_plan"].get("total_cost_bps"),
+            )
+            threshold = roundtrip_cost + twin["cost_plan"]["minimum_net_edge_bps"]
             economic_wave = twin["mfe_bps"] >= threshold
             advance = self.residual.match_core_entry(twin["side"], twin["fill_ms"], now_ms)
             core_shared = advance is not None
@@ -983,7 +1045,7 @@ class WavefrontShadowEvaluator:
         if self.governor_mode in ("DEFENSIVE", "SAFETY_ONLY"):
             self._invalidate_all(f"CPU_{self.governor_mode}", now_ms)
             return
-        if self.episode and now_ms - self.episode["started_receive_ms"] > FOLLOW_MAX_MS:
+        if self.episode and now_ms - self.episode["started_receive_ms"] > self.follow_max_ms:
             self._expire_episode(now_ms, "FOLLOW_WINDOW_EXPIRED")
         if signal:
             if signal["venue"] in CASH_VENUES:
@@ -996,6 +1058,21 @@ class WavefrontShadowEvaluator:
     def summary(self):
         return {
             "version": VERSION, "authority": False,
+            "profile": self.profile,
+            "canonical_mirror_version": (
+                CANONICAL_MIRROR_VERSION
+                if self.profile == CANONICAL_MIRROR_PROFILE else None
+            ),
+            "contract": {
+                "bucket_ms": self.bucket_ms,
+                "follow_max_ms": self.follow_max_ms,
+                "min_qty": dict(self.min_qty),
+                "material_price_bps": self.material_price_bps,
+                "cost_plan_version": verified_cost_model.FROZEN_COST_PLAN_VERSION,
+                "guardian_version": self.guardian.VERSION,
+                "quantity_btc": QTY_BTC,
+            },
+            "ablation": dict(self.ablation),
             "governor_mode": self.governor_mode,
             "generated_counts": dict(self.generated_counts),
             "active_episode": self.episode["id"] if self.episode else None,

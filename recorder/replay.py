@@ -176,7 +176,8 @@ def iter_merged_records(data_root, streams=None, start_ms=None, end_ms=None):
 
 class DeterministicReplay:
     def __init__(self, metrics_start_ms=None, setup_id=None, handlers=None,
-                 wavefront=True):
+                 wavefront=True, canonical_mirror=True,
+                 canonical_ablation=None):
         self.clock = ReplayClock()
         self.book = LocalOrderBook()
         self.metrics_start_ms = metrics_start_ms
@@ -218,10 +219,26 @@ class DeterministicReplay:
                 cpu_status_path=None,
             ) if wavefront else None
         )
+        self.canonical_mirror_records = []
+        self.canonical_mirror = (
+            WavefrontShadowEvaluator(
+                self._emit_canonical_mirror,
+                runtime_health_path=None, cpu_status_path=None,
+                profile="CANONICAL_MIRROR", ablation=canonical_ablation,
+            ) if canonical_mirror else None
+        )
         self.liquidity_response = LiquidityResponseAnalyzer(self._emit_wavefront)
 
     def _emit_wavefront(self, stream, payload, event_time_ms=None):
         self.wavefront_records.append({
+            'stream': stream,
+            'event_time_ms': int(event_time_ms or self.clock.now_ms),
+            'receive_time_ms': int(self.clock.now_ms),
+            'payload': payload,
+        })
+
+    def _emit_canonical_mirror(self, stream, payload, event_time_ms=None):
+        self.canonical_mirror_records.append({
             'stream': stream,
             'event_time_ms': int(event_time_ms or self.clock.now_ms),
             'receive_time_ms': int(self.clock.now_ms),
@@ -413,6 +430,8 @@ class DeterministicReplay:
             handler(record, self.clock)
         if self.wavefront is not None:
             self.wavefront.observe(record)
+        if self.canonical_mirror is not None:
+            self.canonical_mirror.observe(record)
         self.liquidity_response.observe(record)
 
     def run(self, records):
@@ -450,6 +469,13 @@ class DeterministicReplay:
             'timeline': self.timeline,
             'wavefront': self.wavefront.summary() if self.wavefront else None,
             'wavefront_generated_records': len(self.wavefront_records),
+            'canonical_mirror': (
+                self.canonical_mirror.summary()
+                if self.canonical_mirror else None
+            ),
+            'canonical_mirror_generated_records': len(
+                self.canonical_mirror_records
+            ),
             'liquidity_response': self.liquidity_response.summary(),
         }
 

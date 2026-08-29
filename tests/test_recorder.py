@@ -536,6 +536,30 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(first['feature_flow_rows'], 1)
         self.assertEqual(first['feature_flow_mismatches'], 0)
         self.assertEqual(first['sequence_gap_total'], 0)
+        mirror = first['canonical_mirror']
+        self.assertEqual(mirror['profile'], 'CANONICAL_MIRROR')
+        self.assertEqual(mirror['contract']['bucket_ms'], 100)
+        self.assertEqual(mirror['contract']['follow_max_ms'], 600)
+        self.assertEqual(mirror['contract']['min_qty'], {
+            'binance_spot': 0.015, 'coinbase_spot': 0.002,
+            'futures': 0.15,
+        })
+
+    def test_canonical_mirror_ablation_changes_at_most_one_rule(self):
+        replay = DeterministicReplay(
+            wavefront=False,
+            canonical_ablation={'follow_max_ms': 700},
+        )
+        report = replay.run([])['canonical_mirror']
+        self.assertEqual(report['contract']['follow_max_ms'], 700)
+        self.assertEqual(report['ablation'], {'follow_max_ms': 700})
+        with self.assertRaisesRegex(ValueError, 'MUST_CHANGE_ONE_RULE'):
+            DeterministicReplay(
+                canonical_ablation={
+                    'follow_max_ms': 700,
+                    'material_price_bps': 0.20,
+                }
+            )
 
     def test_replay_detects_sequence_start_jump_even_if_previous_is_forged(self):
         rows = self.records()
