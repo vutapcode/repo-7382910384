@@ -536,7 +536,7 @@ async def run():
     )
     research_emit = lambda stream, payload, event_time_ms=None: collector.emit(
         stream, payload, event_time_ms=event_time_ms,
-        source='wstrade_recorder', feed_features=False,
+        source='wstrade_recorder', feed_features=False, feed_research=False,
     )
     collector.decision_outcome_tracker = RecorderResearchTracker(
         research_emit, DecisionOutcomeTracker(research_emit)
@@ -552,6 +552,7 @@ async def run():
             lambda stream, payload, event_time_ms=None: collector.emit(
                 stream, payload, event_time_ms=event_time_ms,
                 source='wstrade_wavefront_shadow', feed_features=False,
+                feed_research=False,
             ),
             runtime_health_path=config.bot_runtime_path,
             cpu_status_path=config.cpu_status_path,

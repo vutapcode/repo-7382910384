@@ -123,6 +123,7 @@ class LiquidityResponseAnalyzer:
 
     def _update_pending(self, now_ms):
         keep = deque(maxlen=self.pending.maxlen)
+        completed = []
         for tracker in self.pending:
             current = self._levels(self.book, tracker["side"], tracker["limit"])
             tracker["latest_levels"] = current
@@ -152,14 +153,17 @@ class LiquidityResponseAnalyzer:
             ):
                 tracker["refill_half_life_ms"] = max(0, elapsed)
             if elapsed >= HORIZONS_MS[-1]:
-                self._emit(tracker, now_ms)
+                completed.append(tracker)
             else:
                 keep.append(tracker)
         self.pending = keep
+        # Detach completed trackers before callbacks can emit another record.
+        for tracker in completed:
+            self._emit(tracker, now_ms)
 
     def observe(self, record):
         stream = str(record.get("stream") or "")
-        if stream == "liquidity_response":
+        if stream in ("liquidity_response", "spot_liquidity_response"):
             return
         payload = record.get("payload") or {}
         now_ms = int(record.get("receive_time_ms", 0) or 0)
@@ -369,6 +373,7 @@ class SpotLiquidityResponseAnalyzer:
 
     def _advance(self, now_ms, snapshot=None):
         keep = deque(maxlen=self.pending.maxlen)
+        completed = []
         for tracker in self.pending:
             elapsed = int(now_ms) - tracker["start_ms"]
             if snapshot is not None:
@@ -382,17 +387,20 @@ class SpotLiquidityResponseAnalyzer:
                     horizon in tracker["responses"]
                     for horizon in SPOT_HORIZONS_MS
                 )
-                self._emit(
-                    tracker, now_ms, complete,
-                    "COMPLETE" if complete else "DEPTH_RESPONSE_INCOMPLETE",
-                )
+                completed.append((tracker, complete))
             else:
                 keep.append(tracker)
         self.pending = keep
+        # Detach completed trackers before callbacks can emit another record.
+        for tracker, complete in completed:
+            self._emit(
+                tracker, now_ms, complete,
+                "COMPLETE" if complete else "DEPTH_RESPONSE_INCOMPLETE",
+            )
 
     def observe(self, record):
         stream = str(record.get("stream") or "")
-        if stream == "spot_liquidity_response":
+        if stream in ("spot_liquidity_response", "liquidity_response"):
             return
         now_ms = int(record.get("receive_time_ms", 0) or 0)
         if now_ms <= 0:
@@ -407,7 +415,6 @@ class SpotLiquidityResponseAnalyzer:
             self._advance(now_ms, snapshot)
             return
 
-        self._advance(now_ms, None)
         if stream != "binance_spot_trade_100ms" or self.book is None:
             return
         buy = _f(payload.get("buy_qty"))

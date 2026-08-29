@@ -43,7 +43,8 @@ class BinanceRecorder:
     def emit(
         self, stream, payload, event_time_ms=None,
         sequence_start=None, sequence_end=None, previous_sequence=None,
-        source=None, feed_features=True, receive_time_ms=None,
+        source=None, feed_features=True, feed_research=True,
+        receive_time_ms=None,
     ):
         receive_time_ms = int(receive_time_ms or self.now_ms())
         event_time_ms = int(event_time_ms or receive_time_ms)
@@ -73,13 +74,16 @@ class BinanceRecorder:
                 self.feature_engine.observe_depth_diff(record)
             else:
                 self.feature_engine.process(record)
-        if published and self.decision_outcome_tracker is not None:
+        if (
+            published and feed_research
+            and self.decision_outcome_tracker is not None
+        ):
             try:
                 self.decision_outcome_tracker.observe(record)
             except Exception as exc:
                 # Outcome research must never interrupt raw market recording.
                 self.health.error('decision_outcomes', exc)
-        if published and self.wavefront_evaluator is not None:
+        if published and feed_research and self.wavefront_evaluator is not None:
             try:
                 self.wavefront_evaluator.observe(record)
                 if receive_time_ms - self._wavefront_health_at_ms >= 5_000:
@@ -88,7 +92,10 @@ class BinanceRecorder:
             except Exception as exc:
                 # Wavefront is research-only and must never interrupt raw WAL.
                 self.health.error('wavefront_shadow', exc)
-        if published and self.liquidity_response_analyzer is not None:
+        if (
+            published and feed_research
+            and self.liquidity_response_analyzer is not None
+        ):
             try:
                 self.liquidity_response_analyzer.observe(record)
                 if receive_time_ms - self._liquidity_health_at_ms >= 5_000:
@@ -98,7 +105,10 @@ class BinanceRecorder:
                     self._liquidity_health_at_ms = receive_time_ms
             except Exception as exc:
                 self.health.error('liquidity_response', exc)
-        if published and self.spot_liquidity_response_analyzer is not None:
+        if (
+            published and feed_research
+            and self.spot_liquidity_response_analyzer is not None
+        ):
             try:
                 self.spot_liquidity_response_analyzer.observe(record)
             except Exception as exc:

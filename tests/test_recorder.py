@@ -138,6 +138,45 @@ class CashRecorderTests(unittest.TestCase):
         self.assertIn("elif message_type == 'ticker'", text)
         self.assertIn("'coinbase_spot_ticker'", text)
 
+    def test_derived_research_record_is_not_fed_back_into_analyzers(self):
+        published = []
+
+        class Store:
+            @staticmethod
+            def publish(record):
+                published.append(record)
+                return True
+
+        class Probe:
+            def __init__(self):
+                self.records = []
+
+            def observe(self, record):
+                self.records.append(record)
+
+            @staticmethod
+            def summary():
+                return {}
+
+        config = RecorderConfig()
+        recorder = BinanceRecorder(config, Store(), HealthState(config))
+        probes = [Probe() for _ in range(4)]
+        recorder.decision_outcome_tracker = probes[0]
+        recorder.wavefront_evaluator = probes[1]
+        recorder.liquidity_response_analyzer = probes[2]
+        recorder.spot_liquidity_response_analyzer = probes[3]
+        recorder.emit(
+            'binance_spot_trade_100ms', {'buy_qty': 1, 'sell_qty': 0},
+            event_time_ms=1_000, receive_time_ms=1_001,
+        )
+        recorder.emit(
+            'spot_liquidity_response', {'authority': False},
+            event_time_ms=1_500, receive_time_ms=1_501,
+            feed_features=False, feed_research=False,
+        )
+        self.assertEqual(len(published), 2)
+        self.assertTrue(all(len(probe.records) == 1 for probe in probes))
+
     def test_coinbase_trade_and_ticker_coexist_with_valid_wal_timestamps(self):
         published = []
         sent = []
@@ -360,6 +399,46 @@ class CashRecorderTests(unittest.TestCase):
             payload['responses']['500']['signed_microprice_response_bps'],
             payload['responses']['50']['signed_microprice_response_bps'],
         )
+
+    def test_spot_response_waits_for_depth_and_emits_tracker_once(self):
+        rows = []
+        analyzer = SpotLiquidityResponseAnalyzer(
+            lambda stream, payload, event_time_ms=None: rows.append(payload)
+        )
+        analyzer.observe({
+            'stream': 'binance_spot_depth5', 'receive_time_ms': 10_000,
+            'payload': {'bids': [['99', '2']], 'asks': [['101', '2']]},
+        })
+        analyzer.observe({
+            'stream': 'binance_spot_trade_100ms', 'receive_time_ms': 10_100,
+            'payload': {
+                'buy_qty': 2, 'sell_qty': 0, 'first_trade_id': 1,
+                'last_trade_id': 1, 'last_event_time_ms': 10_090,
+            },
+        })
+        # Unrelated research/market rows must neither age nor finalize Spot L2.
+        analyzer.observe({
+            'stream': 'liquidity_response', 'receive_time_ms': 10_700,
+            'payload': {'authority': False},
+        })
+        analyzer.observe({
+            'stream': 'mark_price', 'receive_time_ms': 10_800,
+            'payload': {},
+        })
+        self.assertEqual(rows, [])
+        analyzer.observe({
+            'stream': 'binance_spot_depth5', 'receive_time_ms': 10_800,
+            'payload': {'bids': [['100', '2']], 'asks': [['102', '1']]},
+        })
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]['valid'])
+        self.assertEqual(rows[0]['reason'], 'COMPLETE')
+        self.assertTrue(all(rows[0]['responses'].values()))
+        analyzer.observe({
+            'stream': 'binance_spot_depth5', 'receive_time_ms': 10_900,
+            'payload': {'bids': [['100', '2']], 'asks': [['102', '1']]},
+        })
+        self.assertEqual(len(rows), 1)
 
     def test_coinbase_timestamp_falls_back_without_regression(self):
         self.assertEqual(
