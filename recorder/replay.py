@@ -19,7 +19,9 @@ import pyarrow.parquet as pq
 
 from recorder.depth import DepthGap, LocalOrderBook
 from recorder.wavefront import WavefrontShadowEvaluator
-from recorder.liquidity_response import LiquidityResponseAnalyzer
+from recorder.liquidity_response import (
+    LiquidityResponseAnalyzer, SpotLiquidityResponseAnalyzer,
+)
 
 
 DEFAULT_DATA_ROOT = Path('/home/ubuntu/smc2026_data')
@@ -34,7 +36,7 @@ DEFAULT_STREAMS = {
     'coinbase_spot_trade_100ms', 'coinbase_spot_ticker',
     'wavefront_candidate', 'wavefront_virtual_entry',
     'wavefront_virtual_exit', 'residual_edge_report', 'liquidity_response',
-    'precursor_continuity',
+    'precursor_continuity', 'spot_liquidity_response',
 }
 
 
@@ -228,6 +230,9 @@ class DeterministicReplay:
             ) if canonical_mirror else None
         )
         self.liquidity_response = LiquidityResponseAnalyzer(self._emit_wavefront)
+        self.spot_liquidity_response = SpotLiquidityResponseAnalyzer(
+            self._emit_wavefront
+        )
 
     def _emit_wavefront(self, stream, payload, event_time_ms=None):
         self.wavefront_records.append({
@@ -433,6 +438,7 @@ class DeterministicReplay:
         if self.canonical_mirror is not None:
             self.canonical_mirror.observe(record)
         self.liquidity_response.observe(record)
+        self.spot_liquidity_response.observe(record)
 
     def run(self, records):
         for record in records:
@@ -477,6 +483,7 @@ class DeterministicReplay:
                 self.canonical_mirror_records
             ),
             'liquidity_response': self.liquidity_response.summary(),
+            'spot_liquidity_response': self.spot_liquidity_response.summary(),
         }
 
 

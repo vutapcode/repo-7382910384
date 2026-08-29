@@ -19,6 +19,7 @@ from recorder.depth import DepthGap, LocalOrderBook
 from recorder.decision_tap import DecisionTap, compact_cycles_delta
 from recorder.features import FeatureEngine
 from recorder.health import HealthState
+from recorder.liquidity_response import SpotLiquidityResponseAnalyzer
 from recorder.replay import DeterministicReplay, iter_merged_records
 from recorder.storage import (
     AppendOnlyStore, compact_wal, cpu_allows_compaction,
@@ -252,6 +253,113 @@ class CashRecorderTests(unittest.TestCase):
         self.assertIsNone(batcher.flush_due(2_099))
         self.assertEqual(batcher.flush_due(2_100)['sell_qty'], 1.0)
         self.assertIsNone(batcher.flush_due(2_200))
+
+    def test_futures_q_nq_is_recorded_without_fabricating_missing_nq(self):
+        batcher = CashTradeBatcher(100, track_nq=True)
+        batcher.push(
+            receive_time_ms=3_001, event_time_ms=3_000, trade_id=30,
+            price=100, qty=2, non_rpi_qty=1.25, aggressive_buy=True,
+        )
+        measured = batcher.flush()
+        self.assertEqual(measured['quantity_q'], 2.0)
+        self.assertEqual(measured['non_rpi_quantity_nq'], 1.25)
+        self.assertEqual(measured['q_minus_nq'], 0.75)
+        self.assertEqual(measured['nq_coverage'], 1.0)
+        self.assertFalse(measured['rpi_flow_research_authority'])
+
+        batcher.push(
+            receive_time_ms=3_101, event_time_ms=3_100, trade_id=31,
+            price=100, qty=2, aggressive_buy=False,
+        )
+        unknown = batcher.flush()
+        self.assertIsNone(unknown['non_rpi_quantity_nq'])
+        self.assertIsNone(unknown['q_minus_nq'])
+        self.assertEqual(unknown['nq_coverage'], 0.0)
+
+    def test_cash_batch_uses_receive_time_for_freshness(self):
+        rows = []
+
+        class Store:
+            @staticmethod
+            def publish(record):
+                rows.append(record)
+                return True
+
+        config = RecorderConfig()
+        recorder = BinanceRecorder(config, Store(), HealthState(config))
+        with mock.patch.object(recorder, 'now_ms', return_value=4_105):
+            recorder._emit_cash_batch(
+                'binance_spot_trade_100ms', 'binance_spot', {
+                    'bucket_end_ms': 4_099,
+                    'first_trade_id': 40, 'last_trade_id': 40,
+                    'last_event_time_ms': 4_020,
+                    'buy_qty': 1.0, 'sell_qty': 0.0,
+                }, None,
+            )
+        payload = rows[0]['payload']
+        self.assertEqual(rows[0]['receive_time_ms'], 4_105)
+        self.assertEqual(payload['bucket_close_ms'], 4_099)
+        self.assertEqual(payload['batch_available_time_ms'], 4_105)
+        self.assertEqual(payload['freshness_time_basis'], 'RECEIVE_TIME')
+        self.assertEqual(
+            payload['causal_order_time_basis'],
+            'CORRECTED_EVENT_TIME_WITH_UNCERTAINTY',
+        )
+        self.assertGreaterEqual(payload['clock_uncertainty_ms'], 5.0)
+
+    def test_spot_depth_response_is_event_conditioned_and_non_authority(self):
+        rows = []
+        analyzer = SpotLiquidityResponseAnalyzer(
+            lambda stream, payload, event_time_ms=None: rows.append(
+                (stream, payload, event_time_ms)
+            )
+        )
+
+        def depth(at_ms, bid='99', bid_qty='5', ask='101', ask_qty='4'):
+            analyzer.observe({
+                'stream': 'binance_spot_depth5',
+                'receive_time_ms': at_ms,
+                'payload': {
+                    'bids': [[bid, bid_qty], ['98', '2']],
+                    'asks': [[ask, ask_qty], ['102', '3']],
+                },
+            })
+
+        depth(5_000)
+        # A static depth update cannot produce a liquidity claim by itself.
+        depth(5_050, bid='99.2', ask='100.8')
+        self.assertEqual(rows, [])
+        analyzer.observe({
+            'stream': 'binance_spot_trade_100ms',
+            'receive_time_ms': 5_100,
+            'payload': {
+                'buy_qty': 2.0, 'sell_qty': 0.25,
+                'first_trade_id': 50, 'last_trade_id': 51,
+                'last_event_time_ms': 5_080,
+                'corrected_event_time_ms': 5_095.0,
+                'clock_uncertainty_ms': 25.0, 'clock_valid': True,
+            },
+        })
+        depth(5_150, bid='99.3', bid_qty='5.5', ask='100.9', ask_qty='3')
+        depth(5_200, bid='99.4', bid_qty='6', ask='101', ask_qty='2.5')
+        depth(5_350, bid='99.5', bid_qty='6', ask='101.1', ask_qty='2')
+        depth(5_600, bid='99.6', bid_qty='6', ask='101.2', ask_qty='1.5')
+        self.assertEqual(len(rows), 1)
+        stream, payload, _ = rows[0]
+        self.assertEqual(stream, 'spot_liquidity_response')
+        self.assertFalse(payload['authority'])
+        self.assertFalse(payload['eligible_for_live_gate'])
+        self.assertFalse(payload['static_imbalance_authority'])
+        self.assertEqual(
+            set(payload['responses']), {'50', '100', '250', '500'}
+        )
+        self.assertEqual(
+            payload['freshness_time_basis'], 'RECEIVE_TIME'
+        )
+        self.assertGreater(
+            payload['responses']['500']['signed_microprice_response_bps'],
+            payload['responses']['50']['signed_microprice_response_bps'],
+        )
 
     def test_coinbase_timestamp_falls_back_without_regression(self):
         self.assertEqual(

@@ -14,6 +14,8 @@ from recorder.depth import DepthGap, LocalOrderBook
 
 VERSION = "LIQUIDITY_RESPONSE_RESEARCH_V3"
 HORIZONS_MS = (250, 1_000, 3_000)
+SPOT_VERSION = "SPOT_LIQUIDITY_RESPONSE_RESEARCH_V1"
+SPOT_HORIZONS_MS = (50, 100, 250, 500)
 
 
 def _f(value, default=0.0):
@@ -223,4 +225,226 @@ class LiquidityResponseAnalyzer:
             "version": VERSION, "authority": False,
             "completed": self.completed, "invalid": self.invalid,
             "pending": len(self.pending), "eligible_for_live_gate": False,
+        }
+
+
+class SpotLiquidityResponseAnalyzer:
+    """Event-conditioned Spot top-5 response without raw-depth WAL volume.
+
+    Every top-5 update is consumed in memory.  Only an immutable derived row is
+    stored after an executed-flow impulse, so the recorder preserves queue,
+    microprice and spread response while remaining bounded and non-authoritative.
+    """
+
+    def __init__(self, emit, max_pending=64):
+        self.emit = emit
+        self.pending = deque(maxlen=max(1, int(max_pending)))
+        self.book = None
+        self.completed = 0
+        self.invalid = 0
+
+    @staticmethod
+    def _levels(rows):
+        result = []
+        for row in list(rows or [])[:5]:
+            if not isinstance(row, (list, tuple)) or len(row) < 2:
+                continue
+            price, qty = _f(row[0]), _f(row[1])
+            if price > 0.0 and qty >= 0.0:
+                result.append((price, qty))
+        return result
+
+    @classmethod
+    def _snapshot(cls, payload):
+        bids = cls._levels(payload.get("bids"))
+        asks = cls._levels(payload.get("asks"))
+        if not bids or not asks:
+            return None
+        bid, bid_qty = bids[0]
+        ask, ask_qty = asks[0]
+        if ask < bid:
+            return None
+        mid = (bid + ask) / 2.0
+        qty_sum = bid_qty + ask_qty
+        microprice = (
+            (ask * bid_qty + bid * ask_qty) / qty_sum
+            if qty_sum > 0.0 else mid
+        )
+        return {
+            "bids": bids, "asks": asks,
+            "bid": bid, "ask": ask,
+            "mid": mid, "microprice": microprice,
+            "spread_bps": (
+                (ask - bid) / mid * 10_000.0 if mid > 0.0 else 0.0
+            ),
+            "bid_queue_qty": sum(qty for _, qty in bids),
+            "ask_queue_qty": sum(qty for _, qty in asks),
+            "static_imbalance": (
+                (sum(qty for _, qty in bids) - sum(qty for _, qty in asks))
+                / max(
+                    1e-12,
+                    sum(qty for _, qty in bids) + sum(qty for _, qty in asks),
+                )
+            ),
+        }
+
+    @staticmethod
+    def _response(before, after, side, observed_at_ms):
+        direction = 1.0 if side == "LONG" else -1.0
+        pre_mid = _f(before.get("mid"))
+        pre_micro = _f(before.get("microprice"))
+        opposite_key = "ask_queue_qty" if side == "LONG" else "bid_queue_qty"
+        same_key = "bid_queue_qty" if side == "LONG" else "ask_queue_qty"
+        pre_opposite = _f(before.get(opposite_key))
+        pre_same = _f(before.get(same_key))
+        return {
+            "observed_at_ms": int(observed_at_ms),
+            "signed_mid_response_bps": round(
+                direction * (_f(after.get("mid")) - pre_mid)
+                / pre_mid * 10_000.0 if pre_mid > 0.0 else 0.0,
+                6,
+            ),
+            "signed_microprice_response_bps": round(
+                direction * (_f(after.get("microprice")) - pre_micro)
+                / pre_micro * 10_000.0 if pre_micro > 0.0 else 0.0,
+                6,
+            ),
+            "opposite_queue_change_qty": round(
+                _f(after.get(opposite_key)) - pre_opposite, 9
+            ),
+            "same_side_queue_change_qty": round(
+                _f(after.get(same_key)) - pre_same, 9
+            ),
+            "spread_change_bps": round(
+                _f(after.get("spread_bps")) - _f(before.get("spread_bps")),
+                6,
+            ),
+        }
+
+    def _emit(self, tracker, now_ms, valid=True, reason="COMPLETE"):
+        payload = {
+            "schema_version": "WSTRADE_RECORDER_RESEARCH_V3",
+            "version": SPOT_VERSION,
+            "authority": False,
+            "eligible_for_live_gate": False,
+            "valid": bool(valid),
+            "reason": reason,
+            "causal_episode_id": tracker["causal_episode_id"],
+            "side": tracker["side"],
+            "impulse_receive_time_ms": tracker["start_ms"],
+            "impulse_event_time_ms": tracker.get("event_time_ms"),
+            "corrected_event_time_ms": tracker.get("corrected_event_time_ms"),
+            "clock_uncertainty_ms": tracker.get("clock_uncertainty_ms"),
+            "clock_valid": tracker.get("clock_valid"),
+            "freshness_time_basis": "RECEIVE_TIME",
+            "causal_order_time_basis": (
+                "CORRECTED_EVENT_TIME_WITH_UNCERTAINTY"
+            ),
+            "executed_buy_qty": tracker["buy_qty"],
+            "executed_sell_qty": tracker["sell_qty"],
+            "directional_imbalance": tracker["imbalance"],
+            "pre_event": {
+                key: round(value, 9) if isinstance(value, float) else value
+                for key, value in tracker["before"].items()
+                if key not in ("bids", "asks")
+            },
+            "responses": {
+                str(horizon): tracker["responses"].get(horizon)
+                for horizon in SPOT_HORIZONS_MS
+            },
+            "static_imbalance_authority": False,
+            "depth_without_executed_flow_authority": False,
+            "mechanism_status": "RESEARCH_HYPOTHESIS_ONLY",
+        }
+        self.emit("spot_liquidity_response", payload, event_time_ms=int(now_ms))
+        if valid:
+            self.completed += 1
+        else:
+            self.invalid += 1
+
+    def reset(self, now_ms, reason="SPOT_DEPTH_EPOCH_RESET"):
+        while self.pending:
+            self._emit(self.pending.popleft(), now_ms, False, reason)
+        self.book = None
+
+    def _advance(self, now_ms, snapshot=None):
+        keep = deque(maxlen=self.pending.maxlen)
+        for tracker in self.pending:
+            elapsed = int(now_ms) - tracker["start_ms"]
+            if snapshot is not None:
+                for horizon in SPOT_HORIZONS_MS:
+                    if elapsed >= horizon and horizon not in tracker["responses"]:
+                        tracker["responses"][horizon] = self._response(
+                            tracker["before"], snapshot, tracker["side"], now_ms
+                        )
+            if elapsed >= SPOT_HORIZONS_MS[-1]:
+                complete = all(
+                    horizon in tracker["responses"]
+                    for horizon in SPOT_HORIZONS_MS
+                )
+                self._emit(
+                    tracker, now_ms, complete,
+                    "COMPLETE" if complete else "DEPTH_RESPONSE_INCOMPLETE",
+                )
+            else:
+                keep.append(tracker)
+        self.pending = keep
+
+    def observe(self, record):
+        stream = str(record.get("stream") or "")
+        if stream == "spot_liquidity_response":
+            return
+        now_ms = int(record.get("receive_time_ms", 0) or 0)
+        if now_ms <= 0:
+            return
+        payload = record.get("payload") or {}
+        if stream == "binance_spot_depth5":
+            snapshot = self._snapshot(payload)
+            if snapshot is None:
+                self.reset(now_ms, "INVALID_SPOT_DEPTH5")
+                return
+            self.book = snapshot
+            self._advance(now_ms, snapshot)
+            return
+
+        self._advance(now_ms, None)
+        if stream != "binance_spot_trade_100ms" or self.book is None:
+            return
+        buy = _f(payload.get("buy_qty"))
+        sell = _f(payload.get("sell_qty"))
+        total = buy + sell
+        if total <= 0.0:
+            return
+        imbalance = (buy - sell) / total
+        if abs(imbalance) < 0.20:
+            return
+        side = "LONG" if imbalance > 0.0 else "SHORT"
+        start_ms = now_ms
+        first_id = payload.get("first_trade_id")
+        last_id = payload.get("last_trade_id")
+        self.pending.append({
+            "causal_episode_id": (
+                f"spot-depth:{side}:{start_ms}:{first_id}:{last_id}"
+            ),
+            "start_ms": start_ms,
+            "event_time_ms": payload.get("last_event_time_ms"),
+            "corrected_event_time_ms": payload.get("corrected_event_time_ms"),
+            "clock_uncertainty_ms": payload.get("clock_uncertainty_ms"),
+            "clock_valid": payload.get("clock_valid"),
+            "side": side,
+            "buy_qty": buy,
+            "sell_qty": sell,
+            "imbalance": round(imbalance, 6),
+            "before": dict(self.book),
+            "responses": {},
+        })
+
+    def summary(self):
+        return {
+            "version": SPOT_VERSION,
+            "authority": False,
+            "completed": self.completed,
+            "invalid": self.invalid,
+            "pending": len(self.pending),
+            "eligible_for_live_gate": False,
         }

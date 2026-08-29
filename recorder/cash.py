@@ -3,6 +3,57 @@
 from datetime import datetime, timezone
 
 
+class CausalClockEstimator:
+    """Bounded exchange-clock correction for recorder research metadata.
+
+    Receive time remains the freshness/no-lookahead clock.  Corrected event
+    time is only an ordering estimate and is always accompanied by uncertainty.
+    """
+
+    __slots__ = (
+        "samples", "base_delay_ms", "jitter_ms", "last_corrected_ms",
+    )
+
+    def __init__(self):
+        self.samples = 0
+        self.base_delay_ms = 0.0
+        self.jitter_ms = 0.0
+        self.last_corrected_ms = 0.0
+
+    def observe(self, event_time_ms, receive_time_ms):
+        event_ms = float(event_time_ms or receive_time_ms)
+        receive_ms = float(receive_time_ms)
+        delay = receive_ms - event_ms
+        if self.samples == 0:
+            self.base_delay_ms = delay
+            self.jitter_ms = 5.0
+        else:
+            self.base_delay_ms = min(delay, self.base_delay_ms + 0.05)
+            residual = abs(delay - self.base_delay_ms)
+            self.jitter_ms += 0.05 * (residual - self.jitter_ms)
+        corrected = event_ms + self.base_delay_ms
+        valid = bool(
+            corrected + 50.0 >= self.last_corrected_ms
+            and event_ms <= receive_ms + 1_000.0
+        )
+        self.last_corrected_ms = max(self.last_corrected_ms, corrected)
+        self.samples += 1
+        uncertainty = (
+            250.0 if self.samples < 5
+            else max(5.0, min(250.0, 3.0 * self.jitter_ms))
+        )
+        return {
+            "freshness_time_basis": "RECEIVE_TIME",
+            "causal_order_time_basis": (
+                "CORRECTED_EVENT_TIME_WITH_UNCERTAINTY"
+            ),
+            "corrected_event_time_ms": round(self.last_corrected_ms, 4),
+            "clock_uncertainty_ms": round(uncertainty, 4),
+            "clock_valid": valid,
+            "receive_minus_event_ms": round(delay, 4),
+        }
+
+
 def coinbase_time_ms(value, fallback_ms):
     """Parse Coinbase ISO-8601 timestamps without making receipt time causal."""
     text = str(value or "").strip()
@@ -33,11 +84,13 @@ class CashTradeBatcher:
         "batch_ms", "bucket_start_ms", "trade_count", "buy_qty", "sell_qty",
         "buy_quote", "sell_quote", "first_price", "last_price", "high", "low",
         "first_trade_id", "last_trade_id", "first_event_time_ms",
-        "last_event_time_ms",
+        "last_event_time_ms", "quantity_q", "non_rpi_quantity_nq",
+        "nq_observation_count", "track_nq",
     )
 
-    def __init__(self, batch_ms=100):
+    def __init__(self, batch_ms=100, track_nq=False):
         self.batch_ms = max(25, int(batch_ms))
+        self.track_nq = bool(track_nq)
         self._clear()
 
     def _clear(self):
@@ -55,11 +108,15 @@ class CashTradeBatcher:
         self.last_trade_id = None
         self.first_event_time_ms = None
         self.last_event_time_ms = None
+        self.quantity_q = 0.0
+        self.non_rpi_quantity_nq = 0.0
+        self.nq_observation_count = 0
 
     def _snapshot(self):
         if self.trade_count <= 0:
             return None
-        return {
+        nq_complete = self.nq_observation_count == self.trade_count
+        payload = {
             "bucket_start_ms": self.bucket_start_ms,
             "bucket_end_ms": self.bucket_start_ms + self.batch_ms - 1,
             "batch_ms": self.batch_ms,
@@ -78,6 +135,26 @@ class CashTradeBatcher:
             "first_event_time_ms": self.first_event_time_ms,
             "last_event_time_ms": self.last_event_time_ms,
         }
+        if self.track_nq:
+            # Binance USD-M currently exposes q and nq on aggTrade.  Other
+            # venues omit nq; never manufacture q-nq from an absent field.
+            payload.update({
+                "quantity_q": self.quantity_q,
+                "non_rpi_quantity_nq": (
+                    self.non_rpi_quantity_nq if nq_complete else None
+                ),
+                "q_minus_nq": (
+                    self.quantity_q - self.non_rpi_quantity_nq
+                    if nq_complete else None
+                ),
+                "nq_observation_count": self.nq_observation_count,
+                "nq_coverage": (
+                    self.nq_observation_count / self.trade_count
+                    if self.trade_count else 0.0
+                ),
+                "rpi_flow_research_authority": False,
+            })
+        return payload
 
     def flush(self):
         payload = self._snapshot()
@@ -94,7 +171,7 @@ class CashTradeBatcher:
 
     def push(
         self, *, receive_time_ms, event_time_ms, trade_id, price, qty,
-        aggressive_buy,
+        aggressive_buy, non_rpi_qty=None,
     ):
         receive_ms = int(receive_time_ms)
         event_ms = int(event_time_ms or receive_ms)
@@ -122,6 +199,15 @@ class CashTradeBatcher:
             self.sell_qty += qty
             self.sell_quote += quote
         self.trade_count += 1
+        self.quantity_q += qty
+        if non_rpi_qty is not None:
+            try:
+                nq = float(non_rpi_qty)
+            except (TypeError, ValueError):
+                nq = -1.0
+            if nq >= 0.0:
+                self.non_rpi_quantity_nq += nq
+                self.nq_observation_count += 1
         self.last_price = price
         self.high = max(self.high, price)
         self.low = min(self.low, price)

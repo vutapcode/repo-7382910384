@@ -1,4 +1,5 @@
 """SMC2026 market black-box recorder."""
 
-# V2 adds immutable code/config identities and derived one-second features.
-SCHEMA_VERSION = 2
+# V3 adds research-only causal clock metadata, Spot top-5 response and
+# optional Binance USD-M q/nq decomposition.  It is a hard cohort boundary.
+SCHEMA_VERSION = 3

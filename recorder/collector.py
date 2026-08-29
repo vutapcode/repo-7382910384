@@ -10,7 +10,8 @@ import websockets
 
 from recorder import SCHEMA_VERSION
 from recorder.cash import (
-    CashTradeBatcher, coinbase_time_ms, is_coinbase_live_match,
+    CashTradeBatcher, CausalClockEstimator, coinbase_time_ms,
+    is_coinbase_live_match,
 )
 from recorder.depth import DepthGap, LocalOrderBook
 
@@ -30,6 +31,8 @@ class BinanceRecorder:
         self.decision_outcome_tracker = None
         self.wavefront_evaluator = None
         self.liquidity_response_analyzer = None
+        self.spot_liquidity_response_analyzer = None
+        self._causal_clocks = {}
         self._wavefront_health_at_ms = 0
         self._liquidity_health_at_ms = 0
 
@@ -95,6 +98,11 @@ class BinanceRecorder:
                     self._liquidity_health_at_ms = receive_time_ms
             except Exception as exc:
                 self.health.error('liquidity_response', exc)
+        if published and self.spot_liquidity_response_analyzer is not None:
+            try:
+                self.spot_liquidity_response_analyzer.observe(record)
+            except Exception as exc:
+                self.health.error('spot_liquidity_response', exc)
         return published
 
     def _emit_cash_batch(
@@ -102,6 +110,15 @@ class BinanceRecorder:
     ):
         if not batch:
             return previous_sequence
+        batch = dict(batch)
+        # The batch becomes observable only when this function runs.  Preserve
+        # the logical bucket close separately; never backdate freshness to it.
+        receive_ms = int(self.now_ms())
+        batch['bucket_close_ms'] = batch.get('bucket_end_ms')
+        batch['batch_available_time_ms'] = receive_ms
+        event_ms = int(batch.get('last_event_time_ms') or receive_ms)
+        clock = self._causal_clocks.setdefault(source, CausalClockEstimator())
+        batch.update(clock.observe(event_ms, receive_ms))
         first_id = batch.get('first_trade_id')
         last_id = batch.get('last_trade_id')
         if (
@@ -125,7 +142,7 @@ class BinanceRecorder:
             previous_sequence=previous_sequence,
             source=source,
             feed_features=feed_features,
-            receive_time_ms=batch.get('bucket_end_ms'),
+            receive_time_ms=receive_ms,
         )
         return int(last_id) if last_id is not None else previous_sequence
 
@@ -246,7 +263,9 @@ class BinanceRecorder:
         name = 'market_ws'
         previous_trade_id = None
         while True:
-            batcher = CashTradeBatcher(self.config.cash_batch_ms)
+            batcher = CashTradeBatcher(
+                self.config.cash_batch_ms, track_nq=True
+            )
             try:
                 async with websockets.connect(
                     self.config.market_stream_url,
@@ -288,6 +307,9 @@ class BinanceRecorder:
                                 price=data.get('p', 0.0),
                                 qty=data.get('q', 0.0),
                                 aggressive_buy=not bool(data.get('m')),
+                                non_rpi_qty=(
+                                    data.get('nq') if 'nq' in data else None
+                                ),
                             )
                             previous_trade_id = self._emit_cash_batch(
                                 'futures_trade_100ms', 'binance_usdm',
@@ -345,6 +367,10 @@ class BinanceRecorder:
                     max_queue=4096,
                 ) as ws:
                     self.health.connection(name, True)
+                    if self.spot_liquidity_response_analyzer is not None:
+                        self.spot_liquidity_response_analyzer.reset(
+                            self.now_ms(), 'SPOT_DEPTH_EPOCH_RESET'
+                        )
                     while True:
                         try:
                             raw = await asyncio.wait_for(
@@ -378,26 +404,46 @@ class BinanceRecorder:
                                 'binance_spot_trade_100ms', 'binance_spot',
                                 completed, previous_trade_id,
                             )
-                        elif stream_name.endswith('@depth5@100ms') and (
-                            receive_ms - last_ticker_ms
-                            >= int(self.config.cash_ticker_interval * 1000)
-                        ):
+                        elif stream_name.endswith('@depth5@100ms'):
                             bids = data.get('bids', []) or []
                             asks = data.get('asks', []) or []
                             if not bids or not asks:
                                 continue
-                            self.emit(
-                                'binance_spot_ticker', {
-                                    'bid': bids[0][0], 'bid_qty': bids[0][1],
-                                    'ask': asks[0][0], 'ask_qty': asks[0][1],
-                                    'update_id': data.get('lastUpdateId'),
-                                },
-                                event_time_ms=receive_ms,
-                                source='binance_spot', feed_features=True,
-                            )
-                            last_ticker_ms = receive_ms
-                        elif stream_name.endswith('@depth5@100ms'):
-                            self.health.sampled_out['binance_spot_ticker'] += 1
+                            if self.spot_liquidity_response_analyzer is not None:
+                                # Consume every top-5 replacement in memory;
+                                # store only event-conditioned derived response.
+                                self.spot_liquidity_response_analyzer.observe({
+                                    'stream': 'binance_spot_depth5',
+                                    'event_time_ms': int(
+                                        data.get('E', receive_ms) or receive_ms
+                                    ),
+                                    'receive_time_ms': receive_ms,
+                                    'payload': {
+                                        'bids': bids, 'asks': asks,
+                                        'lastUpdateId': data.get('lastUpdateId'),
+                                    },
+                                })
+                            if (
+                                receive_ms - last_ticker_ms
+                                >= int(self.config.cash_ticker_interval * 1000)
+                            ):
+                                self.emit(
+                                    'binance_spot_ticker', {
+                                        'bid': bids[0][0], 'bid_qty': bids[0][1],
+                                        'ask': asks[0][0], 'ask_qty': asks[0][1],
+                                        'update_id': data.get('lastUpdateId'),
+                                    },
+                                    event_time_ms=int(
+                                        data.get('E', receive_ms) or receive_ms
+                                    ),
+                                    receive_time_ms=receive_ms,
+                                    source='binance_spot', feed_features=True,
+                                )
+                                last_ticker_ms = receive_ms
+                            else:
+                                self.health.sampled_out[
+                                    'binance_spot_ticker'
+                                ] += 1
             except asyncio.CancelledError:
                 previous_trade_id = self._emit_cash_batch(
                     'binance_spot_trade_100ms', 'binance_spot',
