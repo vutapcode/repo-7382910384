@@ -573,10 +573,10 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         failed.append("WAIT_OI_CLOSING_CONTEXT")
     # Edge metadata is behavior only when the Council actually offered a GO
     # candidate to authorize. On a Council WAIT it is context, not a veto.
-    if would_enter and "FLOW_EFFICIENCY_V3_VETO" in (
+    if would_enter and "FLOW_NONCONVERSION_COMPOSITE_VETO" in (
         thesis_audit.get("blocking_reasons") or ()
     ):
-        failed.append("FLOW_EFFICIENCY_V3_VETO")
+        failed.append("FLOW_NONCONVERSION_COMPOSITE_VETO")
     if would_enter and bool(basis.get("perp_expansion")):
         failed.append("PERP_LED_VETO")
     if would_enter and bool(liquidation.get("tail_veto")):
@@ -597,7 +597,7 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
     # structural residual proxy is zero.  Only a final rejected GO is tagged.
     if (
         would_enter and not quorum_ok
-        and "FLOW_EFFICIENCY_V3_VETO" not in (
+        and "FLOW_NONCONVERSION_COMPOSITE_VETO" not in (
             thesis_audit.get("blocking_reasons") or ()
         )
         and not basis.get("perp_expansion")
@@ -622,7 +622,8 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         "WAIT_PERSISTENT_FLOW_EFFICIENCY",
         "WAIT_PERSISTENT_FLOW_FADING",
         "WAIT_PERSISTENT_REACCELERATION_CONFIRMATION",
-        "FLOW_EFFICIENCY_V3_VETO", "PERP_LED_VETO", "LIQUIDATION_TAIL_VETO",
+        "FLOW_NONCONVERSION_COMPOSITE_VETO", "PERP_LED_VETO",
+        "LIQUIDATION_TAIL_VETO",
         "UNWIND_TAIL_VETO", "EXCHANGE_INDEPENDENCE_FAIL",
         "EMPIRICAL_ALPHA_NOT_READY",
         "EDGE_COST_FAIL",

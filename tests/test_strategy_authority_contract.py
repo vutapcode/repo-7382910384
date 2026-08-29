@@ -80,10 +80,12 @@ class StrategyAuthorityContractTests(unittest.TestCase):
         ):
             self.assertIn(marker, active)
         self.assertIn('_append_event("ENTRY_SKIPPED"', active)
-        self.assertIn('"FLOW_EFFICIENCY_V3_VETO"', active)
+        self.assertIn('"FLOW_NONCONVERSION_COMPOSITE_VETO"', active)
         edge = self.text("loi_he_thong/entry_edge_tier.py")
         self.assertIn("not v5_replay_approved", edge)
-        self.assertIn('hard_vetoes.append("ABSORPTION_VETO")', edge)
+        self.assertIn(
+            'hard_vetoes.append("FLOW_PRICE_NONCONVERSION_VETO")', edge
+        )
         self.assertIn("if would_enter and bool(basis.get", active)
 
     def test_risk_cannot_reintroduce_retired_whale_exit_authority(self):

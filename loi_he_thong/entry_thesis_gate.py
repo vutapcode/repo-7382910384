@@ -8,7 +8,7 @@ market orders are large.
 
 from loi_he_thong import ignition_core
 
-VERSION = "ENTRY_THESIS_GATE_V6_TAKER_FLOW_TIMING"
+VERSION = "ENTRY_THESIS_GATE_V7_OBSERVATION_NEUTRAL"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -122,8 +122,8 @@ def _flow_question(result, ignition, impact):
         MATERIAL_PRICE_BPS, _f((result or {}).get("price_threshold_bps"))
     )
     strong_flow = bool(flow_strength >= FLOW_IMBALANCE)
-    legacy_absorption = bool(
-        (impact or {}).get("absorbed")
+    flow_price_nonconversion = bool(
+        (impact or {}).get("flow_price_nonconversion")
         or (
             strong_flow and rows
             and recent_cash_progress < threshold * 0.70
@@ -155,7 +155,7 @@ def _flow_question(result, ignition, impact):
     )
     primary_continuation = primary_state == "CONTINUING_CONFIRMED"
     composite_veto = bool(
-        primary_state in ("ABSORBED", "EXHAUSTED")
+        primary_state in ("PERSISTENT_NONCONVERSION", "PROGRESS_DECAY")
         and not independent_continuation
     )
     # Episode progress is maturity diagnostics only. It must never authorize
@@ -178,7 +178,7 @@ def _flow_question(result, ignition, impact):
         "marginal_conversion_previous_bps": marginal_previous,
         "material_price_bps": round(threshold, 6),
         "price_impact": dict(impact or {}),
-        "legacy_absorption_observed": legacy_absorption,
+        "flow_price_nonconversion_observed": flow_price_nonconversion,
         "primary_cash_anchor": primary,
         "primary_state": primary_state,
         "other_cash_states": other_states,
@@ -200,13 +200,20 @@ def _flow_question(result, ignition, impact):
 def _liquidity_question(flow_question):
     # The only full depth analyzer runs in the separate recorder process and
     # is authority=false. Never read a stale file or invent an IPC snapshot.
-    absorbed = flow_question.get("status") in ("ABSORBED", "EXHAUSTED")
+    nonconversion = flow_question.get("status") in (
+        "PERSISTENT_NONCONVERSION", "PROGRESS_DECAY"
+    )
     return {
         "question": "LIQUIDITY_ACCEPTS_OR_ABSORBS",
-        "status": "PRICE_FLOW_ABSORPTION" if absorbed else "UNAVAILABLE",
-        "liquidity_response": "RECORDER_RESEARCH_ONLY",
+        "status": "UNOBSERVED",
+        "liquidity_response": "UNOBSERVED",
         "depth_authority": False,
-        "executed_flow_price_proxy": bool(absorbed),
+        "executed_flow_price_nonconversion": bool(nonconversion),
+        "mechanism_hypothesis": (
+            "ABSORPTION_OR_EXHAUSTION_CANDIDATE"
+            if nonconversion else "NONE"
+        ),
+        "mechanism_confirmed": False,
         "policy": "NO_STATIC_WALL_OR_CANCEL_AUTHORITY",
     }
 
@@ -263,7 +270,9 @@ def evaluate(state, result, impact, basis, liquidation):
     q6 = _independence_question(ignition, basis)
     dual_cash = q6["status"] == "DUAL_INDEPENDENT_CASH"
     forced = bool(q2["forced_closing_risk"])
-    exhausted = q3["status"] in ("ABSORBED", "EXHAUSTED")
+    exhausted = q3["status"] in (
+        "PERSISTENT_NONCONVERSION", "PROGRESS_DECAY"
+    )
     mature = q5["status"] == "MATURE"
     liquidation_tail = q2["status"] == "LIQUIDATION_TAIL"
     persistent = str((result or {}).get("entry_mode") or "").upper() == (
@@ -283,7 +292,7 @@ def evaluate(state, result, impact, basis, liquidation):
         forced and (
             liquidation_tail
             or exhausted
-            or q3.get("legacy_absorption_observed")
+            or q3.get("flow_price_nonconversion_observed")
             or (mature and not dual_cash)
         )
     )
@@ -297,7 +306,7 @@ def evaluate(state, result, impact, basis, liquidation):
         getattr(state, "entry_economics_v5_replay_approved", False)
     )
     if replay_approved and q3.get("composite_veto"):
-        blockers.append("FLOW_EFFICIENCY_V3_VETO")
+        blockers.append("FLOW_NONCONVERSION_COMPOSITE_VETO")
     if forced_tail_veto:
         blockers.append("UNWIND_TAIL_VETO")
     # Persistence proves that a causal wave existed; it does not prove that a

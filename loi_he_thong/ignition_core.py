@@ -270,10 +270,10 @@ def _flow_efficiency_snapshot(histories, side, cash_venues, now_ms=None):
                 state = "REACCELERATION_UNCONFIRMED"
                 classification_reason = "ONE_BURST_AFTER_TWO_NON_CONVERTING_WINDOWS"
             elif flow_persists and no_progress and progress_decay_1 and progress_decay_2:
-                state = "EXHAUSTED"
+                state = "PROGRESS_DECAY"
                 classification_reason = "PERSISTENT_FLOW_WITH_PROGRESS_DECAY"
             elif flow_persists and repeated_no_progress:
-                state = "ABSORBED"
+                state = "PERSISTENT_NONCONVERSION"
                 classification_reason = "PERSISTENT_FLOW_WITHOUT_PRICE_PROGRESS"
             elif (progress_decay_2 and efficiency_decay_2) or (
                 progress_decay_1 and efficiency_decay_1
@@ -333,11 +333,17 @@ def flow_efficiency_state(snapshot, primary_cash=None, cash_venues=None):
     primary = str(primary_cash or "").lower()
     if primary not in cash:
         primary = sorted(cash)[0] if cash else None
-    primary_state = str(
+    def primitive(value):
+        return {
+            "ABSORBED": "PERSISTENT_NONCONVERSION",
+            "EXHAUSTED": "PROGRESS_DECAY",
+        }.get(str(value or "UNKNOWN").upper(), str(value or "UNKNOWN").upper())
+
+    primary_state = primitive(
         (venues.get(primary) or {}).get("state") or "UNKNOWN"
-    ).upper()
+    )
     other_states = {
-        name: str((venues.get(name) or {}).get("state") or "UNKNOWN").upper()
+        name: primitive((venues.get(name) or {}).get("state") or "UNKNOWN")
         for name in cash if name != primary
     }
     independent_continuation = any(
@@ -346,7 +352,7 @@ def flow_efficiency_state(snapshot, primary_cash=None, cash_venues=None):
     states = {primary_state, *other_states.values()}
     if primary_state == "CONTINUING_CONFIRMED" or independent_continuation:
         state = "CONTINUING_CONFIRMED"
-    elif primary_state in {"ABSORBED", "EXHAUSTED"}:
+    elif primary_state in {"PERSISTENT_NONCONVERSION", "PROGRESS_DECAY"}:
         state = primary_state
     elif "REACCELERATION_UNCONFIRMED" in states:
         state = "REACCELERATION_UNCONFIRMED"
@@ -955,7 +961,8 @@ def _transition_snapshot(pending, histories, now_ms):
         and acceptance_span_ms <= FOLLOW_MAX_MS
     )
     failure_states = {
-        "FADING", "DECAYING", "ABSORBED", "EXHAUSTED",
+        "FADING", "DECAYING", "PERSISTENT_NONCONVERSION", "PROGRESS_DECAY",
+        "ABSORBED", "EXHAUSTED",
         "REACCELERATION_UNCONFIRMED",
     }
     failure_observations = {}

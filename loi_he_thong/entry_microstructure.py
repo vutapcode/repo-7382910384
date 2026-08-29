@@ -1,6 +1,6 @@
 """Fast RAM-only microstructure validators for Tier-S entry quality."""
 
-VERSION = "ENTRY_MICROSTRUCTURE_V3_CAUSAL_ONLY"
+VERSION = "ENTRY_MICROSTRUCTURE_V4_OBSERVATION_NEUTRAL"
 
 
 def _votes(result):
@@ -27,7 +27,7 @@ def price_impact(result):
     supporters = len(fm.get("supporters") or ())
     cash_impact = max(cash) if cash else 0.0
     flow_strength = sum(flows) / len(flows) if flows else 0.0
-    absorbed = bool(
+    nonconversion = bool(
         supporters >= 2 and flow_strength >= 0.18 and threshold > 0.0
         and cash_impact < threshold * 0.70
     )
@@ -36,11 +36,17 @@ def price_impact(result):
         and flow_strength >= 0.10
     )
     return {
-        "status": "ABSORBED" if absorbed else ("PASS" if efficient else "NEUTRAL"),
+        "status": (
+            "FLOW_PRICE_NONCONVERSION" if nonconversion
+            else "PASS" if efficient else "NEUTRAL"
+        ),
         "cash_impact_bps": round(cash_impact, 4),
         "flow_strength": round(flow_strength, 4),
         "flow_supporters": supporters,
-        "absorbed": absorbed,
+        "flow_price_nonconversion": nonconversion,
+        "liquidity_mechanism": "UNOBSERVED",
+        "absorption_hypothesis": bool(nonconversion),
+        "absorption_confirmed": False,
         "efficient": efficient,
     }
 

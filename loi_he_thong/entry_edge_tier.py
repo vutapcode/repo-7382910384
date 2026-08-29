@@ -72,8 +72,10 @@ def classify(result, state):
     # Preserve baseline demo semantics until a canonical replay explicitly
     # approves V5. Once approved, the persistent cross-cash classifier replaces
     # this single-snapshot legacy veto instead of stacking both vetoes.
-    if candidate and not v5_replay_approved and bool(impact.get("absorbed")):
-        hard_vetoes.append("ABSORPTION_VETO")
+    if candidate and not v5_replay_approved and bool(
+        impact.get("flow_price_nonconversion")
+    ):
+        hard_vetoes.append("FLOW_PRICE_NONCONVERSION_VETO")
     if basis.get("perp_expansion"):
         hard_vetoes.append("PERP_LED_VETO")
 

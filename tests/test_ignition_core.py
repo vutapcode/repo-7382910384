@@ -164,10 +164,10 @@ class IgnitionCoreTests(unittest.TestCase):
             histories, "SHORT", ("binance_spot", "coinbase_spot")
         )
         self.assertEqual(
-            report["venues"]["binance_spot"]["state"], "EXHAUSTED"
+            report["venues"]["binance_spot"]["state"], "PROGRESS_DECAY"
         )
         self.assertEqual(
-            report["venues"]["coinbase_spot"]["state"], "EXHAUSTED"
+            report["venues"]["coinbase_spot"]["state"], "PROGRESS_DECAY"
         )
 
     def test_persistent_sparse_flow_uses_explicit_one_second_fallback(self):
@@ -803,7 +803,7 @@ class IgnitionCoreTests(unittest.TestCase):
         def later_flow(_histories, side, _cash, now_ms=None):
             if side == "SHORT":
                 return {"venues": {"binance_spot": {
-                    "state": "EXHAUSTED", "fresh": True,
+                    "state": "PROGRESS_DECAY", "fresh": True,
                     "observed_end_ms": 3_600,
                 }}}
             return {"venues": {}}
@@ -2230,7 +2230,8 @@ class IgnitionCoreTests(unittest.TestCase):
         }
         from loi_he_thong import entry_microstructure
         impact = entry_microstructure.price_impact(result)
-        self.assertTrue(impact["absorbed"])
+        self.assertTrue(impact["flow_price_nonconversion"])
+        self.assertFalse(impact["absorption_confirmed"])
         self.assertIn("spot", result["s_votes"]["S1_cross_venue_price_acceptance"]["metrics"]["moves"])
 
     def test_perp_lead_veto_applies_after_cash_proposer(self):

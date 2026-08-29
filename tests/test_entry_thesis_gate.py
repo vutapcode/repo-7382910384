@@ -44,7 +44,7 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
                 venue: {
                     "state": (flow_states or {}).get(
                         venue,
-                        "EXHAUSTED" if recent_progress < 0.10
+                        "PROGRESS_DECAY" if recent_progress < 0.10
                         else "CONTINUING_CONFIRMED",
                     )
                 }
@@ -79,7 +79,11 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
     }
 
 
-PASS_IMPACT = {"absorbed": False, "efficient": True, "status": "PASS"}
+PASS_IMPACT = {
+    "flow_price_nonconversion": False,
+    "efficient": True,
+    "status": "PASS",
+}
 PASS_BASIS = {"perp_expansion": False, "status": "CASH_CONFIRMED"}
 NO_LIQUIDATION = {"phase": "QUIET", "burst": False, "decelerating": False}
 
@@ -98,7 +102,7 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertIn("UNWIND_TAIL_VETO", audit["blocking_reasons"])
         self.assertEqual(
             audit["questions"]["q3_flow_efficiency"]["status"],
-            "EXHAUSTED",
+            "PROGRESS_DECAY",
         )
 
     def test_efficient_early_dual_cash_unwind_is_preserved(self):
@@ -120,14 +124,16 @@ class EntryThesisGateTests(unittest.TestCase):
             result(
                 intent="POSITION_BUILD", consumed=0.20,
                 flow_states={
-                    "binance_spot": "ABSORBED",
+                    "binance_spot": "PERSISTENT_NONCONVERSION",
                     "coinbase_spot": "CONTINUING_CONFIRMED",
                 },
             ),
             PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
         )
         self.assertEqual(audit["decision"], "PASS")
-        self.assertNotIn("FLOW_EFFICIENCY_V3_VETO", audit["blocking_reasons"])
+        self.assertNotIn(
+            "FLOW_NONCONVERSION_COMPOSITE_VETO", audit["blocking_reasons"]
+        )
 
     def test_primary_absorption_without_independent_continuation_vetoes(self):
         audit = entry_thesis_gate.evaluate(
@@ -135,14 +141,16 @@ class EntryThesisGateTests(unittest.TestCase):
             result(
                 intent="POSITION_BUILD", consumed=0.20,
                 flow_states={
-                    "binance_spot": "ABSORBED",
+                    "binance_spot": "PERSISTENT_NONCONVERSION",
                     "coinbase_spot": "DECAYING",
                 },
             ),
             PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
         )
         self.assertEqual(audit["decision"], "WAIT")
-        self.assertIn("FLOW_EFFICIENCY_V3_VETO", audit["blocking_reasons"])
+        self.assertIn(
+            "FLOW_NONCONVERSION_COMPOSITE_VETO", audit["blocking_reasons"]
+        )
 
     def test_old_episode_progress_cannot_claim_current_conversion(self):
         candidate = result(
@@ -367,14 +375,16 @@ class EntryThesisGateTests(unittest.TestCase):
             result(
                 intent="POSITION_BUILD", consumed=0.20,
                 flow_states={
-                    "binance_spot": "ABSORBED",
+                    "binance_spot": "PERSISTENT_NONCONVERSION",
                     "coinbase_spot": "DECAYING",
                 },
             ),
             PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
         )
         self.assertEqual(audit["decision"], "PASS")
-        self.assertNotIn("FLOW_EFFICIENCY_V3_VETO", audit["blocking_reasons"])
+        self.assertNotIn(
+            "FLOW_NONCONVERSION_COMPOSITE_VETO", audit["blocking_reasons"]
+        )
 
     def test_position_build_is_not_relabelled_forced_unwind(self):
         audit = entry_thesis_gate.evaluate(
@@ -404,7 +414,9 @@ class EntryThesisGateTests(unittest.TestCase):
         )
         liquidity = audit["questions"]["q4_liquidity"]
         self.assertFalse(liquidity["depth_authority"])
-        self.assertEqual(liquidity["liquidity_response"], "RECORDER_RESEARCH_ONLY")
+        self.assertEqual(liquidity["liquidity_response"], "UNOBSERVED")
+        self.assertEqual(liquidity["status"], "UNOBSERVED")
+        self.assertFalse(liquidity["mechanism_confirmed"])
 
     def test_edge_authority_receives_composite_unwind_veto(self):
         state = SimpleNamespace(
