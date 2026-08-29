@@ -8,8 +8,8 @@ execution cost.  Unknown cohorts remain bootstrap telemetry.
 import math
 
 
-VERSION = "ENTRY_ECONOMICS_V4_PARENT_EXCLUDES_EXACT"
-CONTRACT_VERSION = "ENTRY_ECONOMICS_V4"
+VERSION = "ENTRY_ECONOMICS_V5_OBSERVATION_NEUTRAL"
+CONTRACT_VERSION = "ENTRY_ECONOMICS_V5"
 MAX_ROWS = 1024
 EXACT_MIN = 30
 PARENT_MIN = 50
@@ -219,7 +219,7 @@ def estimate(state, snapshot):
         }
     report = _stats(selected)
     replay_approved = bool(
-        getattr(state, "entry_economics_v4_replay_approved", False)
+        getattr(state, "entry_economics_v5_replay_approved", False)
     )
     report.update({
         "version": VERSION,

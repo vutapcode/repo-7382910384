@@ -1,7 +1,7 @@
 """Tier-S direction estimator only. LONG/SHORT/ABSTAIN; never entry timing."""
 import time
 
-VERSION="BIAS_COUNCIL_V8_REVERSAL_LATCH_TELEMETRY"
+VERSION="BIAS_COUNCIL_V9_OBSERVATION_NEUTRAL"
 LOOKBACK=60.; TRIGGER=15.; CONTEXT=180.; FAST=4.; OI_CONTEXT=300.; HMAX=1536
 SPOT_AGE=3.; CB_AGE=5.; FUT_AGE=5.; OI_AGE=12.
 # OI is causal context, not an entry vote.  The 60-second build floor is kept
@@ -179,11 +179,20 @@ def s2(cur,old,t,oi_fresh,context=None):
   if context_status=="UNWIND":
    return vote(reason="OI_CONTEXT_CONFLICT",regime="OI_CONTEXT_CONFLICT",
                price_pct=p,oi_pct=o,oi_5m_pct=context_oi,oi_context=context_status)
-  ps=C((abs(p)/t-1)/2); os=C((o/MIN_OI-1)/3); reg="NEW_LONG_BUILD" if d=="LONG" else "NEW_SHORT_BUILD"
-  return vote(d,.56+.20*ps+.20*os,reg,regime=reg,price_pct=p,oi_pct=o,
-              oi_5m_pct=context_oi,oi_context=context_status)
- if o<=-MIN_OI and d=="LONG":return vote(reason="SHORT_COVERING",regime="SHORT_COVERING",price_pct=p,oi_pct=o,oi_5m_pct=context_oi,oi_context=context_status)
- if o<=-MIN_OI and d=="SHORT":return vote(reason="LONG_LIQUIDATION_CLOSING",regime="LONG_LIQUIDATION_CLOSING",price_pct=p,oi_pct=o,oi_5m_pct=context_oi,oi_context=context_status)
+  ps=C((abs(p)/t-1)/2); os=C((o/MIN_OI-1)/3)
+  reg="PRICE_UP_OI_EXPANSION" if d=="LONG" else "PRICE_DOWN_OI_EXPANSION"
+  hypothesis="NEW_LONG_POSITIONING_CANDIDATE" if d=="LONG" else "NEW_SHORT_POSITIONING_CANDIDATE"
+  return vote(d,.56+.20*ps+.20*os,reg,regime=reg,
+              mechanism_hypothesis=hypothesis,mechanism_confirmed=False,
+              price_pct=p,oi_pct=o,oi_5m_pct=context_oi,oi_context=context_status)
+ if o<=-MIN_OI and d=="LONG":
+  return vote(reason="PRICE_UP_OI_CONTRACTION",regime="PRICE_UP_OI_CONTRACTION",
+              mechanism_hypothesis="SHORT_COVERING_CANDIDATE",mechanism_confirmed=False,
+              price_pct=p,oi_pct=o,oi_5m_pct=context_oi,oi_context=context_status)
+ if o<=-MIN_OI and d=="SHORT":
+  return vote(reason="PRICE_DOWN_OI_CONTRACTION",regime="PRICE_DOWN_OI_CONTRACTION",
+              mechanism_hypothesis="LONG_CLOSING_OR_LIQUIDATION_CANDIDATE",mechanism_confirmed=False,
+              price_pct=p,oi_pct=o,oi_5m_pct=context_oi,oi_context=context_status)
  return vote(reason="NO_NEW_POSITION_BUILD",regime="NEUTRAL",price_pct=p,oi_pct=o,oi_5m_pct=context_oi,oi_context=context_status)
 
 def flow_imb(s,now,fut=False):
@@ -237,12 +246,12 @@ def s3(s,now):
 def story(sv):
  p,o,f=(sv[k]["vote"] for k in ("S1_cross_price","S2_price_x_oi","S3_multi_flow"))
  reg=(sv["S2_price_x_oi"].get("metrics") or {}).get("regime","NEUTRAL")
- if p==o==f=="LONG":return "NEW_LONG_BUILD_CONFIRMED","LONG",.08,False
- if p==o==f=="SHORT":return "NEW_SHORT_BUILD_CONFIRMED","SHORT",.08,False
- if reg=="SHORT_COVERING":
-  return ("SHORT_COVERING_WITH_BUY_FLOW","LONG",-.10,False) if p==f=="LONG" else ("SHORT_COVERING_UNCONFIRMED","ABSTAIN",-.12,True)
- if reg=="LONG_LIQUIDATION_CLOSING":
-  return ("LONG_LIQUIDATION_WITH_SELL_FLOW","SHORT",-.10,False) if p==f=="SHORT" else ("LONG_LIQUIDATION_UNCONFIRMED","ABSTAIN",-.12,True)
+ if p==o==f=="LONG":return "UP_PRICE_OI_EXPANSION_WITH_BUY_FLOW","LONG",.08,False
+ if p==o==f=="SHORT":return "DOWN_PRICE_OI_EXPANSION_WITH_SELL_FLOW","SHORT",.08,False
+ if reg=="PRICE_UP_OI_CONTRACTION":
+  return ("UP_PRICE_OI_CONTRACTION_WITH_BUY_FLOW","LONG",-.10,False) if p==f=="LONG" else ("UP_PRICE_OI_CONTRACTION_UNCONFIRMED","ABSTAIN",-.12,True)
+ if reg=="PRICE_DOWN_OI_CONTRACTION":
+  return ("DOWN_PRICE_OI_CONTRACTION_WITH_SELL_FLOW","SHORT",-.10,False) if p==f=="SHORT" else ("DOWN_PRICE_OI_CONTRACTION_UNCONFIRMED","ABSTAIN",-.12,True)
  if p==o=="LONG" and f=="SHORT":return "SELL_FLOW_ABSORBED_BY_LONG_BUILD","LONG",.04,False
  if p==o=="SHORT" and f=="LONG":return "BUY_FLOW_ABSORBED_BY_SHORT_BUILD","SHORT",.04,False
  if p in ("LONG","SHORT") and f==p:return "PRICE_FLOW_DIRECTION_OI_NEUTRAL",p,.02,False
@@ -328,7 +337,10 @@ def _hyst(s,r):
   if context==old and phase in ("ESTABLISHED_TREND","PULLBACK_AGAINST_CONTEXT","CONTEXT_WITHOUT_CONFIRMATION"):
    return old,max(.35,oc*.92),"HOLD_CONTEXT_THROUGH_ABSTAIN"
   return (old,oc*.82,"HOLD_THROUGH_ABSTAIN") if last>0 and now-last<=H_ABS else ("ABSTAIN",0.,"RELEASE_TO_ABSTAIN")
- confirmed=(r.get("story") or {}).get("name") in ("NEW_LONG_BUILD_CONFIRMED","NEW_SHORT_BUILD_CONFIRMED")
+ confirmed=(r.get("story") or {}).get("name") in (
+  "UP_PRICE_OI_EXPANSION_WITH_BUY_FLOW",
+  "DOWN_PRICE_OI_EXPANSION_WITH_SELL_FLOW",
+ )
  if context==old and new!=old:
   if phase!="REVERSAL_CANDIDATE":
    s._bias_flip_candidate="";s._bias_flip_since=0.

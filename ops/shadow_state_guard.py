@@ -14,7 +14,8 @@ V5 = "SHADOW_RUNTIME_STATE_V5_VERIFIED_COST_PLAN"
 V6 = "SHADOW_RUNTIME_STATE_V6_ENTRY_ECONOMICS"
 V7 = "SHADOW_RUNTIME_STATE_V7_ENTRY_ECONOMICS_V3"
 V8 = "SHADOW_RUNTIME_STATE_V8_ENTRY_ECONOMICS_V4"
-VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8}
+V9 = "SHADOW_RUNTIME_STATE_V9_ENTRY_ECONOMICS_V5"
+VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8, V9}
 
 
 def fail(msg):
@@ -142,7 +143,7 @@ if version in {V3, V4, V5, V6}:
             value = raw.get(name)
             if not isinstance(value, str) or not value:
                 fail(f"{name}:missing")
-    if version in {V6, V7, V8}:
+    if version in {V6, V7, V8, V9}:
         economics = raw.get("entry_economics_v2_rows")
         if not isinstance(economics, list) or len(economics) > 1024:
             fail("entry_economics_v2_rows:invalid")
@@ -157,6 +158,7 @@ if version in {V3, V4, V5, V6}:
             V6: "ENTRY_ECONOMICS_V2",
             V7: "ENTRY_ECONOMICS_V3",
             V8: "ENTRY_ECONOMICS_V4",
+            V9: "ENTRY_ECONOMICS_V5",
         }[version]
         for index, row in enumerate(economics):
             if not isinstance(row, dict) or row.get(

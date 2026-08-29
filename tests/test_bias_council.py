@@ -190,7 +190,12 @@ class BiasCouncilTests(unittest.TestCase):
         # 15-second trigger (990).
         s.open_interest = 970.0
         r = council.evaluate(s, now=100.0)
-        self.assertEqual(r["s_votes"]["S2_price_x_oi"]["metrics"]["regime"], "SHORT_COVERING")
+        metrics = r["s_votes"]["S2_price_x_oi"]["metrics"]
+        self.assertEqual(metrics["regime"], "PRICE_UP_OI_CONTRACTION")
+        self.assertEqual(
+            metrics["mechanism_hypothesis"], "SHORT_COVERING_CANDIDATE"
+        )
+        self.assertFalse(metrics["mechanism_confirmed"])
         self.assertNotEqual(r["s_votes"]["S2_price_x_oi"]["vote"], "LONG")
 
     def test_contract_remains_direction_only(self):

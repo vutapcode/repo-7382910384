@@ -3,7 +3,7 @@ from collections import deque
 import time
 from loi_he_thong import flow_lead_engine
 
-VERSION = "MICRO_REGIME_V4_GENTLE_EXPANSION"
+VERSION = "MICRO_REGIME_V5_OBSERVATION_NEUTRAL"
 
 def _f(x):
     try:
@@ -54,7 +54,7 @@ def classify(state, side=None):
 
     regime, pf, cf, ef = "NORMAL", 1.0, 1.0, 1.0
     if oi_pct <= -0.20 and abs(move_bps) >= max(2.5, atr_bps * 0.10) and vr >= 0.9:
-        regime, pf, cf, ef = "LIQUIDATION", 1.15, 1.12, 0.90
+        regime, pf, cf, ef = "OI_CONTRACTION_EXPANSION", 1.15, 1.12, 0.90
     elif abs(move_bps) >= max(2.0, atr_bps * 0.08) and vr >= 0.9:
         # Expansion alone is not alpha: it is also where a mature impulse can
         # lure the strategy into chasing. Only causal cash lead plus fresh new
@@ -74,7 +74,7 @@ def classify(state, side=None):
             regime, pf, cf, ef = "CHOP", 1.18, 1.10, 0.90
 
     if oi_pct <= -0.20 and oi_accel < -0.03:
-        oi_signature = "LIQUIDATION_ACCEL"
+        oi_signature = "OI_CONTRACTION_ACCEL"
     elif oi_pct <= -0.08:
         oi_signature = "POSITION_UNWIND" 
     elif oi_pct >= 0.12 and oi_accel > 0.02:
@@ -90,7 +90,7 @@ def classify(state, side=None):
         lead_name = lead.get("lead")
         accel = _f(lead.get("lead_accel_bps"))
 
-        if (regime not in {"LIQUIDATION", "CHOP"}
+        if (regime not in {"OI_CONTRACTION_EXPANSION", "CHOP"}
                 and lead_name == "CASH_LED" and persistence >= 0.58
                 and oppose <= 0.20 and oi_signature == "NEW_POSITION_BUILD"):
             regime = "EXPANSION" if regime == "NORMAL" else regime
@@ -111,7 +111,7 @@ def classify(state, side=None):
             pf = min(pf, 0.90)
             ef = max(ef, 1.08)
 
-        if oi_signature in {"LIQUIDATION_ACCEL", "POSITION_UNWIND"} and lead_name == "PERP_LED":
+        if oi_signature in {"OI_CONTRACTION_ACCEL", "POSITION_UNWIND"} and lead_name == "PERP_LED":
             pf = max(pf, 1.15)
             cf = max(cf, 1.10)
             ef = min(ef, 0.90)
@@ -127,6 +127,12 @@ def classify(state, side=None):
         "oi_fast_pct": round(oi_fast_pct, 5),
         "oi_accel_pct": round(oi_accel, 5),
         "oi_signature": oi_signature,
+        "mechanism_hypothesis": (
+            "LIQUIDATION_CANDIDATE_REQUIRES_FORCE_ORDER"
+            if oi_signature in {"OI_CONTRACTION_ACCEL", "POSITION_UNWIND"}
+            else "NONE"
+        ),
+        "mechanism_confirmed": False,
         "vol_ratio": round(vr, 4),
         "flow_lead": lead,
         "policy": "ADAPT_THRESHOLDS_ONLY_NO_SIGNAL_AUTHORITY",

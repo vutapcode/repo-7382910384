@@ -305,6 +305,7 @@ def _oi_intent(state, now):
     age = max(0.0, now - updated) if updated > 0.0 else 999.0
     edge_fresh = age <= OI_EDGE_FRESH_MAX_SECONDS
     closing = raw_regime in {
+        "PRICE_UP_OI_CONTRACTION", "PRICE_DOWN_OI_CONTRACTION",
         "SHORT_COVERING", "LONG_LIQUIDATION_CLOSING", "OI_CONTEXT_CONFLICT",
     }
     # Preserve a known closing veto until the next OI sample. A stale positive

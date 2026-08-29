@@ -40,7 +40,8 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V4"
+INFERENCE_VERSION = "IGNITION_INFERENCE_V2_OBSERVATION_NEUTRAL"
+ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V5"
 PERSISTENT_AUTHORITY_SCOPE = {
     "shadow_bootstrap_authority": True,
     "live_authority": False,
@@ -551,7 +552,8 @@ def _persistent_oi_before_snapshot(state, candidate_id):
 def _wait(now, side, reason, phase="ARMED", episode=None, freshness=None):
     ignition = dict(episode or {})
     return {
-        "version": VERSION, "decision": "WAIT", "entry_mode": "NONE",
+        "version": VERSION, "inference_version": INFERENCE_VERSION,
+        "decision": "WAIT", "entry_mode": "NONE",
         "execution_policy": "NONE", "phase": phase, "confidence": 0.0,
         "reason": reason, "side": side, "s_votes": _compat_votes(False, ignition),
         "ignition": ignition, "causal": _causal(ignition),
@@ -2845,6 +2847,7 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
     state._ignition_pending_capture_id = candidate_id
     return {
         "version": VERSION,
+        "inference_version": INFERENCE_VERSION,
         "decision": "GO",
         "entry_mode": "PERSISTENT_METAORDER",
         "execution_policy": "TAKER",
@@ -2876,10 +2879,20 @@ def _oi_intent(state, side, now, bias_snapshot=None):
     live_updated_at = _f(getattr(state, "open_interest_updated_at", 0.0))
     live_age = now - live_updated_at
     frozen_intent = (
-        "UNWIND" if regime in ("SHORT_COVERING", "LONG_LIQUIDATION_CLOSING") else
-        "POSITION_BUILD" if regime in ("NEW_LONG_BUILD", "NEW_SHORT_BUILD") else "NEUTRAL"
+        "UNWIND" if regime in (
+            "PRICE_UP_OI_CONTRACTION", "PRICE_DOWN_OI_CONTRACTION",
+            "SHORT_COVERING", "LONG_LIQUIDATION_CLOSING",
+        ) else
+        "POSITION_BUILD" if regime in (
+            "PRICE_UP_OI_EXPANSION", "PRICE_DOWN_OI_EXPANSION",
+            "NEW_LONG_BUILD", "NEW_SHORT_BUILD",
+        ) else "NEUTRAL"
     )
     expected_side = {
+        "PRICE_UP_OI_CONTRACTION": "LONG",
+        "PRICE_DOWN_OI_CONTRACTION": "SHORT",
+        "PRICE_UP_OI_EXPANSION": "LONG",
+        "PRICE_DOWN_OI_EXPANSION": "SHORT",
         "SHORT_COVERING": "LONG", "LONG_LIQUIDATION_CLOSING": "SHORT",
         "NEW_LONG_BUILD": "LONG", "NEW_SHORT_BUILD": "SHORT",
     }.get(regime)
@@ -3289,7 +3302,8 @@ def _result_from_episode(state, episode, histories, freshness, now):
     payload["authority_dependencies"] = authority_dependencies
     payload["authority_proof_hash"] = authority_proof_hash
     result = {
-        "version": VERSION, "decision": "GO", "entry_mode": "IGNITION",
+        "version": VERSION, "inference_version": INFERENCE_VERSION,
+        "decision": "GO", "entry_mode": "IGNITION",
         "execution_policy": execution,
         "phase": "ACCEPTANCE" if execution == "MAKER" else "RELEASE",
         "confidence": round(confidence, 6), "reason": "IGNITION_" + proof_type,
