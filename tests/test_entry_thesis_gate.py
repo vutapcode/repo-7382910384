@@ -131,7 +131,7 @@ class EntryThesisGateTests(unittest.TestCase):
 
     def test_primary_absorption_without_independent_continuation_vetoes(self):
         audit = entry_thesis_gate.evaluate(
-            SimpleNamespace(entry_economics_v3_replay_approved=True),
+            SimpleNamespace(entry_economics_v4_replay_approved=True),
             result(
                 intent="POSITION_BUILD", consumed=0.20,
                 flow_states={
@@ -168,7 +168,7 @@ class EntryThesisGateTests(unittest.TestCase):
             },
         )
         allowed, report = entry_edge_tier.authorize(candidate, SimpleNamespace(
-            entry_economics_v3_replay_approved=False,
+            entry_economics_v4_replay_approved=False,
             wstrade_live_armed=False,
         ))
         self.assertFalse(allowed)
@@ -190,7 +190,7 @@ class EntryThesisGateTests(unittest.TestCase):
             },
         )
         allowed, report = entry_edge_tier.authorize(candidate, SimpleNamespace(
-            entry_economics_v3_replay_approved=False,
+            entry_economics_v4_replay_approved=False,
             wstrade_live_armed=False,
         ))
         self.assertTrue(allowed)
@@ -208,7 +208,7 @@ class EntryThesisGateTests(unittest.TestCase):
         allowed, report = entry_edge_tier.authorize(
             candidate,
             SimpleNamespace(
-                entry_economics_v3_replay_approved=False,
+                entry_economics_v4_replay_approved=False,
                 wstrade_live_armed=False,
             ),
         )
@@ -236,7 +236,7 @@ class EntryThesisGateTests(unittest.TestCase):
         allowed, report = entry_edge_tier.authorize(
             candidate,
             SimpleNamespace(
-                entry_economics_v3_replay_approved=False,
+                entry_economics_v4_replay_approved=False,
                 wstrade_live_armed=False,
             ),
         )
@@ -299,7 +299,7 @@ class EntryThesisGateTests(unittest.TestCase):
             },
         )
         allowed, report = entry_edge_tier.authorize(candidate, SimpleNamespace(
-            entry_economics_v3_replay_approved=False,
+            entry_economics_v4_replay_approved=False,
             wstrade_live_armed=False,
         ))
         self.assertFalse(allowed)
@@ -321,7 +321,7 @@ class EntryThesisGateTests(unittest.TestCase):
         allowed, report = entry_edge_tier.authorize(
             ambiguous,
             SimpleNamespace(
-                entry_economics_v3_replay_approved=False,
+                entry_economics_v4_replay_approved=False,
                 wstrade_live_armed=False,
             ),
         )
@@ -341,7 +341,7 @@ class EntryThesisGateTests(unittest.TestCase):
         allowed, report = entry_edge_tier.authorize(
             corroborated,
             SimpleNamespace(
-                entry_economics_v3_replay_approved=False,
+                entry_economics_v4_replay_approved=False,
                 wstrade_live_armed=False,
             ),
         )
@@ -363,7 +363,7 @@ class EntryThesisGateTests(unittest.TestCase):
 
     def test_v3_absorption_is_telemetry_until_canonical_replay_is_approved(self):
         audit = entry_thesis_gate.evaluate(
-            SimpleNamespace(entry_economics_v3_replay_approved=False),
+            SimpleNamespace(entry_economics_v4_replay_approved=False),
             result(
                 intent="POSITION_BUILD", consumed=0.20,
                 flow_states={

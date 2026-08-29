@@ -36,8 +36,8 @@ state.runtime_project_root = str(CURRENT_DIR)
 state.code_version = code_version(CURRENT_DIR)
 state.strategy_config_version = strategy_config_version()
 state.strategy_profile =strategy_profile.current_profile()
-state.entry_economics_v3_replay_approved = os.getenv(
-    "WSTRADE_ENTRY_ECONOMICS_V3_REPLAY_APPROVED", "false"
+state.entry_economics_v4_replay_approved = os.getenv(
+    "WSTRADE_ENTRY_ECONOMICS_V4_REPLAY_APPROVED", "false"
 ).strip().lower() in ("1", "true", "yes", "on")
 state.execution_venue = "BINANCE_FUTURES_MAINNET"
 

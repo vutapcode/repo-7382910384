@@ -8,8 +8,8 @@ execution cost.  Unknown cohorts remain bootstrap telemetry.
 import math
 
 
-VERSION = "ENTRY_ECONOMICS_V3_ISOLATED_COHORT_GUARDIAN_NET"
-CONTRACT_VERSION = "ENTRY_ECONOMICS_V3"
+VERSION = "ENTRY_ECONOMICS_V4_PARENT_EXCLUDES_EXACT"
+CONTRACT_VERSION = "ENTRY_ECONOMICS_V4"
 MAX_ROWS = 1024
 EXACT_MIN = 30
 PARENT_MIN = 50
@@ -191,7 +191,12 @@ def estimate(state, snapshot):
     parent_key = _parent_key(snapshot)
     rows = _rows(state)
     exact = [row for row in rows if _exact_key(row) == exact_key]
-    parent = [row for row in rows if _parent_key(row) == parent_key]
+    # Hierarchical backoff must contribute independent evidence. The queried
+    # exact cohort is excluded from its parent instead of being counted twice.
+    parent = [
+        row for row in rows
+        if _parent_key(row) == parent_key and _exact_key(row) != exact_key
+    ]
     if len(exact) >= EXACT_MIN:
         selected, level, minimum = exact, "EXACT", EXACT_MIN
     elif len(parent) >= PARENT_MIN:
@@ -214,7 +219,7 @@ def estimate(state, snapshot):
         }
     report = _stats(selected)
     replay_approved = bool(
-        getattr(state, "entry_economics_v3_replay_approved", False)
+        getattr(state, "entry_economics_v4_replay_approved", False)
     )
     report.update({
         "version": VERSION,

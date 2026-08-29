@@ -13,7 +13,8 @@ V4 = "SHADOW_RUNTIME_STATE_V4_VERSION_BOUND_CALIBRATION"
 V5 = "SHADOW_RUNTIME_STATE_V5_VERIFIED_COST_PLAN"
 V6 = "SHADOW_RUNTIME_STATE_V6_ENTRY_ECONOMICS"
 V7 = "SHADOW_RUNTIME_STATE_V7_ENTRY_ECONOMICS_V3"
-VERSIONS = {V1, V2, V3, V4, V5, V6, V7}
+V8 = "SHADOW_RUNTIME_STATE_V8_ENTRY_ECONOMICS_V4"
+VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8}
 
 
 def fail(msg):
@@ -133,7 +134,7 @@ if version in {V3, V4, V5, V6}:
                 row[8], f"edge_calibration_rows.{index}.execution_cost_bps",
                 nonnegative=True,
             )
-    if version in {V4, V5, V6, V7}:
+    if version in {V4, V5, V6, V7, V8}:
         for name in (
             "edge_calibration_code_version",
             "edge_calibration_config_version",
@@ -141,7 +142,7 @@ if version in {V3, V4, V5, V6}:
             value = raw.get(name)
             if not isinstance(value, str) or not value:
                 fail(f"{name}:missing")
-    if version in {V6, V7}:
+    if version in {V6, V7, V8}:
         economics = raw.get("entry_economics_v2_rows")
         if not isinstance(economics, list) or len(economics) > 1024:
             fail("entry_economics_v2_rows:invalid")
@@ -152,9 +153,11 @@ if version in {V3, V4, V5, V6}:
             value = raw.get(name)
             if not isinstance(value, str) or not value:
                 fail(f"{name}:missing")
-        expected_contract = (
-            "ENTRY_ECONOMICS_V3" if version == V7 else "ENTRY_ECONOMICS_V2"
-        )
+        expected_contract = {
+            V6: "ENTRY_ECONOMICS_V2",
+            V7: "ENTRY_ECONOMICS_V3",
+            V8: "ENTRY_ECONOMICS_V4",
+        }[version]
         for index, row in enumerate(economics):
             if not isinstance(row, dict) or row.get(
                 "economic_contract_version"

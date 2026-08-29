@@ -159,6 +159,29 @@ class ShadowStateGuardV3Tests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OK version=SHADOW_RUNTIME_STATE_V7", result.stdout)
 
+    def test_v8_entry_economics_v4_checkpoint_is_accepted(self):
+        result = self.run_guard({
+            "version": "SHADOW_RUNTIME_STATE_V8_ENTRY_ECONOMICS_V4",
+            "balance": 5.4, "realized_pnl": 0.1,
+            "trades": 1, "wins": 1, "losses": 0, "breakevens": 0,
+            "event_seq": 1, "decision_evaluations": 1,
+            "near_misses": 0, "decision_funnel": {"READY": 1},
+            "edge_calibration_rows": [],
+            "edge_calibration_code_version": "code-v6",
+            "edge_calibration_config_version": "config-v6",
+            "entry_economics_v2_rows": [{
+                "economic_contract_version": "ENTRY_ECONOMICS_V4",
+                "valid": True,
+                "net_pnl_bps_after_frozen_cost": 2.0,
+                "execution_cost_bps": 8.0,
+            }],
+            "entry_economics_code_version": "code-v6",
+            "entry_economics_config_version": "config-v6",
+            "position": None,
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OK version=SHADOW_RUNTIME_STATE_V8", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

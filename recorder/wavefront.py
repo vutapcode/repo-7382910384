@@ -598,6 +598,10 @@ class WavefrontShadowEvaluator:
         return {
             "causal_episode_id": episode["id"], "side": episode["side"],
             "proposer": episode["proposer"],
+            "onset_signature": self.residual.onset_signature(
+                episode["side"], episode["proposer"],
+                episode["started_receive_ms"],
+            ),
             "proposer_event_time_ms": proposal["event_time_ms"],
             "proposer_receive_time_ms": proposal["receive_time_ms"],
             "proposer_corrected_event_time_ms": round(proposal["corrected_event_time_ms"], 4),
@@ -868,7 +872,7 @@ class WavefrontShadowEvaluator:
             "proposer": candidate["proposer"],
             "guardian_version": self.guardian.VERSION,
             "risk_version": self.risk.VERSION,
-            "economic_contract_version": "ENTRY_ECONOMICS_V3",
+            "economic_contract_version": "ENTRY_ECONOMICS_V4",
             "hard_sl": pos.hard_sl, "core_snapshot": candidate["core_snapshot"],
         }, now_ms)
         self._persist()
@@ -975,7 +979,7 @@ class WavefrontShadowEvaluator:
             "commission_verified": twin["cost_plan"]["commission_verified"],
             "guardian_version": self.guardian.VERSION,
             "risk_version": self.risk.VERSION,
-            "economic_contract_version": "ENTRY_ECONOMICS_V3",
+            "economic_contract_version": "ENTRY_ECONOMICS_V4",
         }
         if filled and exit_price is not None:
             entry = twin["entry_price"]
@@ -988,7 +992,11 @@ class WavefrontShadowEvaluator:
             )
             threshold = roundtrip_cost + twin["cost_plan"]["minimum_net_edge_bps"]
             economic_wave = twin["mfe_bps"] >= threshold
-            advance = self.residual.match_core_entry(twin["side"], twin["fill_ms"], now_ms)
+            advance = self.residual.match_core_entry(
+                twin["side"], twin["fill_ms"], now_ms,
+                causal_wave_id=candidate.get("causal_episode_id"),
+                onset_signature=candidate.get("onset_signature"),
+            )
             core_shared = advance is not None
             payload.update({
                 "entry_price": entry, "exit_price": float(exit_price),

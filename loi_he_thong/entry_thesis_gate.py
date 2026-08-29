@@ -294,7 +294,7 @@ def evaluate(state, result, impact, basis, liquidation):
     if q6["status"] in ("DERIVATIVES_LED_REJECT", "NO_CASH_AUTHORITY"):
         blockers.append("EXCHANGE_INDEPENDENCE_FAIL")
     replay_approved = bool(
-        getattr(state, "entry_economics_v3_replay_approved", False)
+        getattr(state, "entry_economics_v4_replay_approved", False)
     )
     if replay_approved and q3.get("composite_veto"):
         blockers.append("FLOW_EFFICIENCY_V3_VETO")
@@ -333,7 +333,7 @@ def evaluate(state, result, impact, basis, liquidation):
         "blocking_reasons": blockers,
         "soft_wait_reasons": soft_waits,
         "forced_unwind_tail": forced_tail_veto,
-        "entry_economics_v3_replay_approved": replay_approved,
+        "entry_economics_v4_replay_approved": replay_approved,
         "policy": "COMPOSITE_CAUSAL_VETO_NO_SINGLE_SIGNAL_DIRECTION",
     }
 

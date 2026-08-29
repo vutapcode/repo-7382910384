@@ -265,6 +265,48 @@ class ResidualEdgeTests(unittest.TestCase):
         self.assertFalse(entry["cost_plan"]["commission_verified"])
         self.assertFalse(entry["cost_plan"]["promotion_cost_verified"])
 
+    def test_parent_statistics_exclude_exact_child_samples(self):
+        book = ResidualEdgeBook()
+        exact = {
+            "valid": True, "filled": True, "causal_class": "BUILD",
+            "side": "LONG", "proposer": "binance_spot",
+            "bias_relation": "ALIGNED", "regime": "NORMAL",
+            "execution_twin": "TAKER_TWIN", "net_pnl_bps": 10.0,
+            "stress_25bps_net_bps": -1.0, "commission_verified": True,
+        }
+        sibling = dict(exact, proposer="coinbase_spot", net_pnl_bps=-4.0)
+        book.observe_exit(exact)
+        book.observe_exit(sibling)
+        _, _, _, parent_count = book._shrunk(exact)
+        self.assertEqual(parent_count, 1)
+
+    def test_core_match_requires_wave_identity_not_side_time_proximity(self):
+        book = ResidualEdgeBook()
+        book.observe_core_event("ENTRY", {
+            "side": "SHORT", "causal_episode_id": "core-wave-a",
+            "entry_causal_thesis": {},
+        }, 1_200)
+        self.assertIsNone(book.match_core_entry(
+            "SHORT", 1_000, 2_000, causal_wave_id="different-wave"
+        ))
+        self.assertEqual(book.match_core_entry(
+            "SHORT", 1_000, 2_000, causal_wave_id="core-wave-a"
+        ), 200)
+
+    def test_core_match_accepts_identical_onset_signature(self):
+        book = ResidualEdgeBook()
+        book.observe_core_event("ENTRY", {
+            "side": "LONG",
+            "entry_causal_thesis": {
+                "proposer": "binance_spot",
+                "authority_dependencies": {"wave_onset_ms": 1_050},
+            },
+        }, 1_300)
+        signature = book.onset_signature("LONG", "binance_spot", 1_099)
+        self.assertEqual(book.match_core_entry(
+            "LONG", 1_100, 2_000, onset_signature=signature
+        ), 200)
+
 
 class OfflineLiquidityTests(unittest.TestCase):
     def test_static_wall_change_without_execution_emits_nothing(self):

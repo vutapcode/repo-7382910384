@@ -107,7 +107,7 @@ class EntryEconomicsV2Tests(unittest.TestCase):
 
     def test_exact_guardian_net_cohort_activates_after_thirty(self):
         state = SimpleNamespace(code_version="code", strategy_config_version="cfg",
-                                entry_economics_v3_replay_approved=True)
+                                entry_economics_v4_replay_approved=True)
         for index in range(30):
             entry_economics_v2.record(
                 state, snapshot(), net_bps=4.0 + index * 0.01,
@@ -121,7 +121,7 @@ class EntryEconomicsV2Tests(unittest.TestCase):
 
     def test_parent_requires_fifty_and_does_not_claim_exact(self):
         state = SimpleNamespace(code_version="code", strategy_config_version="cfg",
-                                entry_economics_v3_replay_approved=True)
+                                entry_economics_v4_replay_approved=True)
         for index in range(50):
             row = snapshot(
                 regime="TREND" if index % 2 else "NORMAL",
@@ -142,7 +142,7 @@ class EntryEconomicsV2Tests(unittest.TestCase):
     def test_parent_never_cross_subsidizes_side_proposer_or_execution(self):
         state = SimpleNamespace(
             code_version="code", strategy_config_version="cfg",
-            entry_economics_v3_replay_approved=True,
+            entry_economics_v4_replay_approved=True,
         )
         for _ in range(50):
             entry_economics_v2.record(
@@ -157,9 +157,28 @@ class EntryEconomicsV2Tests(unittest.TestCase):
             self.assertEqual(report["status"], "BOOTSTRAP_UNVERIFIED")
             self.assertEqual(report["parent_samples"], 0)
 
+    def test_parent_excludes_the_queried_exact_cohort(self):
+        state = SimpleNamespace(
+            code_version="code", strategy_config_version="cfg",
+            entry_economics_v4_replay_approved=True,
+        )
+        for _ in range(29):
+            entry_economics_v2.record(
+                state, snapshot(), net_bps=8.0, execution_cost_bps=10.0,
+            )
+        for _ in range(21):
+            entry_economics_v2.record(
+                state, snapshot(regime="TREND"),
+                net_bps=-8.0, execution_cost_bps=10.0,
+            )
+        report = entry_economics_v2.estimate(state, snapshot())
+        self.assertEqual(report["status"], "BOOTSTRAP_UNVERIFIED")
+        self.assertEqual(report["samples"], 29)
+        self.assertEqual(report["parent_samples"], 21)
+
     def test_negative_active_cohort_is_not_authorized(self):
         state = SimpleNamespace(code_version="code", strategy_config_version="cfg",
-                                entry_economics_v3_replay_approved=True)
+                                entry_economics_v4_replay_approved=True)
         for _ in range(30):
             entry_economics_v2.record(
                 state, snapshot(), net_bps=-3.0, execution_cost_bps=10.0,

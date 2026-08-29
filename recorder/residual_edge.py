@@ -14,7 +14,7 @@ import math
 import statistics
 
 
-VERSION = "WAVEFRONT_RESIDUAL_EDGE_V1"
+VERSION = "WAVEFRONT_RESIDUAL_EDGE_V2_PARENT_EXCLUDES_EXACT"
 MIN_CANDIDATES = 100
 MIN_TRADES = 30
 MIN_DAYS = 14.0
@@ -116,6 +116,46 @@ class RunningOutcome:
             ),
         }
 
+    def excluding(self, child):
+        """Return this aggregate with one contained child cohort removed."""
+        child = child if isinstance(child, RunningOutcome) else RunningOutcome()
+        remaining = self.count - child.count
+        if remaining <= 0:
+            return RunningOutcome()
+        total_sum = self.mean * self.count
+        child_sum = child.mean * child.count
+        mean = (total_sum - child_sum) / remaining
+        delta = child.mean - mean
+        cross = (
+            delta * delta * child.count * remaining / self.count
+            if self.count > 0 else 0.0
+        )
+        return RunningOutcome(
+            count=remaining,
+            mean=mean,
+            m2=max(0.0, self.m2 - child.m2 - cross),
+            gross_profit=max(0.0, self.gross_profit - child.gross_profit),
+            gross_loss=max(0.0, self.gross_loss - child.gross_loss),
+            stress_sum=self.stress_sum - child.stress_sum,
+            hard_stops=max(0, self.hard_stops - child.hard_stops),
+            economic_waves=max(0, self.economic_waves - child.economic_waves),
+            economic_captured=max(
+                0, self.economic_captured - child.economic_captured
+            ),
+            capture_sum=max(0.0, self.capture_sum - child.capture_sum),
+            unverified_costs=max(
+                0, self.unverified_costs - child.unverified_costs
+            ),
+            adverse_250_sum=self.adverse_250_sum - child.adverse_250_sum,
+            adverse_250_count=max(
+                0, self.adverse_250_count - child.adverse_250_count
+            ),
+            adverse_1s_sum=self.adverse_1s_sum - child.adverse_1s_sum,
+            adverse_1s_count=max(
+                0, self.adverse_1s_count - child.adverse_1s_count
+            ),
+        )
+
 
 class ResidualEdgeBook:
     """Bounded, deterministic cohort statistics with hierarchical shrinkage."""
@@ -169,10 +209,22 @@ class ResidualEdgeBook:
         event = str(event or "").upper()
         payload = payload or {}
         if event == "ENTRY":
+            thesis = dict(payload.get("entry_causal_thesis") or {})
+            dependencies = dict(thesis.get("authority_dependencies") or {})
+            wave_id = str(
+                payload.get("causal_episode_id")
+                or dependencies.get("causal_wave_id") or ""
+            )
+            onset_ms = int(dependencies.get("wave_onset_ms", 0) or 0)
+            proposer = str(thesis.get("proposer") or "UNKNOWN").lower()
             self.core_entries += 1
             self.core_entry_events.append({
                 "event_ms": int(event_ms or 0),
                 "side": str(payload.get("side") or "").upper(),
+                "causal_wave_id": wave_id,
+                "onset_signature": self.onset_signature(
+                    payload.get("side"), proposer, onset_ms
+                ),
             })
         elif event == "EXIT":
             self.core_exits += 1
@@ -187,12 +239,34 @@ class ResidualEdgeBook:
                 max(0.0, min(1.0, net_r / best_r)) if best_r > 0.0 else 0.0
             )
 
-    def match_core_entry(self, side, wavefront_fill_ms, exit_ms):
+    @staticmethod
+    def onset_signature(side, proposer, onset_ms):
+        onset_ms = int(onset_ms or 0)
+        if onset_ms <= 0:
+            return None
+        return "%s|%s|%d" % (
+            str(side or "").upper(),
+            str(proposer or "UNKNOWN").lower(),
+            onset_ms - onset_ms % 100,
+        )
+
+    def match_core_entry(
+        self, side, wavefront_fill_ms, exit_ms, *, causal_wave_id=None,
+        onset_signature=None,
+    ):
         side = str(side or "").upper()
+        causal_wave_id = str(causal_wave_id or "")
+        onset_signature = str(onset_signature or "")
         matches = [
             row for row in self.core_entry_events
             if row["side"] == side
             and int(wavefront_fill_ms) <= row["event_ms"] <= int(exit_ms)
+            and (
+                bool(causal_wave_id)
+                and causal_wave_id == str(row.get("causal_wave_id") or "")
+                or bool(onset_signature)
+                and onset_signature == str(row.get("onset_signature") or "")
+            )
         ]
         if not matches:
             return None
@@ -218,8 +292,8 @@ class ResidualEdgeBook:
 
     def _shrunk(self, payload):
         exact = self.stats[self.exact_key(payload)]
-        broad = self.stats[self.broad_key(payload)]
-        global_row = self.stats[self.global_key(payload)]
+        broad = self.stats[self.broad_key(payload)].excluding(exact)
+        global_row = self.stats[self.global_key(payload)].excluding(exact)
         parent = broad if broad.count else global_row
         weight = exact.count / (exact.count + 10.0) if exact.count else 0.0
         mean = weight * exact.mean + (1.0 - weight) * parent.mean

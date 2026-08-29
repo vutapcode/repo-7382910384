@@ -40,7 +40,7 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V3"
+ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V4"
 
 
 def _f(value, default=0.0):
