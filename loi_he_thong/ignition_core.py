@@ -41,6 +41,10 @@ MIN_VOL_BTC_BY_VENUE = {
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V4"
+PERSISTENT_AUTHORITY_SCOPE = {
+    "shadow_bootstrap_authority": True,
+    "live_authority": False,
+}
 
 
 def _f(value, default=0.0):
@@ -2577,9 +2581,9 @@ def _persistent_metaorder_snapshot(histories, now_ms, previous=None):
         "sides": sides,
         "authority": False,
         "direct_entry_authority": False,
-        "shadow_bootstrap_authority": True,
-        "live_authority": "EMPIRICAL_COHORT_GATE_REQUIRED",
-        "policy": "SHADOW_BOOTSTRAP_LIVE_EMPIRICAL_ONLY",
+        **PERSISTENT_AUTHORITY_SCOPE,
+        "live_research_gate": "EMPIRICAL_COHORT_AND_MANUAL_APPROVAL_REQUIRED",
+        "policy": "SHADOW_BOOTSTRAP_ONLY_LIVE_AUTHORITY_FALSE",
         "transition": identity != previous_identity,
     }
     snapshot["bounded_wave_ledger"] = _bounded_wave_ledger_view(
@@ -2860,6 +2864,7 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "authority_basis": authority_basis,
         "authority_dependencies": authority_dependencies,
         "authority_proof_hash": authority_proof_hash,
+        "authority_scope": dict(PERSISTENT_AUTHORITY_SCOPE),
     }
 
 

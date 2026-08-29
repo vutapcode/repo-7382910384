@@ -1602,13 +1602,23 @@ class IgnitionCoreTests(unittest.TestCase):
             blocked = ignition_core.evaluate(s, now=3.1)
         self.assertEqual(blocked["decision"], "WAIT")
 
-    def test_persistent_shadow_bootstrap_live_still_requires_empirical_cohort(self):
+    def test_persistent_is_shadow_bootstrap_and_never_live_authority(self):
         s = state(now=3.1)
         self._freeze_bias_before_wave(s)
         histories = self._persistent_histories()
         with patch.object(ignition_signals, "snapshot", return_value=histories), \
              patch.object(ignition_core, "_new_signals", return_value=[]):
             result = ignition_core.evaluate(s, now=3.1)
+        self.assertEqual(result["authority_scope"], {
+            "shadow_bootstrap_authority": True,
+            "live_authority": False,
+        })
+        valid, reason, detail = ignition_core.validate_frozen_entry_contract(
+            result, authority_scope="LIVE"
+        )
+        self.assertFalse(valid)
+        self.assertEqual(reason, "PERSISTENT_METAORDER_LIVE_AUTHORITY_DISABLED")
+        self.assertFalse(detail["live_authority"])
         allowed, report = entry_edge_tier.authorize(result, s)
         self.assertTrue(allowed)
         self.assertTrue(report["bootstrap_shadow_allowed"])

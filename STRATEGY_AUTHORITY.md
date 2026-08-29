@@ -48,8 +48,11 @@
    - A bounded 1-6 second persistent-metaorder lane has shadow/demo bootstrap
      authority after the same Bias, current-cash, flow-efficiency, maturity,
      OI-context and Edge contracts pass. Its observer snapshot itself has no
-     direct Entry authority. Real money remains blocked until the exact cohort
-     passes empirical expectancy/LCB/stress and manual Mainnet gates.
+     direct Entry authority. Its immutable contract is
+     `shadow_bootstrap_authority=true`, `live_authority=false`. Empirical
+     expectancy/LCB/stress remains research evidence and cannot silently turn
+     this lane into live authority; that would require a separately reviewed
+     canonical wiring and contract change.
    - Fast Ignition and Persistent Metaorder publish one read-only
      `CausalWaveSnapshot` representation. This does not merge their proof
      policies or extend their horizons; it prevents downstream modules from

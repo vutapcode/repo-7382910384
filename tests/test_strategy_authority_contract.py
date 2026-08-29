@@ -82,7 +82,7 @@ class StrategyAuthorityContractTests(unittest.TestCase):
         self.assertIn('_append_event("ENTRY_SKIPPED"', active)
         self.assertIn('"FLOW_EFFICIENCY_V3_VETO"', active)
         edge = self.text("loi_he_thong/entry_edge_tier.py")
-        self.assertIn("not v3_replay_approved", edge)
+        self.assertIn("not v4_replay_approved", edge)
         self.assertIn('hard_vetoes.append("ABSORPTION_VETO")', edge)
         self.assertIn("if would_enter and bool(basis.get", active)
 
@@ -117,9 +117,17 @@ class StrategyAuthorityContractTests(unittest.TestCase):
     def test_persistent_lane_documentation_matches_shadow_bootstrap_behavior(self):
         source = self.text("STRATEGY_AUTHORITY.md")
         self.assertIn("shadow/demo bootstrap", source)
+        self.assertIn("shadow_bootstrap_authority=true", source)
+        self.assertIn("live_authority=false", source)
         self.assertIn("CausalWaveSnapshot", source)
         self.assertNotIn(
             "persistent-metaorder lane is recorder telemetry only", source
+        )
+        ignition = self.text("loi_he_thong/ignition_core.py")
+        self.assertIn('"shadow_bootstrap_authority": True', ignition)
+        self.assertIn('"live_authority": False', ignition)
+        self.assertIn(
+            "PERSISTENT_METAORDER_LIVE_AUTHORITY_DISABLED", ignition
         )
 
 
