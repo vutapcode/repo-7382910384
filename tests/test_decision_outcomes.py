@@ -360,6 +360,49 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertIn("EXECUTABLE_FILL", final[0]["missing_confirmation"])
         self.assertIn("GUARDIAN_COUNTERFACTUAL", final[0]["missing_confirmation"])
 
+    def test_no_raw_screen_is_neutral_not_a_claimed_good_reject(self):
+        self.tracker.observe(decision_event(episode_id="episode-no-screen"))
+        for event_ms, sequence in ((6_000, 10), (16_000, 11),
+                                   (31_000, 12), (61_000, 13)):
+            self.tracker.observe(trade(
+                event_ms, sequence, 100.01,
+                previous=None if sequence == 10 else sequence - 1,
+            ))
+        final = next(
+            payload for stream, payload, _ in self.rows
+            if stream == "decision_miss_adjudication"
+        )
+        self.assertEqual(final["classification"], "NO_ECONOMIC_SCREEN")
+        self.assertFalse(final["economic_miss_confirmed"])
+
+    def test_full_counterfactual_can_confirm_good_reject(self):
+        event = decision_event(episode_id="episode-good-reject")
+        cf = event["payload"]["decision_record"]["counterfactual"]
+        cf["frozen_economics"] = {
+            "cost_budget_bps": 8.0, "minimum_net_edge_bps": 2.0,
+        }
+        cf.update({
+            "causal_continuity_confirmed": True,
+            "fill_feasible": True,
+            "feed_clean": True,
+            "guardian_counterfactual": {
+                "net_pnl_bps_after_frozen_cost": -1.0,
+            },
+        })
+        self.tracker.observe(event)
+        for event_ms, sequence in ((6_000, 10), (16_000, 11),
+                                   (31_000, 12), (61_000, 13)):
+            self.tracker.observe(trade(
+                event_ms, sequence, 100.20, high=100.20, low=100.0,
+                previous=None if sequence == 10 else sequence - 1,
+            ))
+        final = next(
+            payload for stream, payload, _ in self.rows
+            if stream == "decision_miss_adjudication"
+        )
+        self.assertEqual(final["classification"], "GOOD_REJECT_CONFIRMED")
+        self.assertFalse(final["economic_miss_confirmed"])
+
     def test_full_counterfactual_can_confirm_one_economic_miss(self):
         event = decision_event(episode_id="episode-confirmed")
         cf = event["payload"]["decision_record"]["counterfactual"]
@@ -385,6 +428,35 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
             payload for stream, payload, _ in self.rows
             if stream == "decision_miss_adjudication"
         )
+        self.assertEqual(final["classification"], "ECONOMIC_MISS_CONFIRMED")
+        self.assertTrue(final["economic_miss_confirmed"])
+
+    def test_canonical_positive_net_overrides_raw_screen(self):
+        event = decision_event(episode_id="episode-canonical-over-screen")
+        cf = event["payload"]["decision_record"]["counterfactual"]
+        cf["frozen_economics"] = {
+            "cost_budget_bps": 8.0, "minimum_net_edge_bps": 2.0,
+        }
+        cf.update({
+            "causal_continuity_confirmed": True,
+            "fill_feasible": True,
+            "feed_clean": True,
+            "guardian_counterfactual": {
+                "net_pnl_bps_after_frozen_cost": 3.0,
+            },
+        })
+        self.tracker.observe(event)
+        for event_ms, sequence in ((6_000, 10), (16_000, 11),
+                                   (31_000, 12), (61_000, 13)):
+            self.tracker.observe(trade(
+                event_ms, sequence, 100.01,
+                previous=None if sequence == 10 else sequence - 1,
+            ))
+        final = next(
+            payload for stream, payload, _ in self.rows
+            if stream == "decision_miss_adjudication"
+        )
+        self.assertFalse(final["raw_screen_passed"])
         self.assertEqual(final["classification"], "ECONOMIC_MISS_CONFIRMED")
         self.assertTrue(final["economic_miss_confirmed"])
 

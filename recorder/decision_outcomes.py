@@ -15,7 +15,7 @@ MAX_CLOSED = 2_048
 DIAGNOSTIC_WAVE_GAP_MS = 5_000
 DIAGNOSTIC_WAVE_PRICE_BPS = 3.0
 VERSION = "DECISION_COUNTERFACTUAL_V6_FINAL_ADJUDICATION"
-ADJUDICATION_VERSION = "ECONOMIC_MISS_ADJUDICATION_V1"
+ADJUDICATION_VERSION = "ECONOMIC_MISS_ADJUDICATION_V2_NEUTRAL_SCREEN"
 
 
 def _f(value, default=0.0):
@@ -232,14 +232,18 @@ class DecisionOutcomeTracker:
                 missing.append("CLEAN_FEED")
             if guardian_net is None:
                 missing.append("GUARDIAN_COUNTERFACTUAL")
-            elif guardian_net <= 0.0:
-                missing.append("POSITIVE_NET_AFTER_FROZEN_COST")
-            if not screen:
-                classification = "GOOD_REJECT"
-            elif causal is False:
+            if causal is False:
                 classification = "DELAYED_UNRELATED_MOVE"
-            elif not missing:
+            elif not missing and guardian_net > 0.0:
                 classification = "ECONOMIC_MISS_CONFIRMED"
+            elif not missing:
+                classification = "GOOD_REJECT_CONFIRMED"
+            elif not screen:
+                # A move that never cleared the raw economic screen says only
+                # that this cheap diagnostic saw no opportunity.  Without an
+                # executable fill and the canonical Guardian path it cannot
+                # prove that rejecting the setup was good.
+                classification = "NO_ECONOMIC_SCREEN"
             else:
                 classification = "MISS_SCREEN_ONLY"
             self.adjudicated_waves[wave_id] = {
