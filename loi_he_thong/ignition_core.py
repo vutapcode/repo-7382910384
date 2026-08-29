@@ -346,11 +346,11 @@ def flow_efficiency_state(snapshot, primary_cash=None, cash_venues=None):
         name: primitive((venues.get(name) or {}).get("state") or "UNKNOWN")
         for name in cash if name != primary
     }
-    independent_continuation = any(
+    cross_venue_continuation = any(
         value == "CONTINUING_CONFIRMED" for value in other_states.values()
     )
     states = {primary_state, *other_states.values()}
-    if primary_state == "CONTINUING_CONFIRMED" or independent_continuation:
+    if primary_state == "CONTINUING_CONFIRMED" or cross_venue_continuation:
         state = "CONTINUING_CONFIRMED"
     elif primary_state in {"PERSISTENT_NONCONVERSION", "PROGRESS_DECAY"}:
         state = primary_state
@@ -367,7 +367,7 @@ def flow_efficiency_state(snapshot, primary_cash=None, cash_venues=None):
         "primary_cash": primary,
         "primary_state": primary_state,
         "other_cash_states": other_states,
-        "independent_cash_continuation": independent_continuation,
+        "cross_venue_cash_continuation": cross_venue_continuation,
         "fresh_cash_venues": sorted(set(venues) & CASH),
         "stale_cash_venues": sorted(
             name for name, row in all_venues.items()

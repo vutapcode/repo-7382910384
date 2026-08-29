@@ -10,9 +10,13 @@ from loi_he_thong import flow_lead_engine, ignition_signals
 class FlowLeadScopeTests(unittest.TestCase):
     def test_warmup_cannot_claim_objective_spot_discovery(self):
         report = flow_lead_engine.analyze(SimpleNamespace(), "LONG")
-        self.assertEqual(report["lead_scope"], "TRADE_RELATIVE_CASH_VS_PERP")
+        self.assertEqual(
+            report["displacement_scope"], "TRADE_RELATIVE_CASH_VS_PERP"
+        )
         self.assertEqual(report["spot_price_discovery"], "NOT_MEASURED_HERE")
-        self.assertEqual(report["lead"], "UNKNOWN")
+        self.assertEqual(report["displacement_dominance"], "UNKNOWN")
+        self.assertEqual(report["event_ordering_leader"], "NOT_MEASURED")
+        self.assertFalse(report["event_ordering_authority"])
 
     def test_active_ignition_buckets_feed_flow_lead_without_legacy_council(self):
         now = time.time()
@@ -84,7 +88,7 @@ class FlowLeadScopeTests(unittest.TestCase):
         ):
             report = flow_lead_engine.analyze(state, "ABSTAIN")
         self.assertEqual(report["status"], "DIRECTION_UNAVAILABLE")
-        self.assertEqual(report["lead"], "UNKNOWN")
+        self.assertEqual(report["displacement_dominance"], "UNKNOWN")
 
 
 if __name__ == "__main__":

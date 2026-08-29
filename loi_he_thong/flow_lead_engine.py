@@ -4,7 +4,7 @@ import time
 
 from loi_he_thong import ignition_signals
 
-VERSION = "FLOW_LEAD_ENGINE_V4_SIDE_NORMALIZED_FLOW"
+VERSION = "FLOW_DISPLACEMENT_ENGINE_V5_SCOPE_EXPLICIT"
 MAX_SKEW_S = 0.30
 ACTIVE_GAP_MS = 300
 
@@ -148,9 +148,12 @@ def analyze(state, side):
     if not flow_rows or not price_rows:
         return {
             "version": VERSION, "status": "WARMUP", "persistence": 0.0,
-            "oppose_ratio": 0.0, "lead": "UNKNOWN", "lead_gap_bps": 0.0,
+            "oppose_ratio": 0.0, "displacement_dominance": "UNKNOWN",
+            "lead_gap_bps": 0.0,
             "lead_accel_bps": 0.0, "freshness": fresh,
-            "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+            "displacement_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+            "event_ordering_leader": "NOT_MEASURED",
+            "event_ordering_authority": False,
             "spot_price_discovery": "NOT_MEASURED_HERE",
             "history_source": "ACTIVE_IGNITION_100MS",
         }
@@ -159,9 +162,11 @@ def analyze(state, side):
         return {
             "version": VERSION, "status": "DIRECTION_UNAVAILABLE",
             "persistence": 0.0, "oppose_ratio": 0.0,
-            "lead": "UNKNOWN", "lead_gap_bps": 0.0,
+            "displacement_dominance": "UNKNOWN", "lead_gap_bps": 0.0,
             "lead_accel_bps": 0.0, "freshness": fresh,
-            "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+            "displacement_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+            "event_ordering_leader": "NOT_MEASURED",
+            "event_ordering_authority": False,
             "spot_price_discovery": "NOT_MEASURED_HERE",
             "history_source": "ACTIVE_IGNITION_100MS",
             "policy": "NO_SIDE_NO_TRADE_RELATIVE_INFERENCE",
@@ -181,9 +186,12 @@ def analyze(state, side):
             "oppose_ratio": round(oppose_ratio, 4),
             "flow_mean": round(sum(means) / len(means), 4) if means else 0.0,
             "flow_mean_raw": round(sum(raw_means) / len(raw_means), 4) if raw_means else 0.0,
-            "lead": "UNKNOWN", "lead_gap_bps": 0.0, "lead_accel_bps": 0.0,
+            "displacement_dominance": "UNKNOWN", "lead_gap_bps": 0.0,
+            "lead_accel_bps": 0.0,
             "freshness": fresh,
-            "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+            "displacement_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+            "event_ordering_leader": "NOT_MEASURED",
+            "event_ordering_authority": False,
             "spot_price_discovery": "NOT_MEASURED_HERE",
             "history_source": "ACTIVE_IGNITION_100MS",
             "policy": "NO_LEAD_INFERENCE_WHEN_FEEDS_ARE_TIME_SKEWED",
@@ -224,11 +232,13 @@ def analyze(state, side):
         "oppose_ratio": round(oppose_ratio, 4),
         "flow_mean": round(sum(means) / len(means), 4) if means else 0.0,
         "flow_mean_raw": round(sum(raw_means) / len(raw_means), 4) if raw_means else 0.0,
-        "lead": lead,
+        "displacement_dominance": lead,
         "lead_gap_bps": round(fast_gap, 4),
         "lead_accel_bps": round(accel, 4),
         "freshness": fresh,
-        "lead_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+        "displacement_scope": "TRADE_RELATIVE_CASH_VS_PERP",
+        "event_ordering_leader": "NOT_MEASURED",
+        "event_ordering_authority": False,
         "spot_price_discovery": "NOT_MEASURED_HERE",
         "history_source": "ACTIVE_IGNITION_100MS",
         "policy": "CONTEXT_ONLY_TIME_ALIGNED_NO_SIGNAL_AUTHORITY",

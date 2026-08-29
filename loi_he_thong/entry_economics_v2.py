@@ -82,8 +82,8 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
             composite_flow.get("confirmation_source"), "NONE"
         ),
         "transition_class": transition_class,
-        "independent_flow_witnesses": tuple(
-            sorted(composite_flow.get("independent_witness_venues") or ())
+        "cross_venue_flow_witnesses": tuple(
+            sorted(composite_flow.get("cross_venue_witness_venues") or ())
         ),
     }
 

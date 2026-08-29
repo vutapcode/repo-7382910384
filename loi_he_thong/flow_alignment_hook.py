@@ -57,14 +57,14 @@ def install(flow_lead_module):
         report = dict(original_analyze(state, side) or {})
         fresh = report.get("freshness") or {}
         if fresh.get("mode") == "SOFT":
-            lead = report.get("lead")
+            lead = report.get("displacement_dominance")
             gap = _f(report.get("lead_gap_bps"))
             # Soft alignment needs a stronger separation before it can influence regime.
             if lead == "PERP_LED" and gap < 1.60:
-                report["lead"] = "BALANCED"
+                report["displacement_dominance"] = "BALANCED"
                 report["soft_alignment_downgraded"] = True
             elif lead == "CASH_LED" and gap > -1.00:
-                report["lead"] = "BALANCED"
+                report["displacement_dominance"] = "BALANCED"
                 report["soft_alignment_downgraded"] = True
         return report
 

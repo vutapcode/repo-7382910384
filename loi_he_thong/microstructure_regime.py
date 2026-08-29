@@ -87,7 +87,7 @@ def classify(state, side=None):
     if lead.get("status") == "OK":
         persistence = _f(lead.get("persistence"))
         oppose = _f(lead.get("oppose_ratio"))
-        lead_name = lead.get("lead")
+        lead_name = lead.get("displacement_dominance")
         accel = _f(lead.get("lead_accel_bps"))
 
         if (regime not in {"OI_CONTRACTION_EXPANSION", "CHOP"}

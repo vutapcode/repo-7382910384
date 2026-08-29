@@ -365,9 +365,11 @@ class EntryThesisGateTests(unittest.TestCase):
             "q3_flow_efficiency"
         ]
         self.assertEqual(
-            flow["confirmation_source"], "INDEPENDENT_CASH_WITNESS"
+            flow["confirmation_source"], "CROSS_VENUE_CASH_WITNESS"
         )
-        self.assertEqual(flow["independent_witness_venues"], ["coinbase_spot"])
+        self.assertEqual(
+            flow["cross_venue_witness_venues"], ["coinbase_spot"]
+        )
 
     def test_v3_absorption_is_telemetry_until_canonical_replay_is_approved(self):
         audit = entry_thesis_gate.evaluate(

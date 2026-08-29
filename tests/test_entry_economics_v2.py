@@ -43,8 +43,8 @@ class EntryEconomicsV2Tests(unittest.TestCase):
         }
         audit = {"questions": {"q3_flow_efficiency": {
             "status": "CONTINUING_CONFIRMED",
-            "confirmation_source": "INDEPENDENT_CASH_WITNESS",
-            "independent_witness_venues": ["coinbase_spot"],
+            "confirmation_source": "CROSS_VENUE_CASH_WITNESS",
+            "cross_venue_witness_venues": ["coinbase_spot"],
         }}}
         row = entry_economics_v2.feature_snapshot(
             result, {"regime": "NORMAL"}, "TAKER", audit
@@ -55,7 +55,7 @@ class EntryEconomicsV2Tests(unittest.TestCase):
         )
         self.assertEqual(row["flow_efficiency_state"], "CONTINUING_CONFIRMED")
         self.assertEqual(
-            row["flow_confirmation_source"], "INDEPENDENT_CASH_WITNESS"
+            row["flow_confirmation_source"], "CROSS_VENUE_CASH_WITNESS"
         )
         self.assertEqual(row["transition_class"], "BACKGROUND_ALIGNED")
 

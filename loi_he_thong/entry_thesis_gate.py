@@ -146,17 +146,17 @@ def _flow_question(result, ignition, impact):
         name: str((venue_efficiency.get(name) or {}).get("state") or "UNKNOWN").upper()
         for name in cash if name != primary
     }
-    independent_continuation = bool(
-        shared_flow_state.get("independent_cash_continuation")
+    cross_venue_continuation = bool(
+        shared_flow_state.get("cross_venue_cash_continuation")
     )
-    independent_witnesses = sorted(
+    cross_venue_witnesses = sorted(
         name for name, state in other_states.items()
         if state == "CONTINUING_CONFIRMED"
     )
     primary_continuation = primary_state == "CONTINUING_CONFIRMED"
     composite_veto = bool(
         primary_state in ("PERSISTENT_NONCONVERSION", "PROGRESS_DECAY")
-        and not independent_continuation
+        and not cross_venue_continuation
     )
     # Episode progress is maturity diagnostics only. It must never authorize
     # present-tense conversion after the executed-flow window went quiet.
@@ -164,7 +164,7 @@ def _flow_question(result, ignition, impact):
         not composite_veto
         and (
             primary_continuation
-            or independent_continuation
+            or cross_venue_continuation
         )
     )
     status = str(shared_flow_state.get("state") or "UNKNOWN").upper()
@@ -182,13 +182,13 @@ def _flow_question(result, ignition, impact):
         "primary_cash_anchor": primary,
         "primary_state": primary_state,
         "other_cash_states": other_states,
-        "independent_cash_continuation": independent_continuation,
+        "cross_venue_cash_continuation": cross_venue_continuation,
         "confirmation_source": (
             "PRIMARY_CASH_SURVIVAL" if primary_continuation
-            else "INDEPENDENT_CASH_WITNESS" if independent_continuation
+            else "CROSS_VENUE_CASH_WITNESS" if cross_venue_continuation
             else "NONE"
         ),
-        "independent_witness_venues": independent_witnesses,
+        "cross_venue_witness_venues": cross_venue_witnesses,
         "composite_veto": composite_veto,
         "converts": converts,
         "flow_efficiency": efficiency,
@@ -249,11 +249,11 @@ def _independence_question(ignition, basis):
     )
     status = (
         "DERIVATIVES_LED_REJECT" if futures_self_led or (basis or {}).get("perp_expansion") else
-        "DUAL_INDEPENDENT_CASH" if cash == CASH else
+        "DUAL_CASH_CROSS_VENUE_CORROBORATION" if cash == CASH else
         "SINGLE_CASH_ANCHOR" if cash else "NO_CASH_AUTHORITY"
     )
     return {
-        "question": "EXCHANGE_INDEPENDENCE",
+        "question": "CROSS_VENUE_CORROBORATION",
         "status": status, "cash_venues": sorted(cash),
         "proposer": proposer, "futures_self_led": futures_self_led,
         "spot_perp_basis": dict(basis or {}),
@@ -268,7 +268,7 @@ def evaluate(state, result, impact, basis, liquidation):
     q4 = _liquidity_question(q3)
     q5 = _maturity_question(ignition)
     q6 = _independence_question(ignition, basis)
-    dual_cash = q6["status"] == "DUAL_INDEPENDENT_CASH"
+    dual_cash = q6["status"] == "DUAL_CASH_CROSS_VENUE_CORROBORATION"
     forced = bool(q2["forced_closing_risk"])
     exhausted = q3["status"] in (
         "PERSISTENT_NONCONVERSION", "PROGRESS_DECAY"
@@ -301,7 +301,7 @@ def evaluate(state, result, impact, basis, liquidation):
     if q1["status"] == "FAIL":
         blockers.append("BIAS_THESIS_FAIL")
     if q6["status"] in ("DERIVATIVES_LED_REJECT", "NO_CASH_AUTHORITY"):
-        blockers.append("EXCHANGE_INDEPENDENCE_FAIL")
+        blockers.append("CROSS_VENUE_CORROBORATION_FAIL")
     replay_approved = bool(
         getattr(state, "entry_economics_v5_replay_approved", False)
     )
