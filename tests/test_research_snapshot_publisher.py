@@ -96,6 +96,49 @@ class ResearchPublisherTests(unittest.TestCase):
         self.assertEqual([row["cycle_id"] for row in rows], ["b"])
         self.assertGreater(next_checkpoint["offset"], checkpoint["offset"])
 
+    def test_opportunity_history_is_readable_and_strictly_sanitized(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "opportunity_dossier" / "2026-08-30"
+            root.mkdir(parents=True)
+            (root / "17.jsonl").write_text(json.dumps({
+                "event_time_ms": 2_000,
+                "payload": {
+                    "version": "OPPORTUNITY_DOSSIER_V1_CAUSAL_TIMELINE",
+                    "cycle_id": "c1", "causal_episode_id": "episode-1",
+                    "side": "LONG", "decision_count": 3,
+                    "why_no_entry": {
+                        "primary_reason": "WAIT_CURRENT_CASH_CONVERSION",
+                        "all_reasons": ["BIAS_NOT_READY"],
+                        "private_account": "must-not-leak",
+                    },
+                    "what_happened_after": {
+                        "max_favorable_excursion_bps": 12.0,
+                        "windows": [{
+                            "window_seconds": 5, "signed_close_bps": 4.0,
+                            "secret": "must-not-leak",
+                        }],
+                    },
+                    "classification": "MISS_SCREEN_ONLY",
+                    "api_secret": "must-not-leak",
+                },
+            }) + "\n", encoding="utf-8")
+            old = publisher.OPPORTUNITY_WAL
+            publisher.OPPORTUNITY_WAL = root.parent
+            try:
+                rows = publisher._opportunity_history(0.0)
+            finally:
+                publisher.OPPORTUNITY_WAL = old
+        self.assertEqual(rows[0]["causal_episode_id"], "episode-1")
+        self.assertEqual(
+            rows[0]["why_no_entry"]["primary_reason"],
+            "WAIT_CURRENT_CASH_CONVERSION",
+        )
+        self.assertEqual(
+            rows[0]["what_happened_after"]["windows"][0]["signed_close_bps"],
+            4.0,
+        )
+        self.assertNotIn("must-not-leak", str(rows))
+
     def test_rotated_zero_cursor_uses_bounded_backfill(self):
         with tempfile.TemporaryDirectory() as folder:
             journal = Path(folder) / "events.jsonl"

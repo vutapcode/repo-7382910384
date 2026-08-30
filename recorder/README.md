@@ -18,6 +18,9 @@ Recorder và dữ liệu/replay của nó **không có trading authority**. Auth
 - `bot_event`, `bot_cycles_snapshot`
 - `decision_counterfactual`: kết quả giả định 5/15/30/60 giây; V5 tách
   economic miss theo causal episode khỏi diagnostic wave/persistent shadow
+- `opportunity_dossier`: một hồ sơ recorder-only sau 60 giây, gom timeline
+  decision, toàn bộ lý do không vào, gate/diagnostic riêng biệt, outcome
+  5/15/30/60 giây và mức xác nhận miss; không được biến screen thành alpha
 - `feature_1s`: flow, spread, depth bands, OI/funding và liquidation theo giây
 - `recorder_health_event`
 - `binance_spot_trade_100ms`, `binance_spot_ticker`

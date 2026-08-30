@@ -30,7 +30,7 @@ DEFAULT_STREAMS = {
     'agg_trade', 'futures_trade_100ms', 'liquidation',
     'kline_1m', 'kline_15m', 'mark_price',
     'premium_index', 'open_interest', 'bot_event', 'bot_cycles_snapshot',
-    'decision_counterfactual',
+    'decision_counterfactual', 'opportunity_dossier',
     'feature_1s', 'recorder_health_event',
     'binance_spot_trade_100ms', 'binance_spot_ticker',
     'coinbase_spot_trade_100ms', 'coinbase_spot_ticker',

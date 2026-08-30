@@ -219,13 +219,62 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.tracker.observe(decision_event())
         self.tracker.observe(trade(2_000, 10, 100.0))
         self.tracker.observe(trade(6_000, 12, 101.0, previous=10))
-        self.assertEqual(len(self.rows), 1)
-        payload = self.rows[0][1]
+        counterfactuals = [
+            payload for stream, payload, _ in self.rows
+            if stream == "decision_counterfactual"
+        ]
+        self.assertEqual(len(counterfactuals), 1)
+        payload = counterfactuals[0]
         self.assertFalse(payload["valid"])
         self.assertEqual(
             payload["invalid_reason"], "FUTURES_EXECUTED_FLOW_SEQUENCE_GAP"
         )
         self.assertEqual(len(self.tracker.pending), 0)
+        dossier = next(
+            payload for stream, payload, _ in self.rows
+            if stream == "opportunity_dossier"
+        )
+        self.assertEqual(dossier["classification"], "INVALID_RESEARCH_WINDOW")
+        self.assertEqual(
+            dossier["what_happened_after"]["invalid_reason"],
+            "FUTURES_EXECUTED_FLOW_SEQUENCE_GAP",
+        )
+
+    def test_dossier_explains_multiple_waits_and_all_outcome_windows(self):
+        first = decision_event(
+            "episode-first", start_ms=1_000, episode_id="episode-dossier",
+        )
+        second = decision_event(
+            "episode-second", start_ms=1_200, episode_id="episode-dossier",
+        )
+        second["payload"]["decision_record"]["output"]["reason"] = (
+            "WAIT_CAUSAL_LEADER_UNCERTAIN"
+        )
+        second["payload"]["blocking_reason"] = "WAIT_CURRENT_CASH_CONVERSION"
+        self.tracker.observe(first)
+        self.tracker.observe(second)
+        self.tracker.observe(trade(61_000, 10, 100.20, high=100.30, low=99.90))
+        dossier = next(
+            payload for stream, payload, _ in self.rows
+            if stream == "opportunity_dossier"
+        )
+        self.assertEqual(dossier["causal_episode_id"], "episode-dossier")
+        self.assertEqual(dossier["decision_count"], 2)
+        self.assertEqual(
+            dossier["why_no_entry"]["primary_reason"],
+            "WAIT_CURRENT_CASH_CONVERSION",
+        )
+        self.assertIn(
+            "WAIT_CHASE_PERP_AHEAD_OF_SPOT",
+            dossier["why_no_entry"]["all_reasons"],
+        )
+        self.assertEqual(
+            [row["window_seconds"] for row in
+             dossier["what_happened_after"]["windows"]],
+            [5, 15, 30, 60],
+        )
+        self.assertFalse(dossier["economic_miss_confirmed"])
+        self.assertIn("EXECUTABLE_FILL", dossier["missing_confirmation"])
 
     def test_non_directional_bias_wait_is_not_registered(self):
         row = decision_event()

@@ -34,6 +34,10 @@ TRADE_AUDIT = Path(os.getenv(
     "WSTRADE_RESEARCH_TRADE_AUDIT",
     "/home/ubuntu/wstrade_trade_log/trades.jsonl",
 ))
+OPPORTUNITY_WAL = Path(os.getenv(
+    "WSTRADE_RESEARCH_OPPORTUNITY_WAL",
+    "/home/ubuntu/smc2026_data/raw/wal/opportunity_dossier",
+))
 PUBLISH_STATE = Path(os.getenv(
     "WSTRADE_RESEARCH_PUBLISH_STATE",
     "/home/ubuntu/.local/state/wstrade/research_publisher_state.json",
@@ -272,6 +276,104 @@ def _closed_trade_history(cutoff):
     return rows[-2000:]
 
 
+def _opportunity_history(cutoff):
+    """Publish recorder dossiers through a strict, public-data allowlist."""
+    rows = deque(maxlen=2000)
+    if not OPPORTUNITY_WAL.exists():
+        return []
+    for path in sorted(OPPORTUNITY_WAL.glob("*/*.jsonl")):
+        try:
+            handle = path.open(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                try:
+                    source = json.loads(line)
+                    payload = _dict(source.get("payload"))
+                    ts = float(source.get("event_time_ms", 0) or 0) / 1000.0
+                except (ValueError, TypeError, AttributeError):
+                    continue
+                if ts < cutoff or not payload:
+                    continue
+                why = _dict(payload.get("why_no_entry"))
+                after = _dict(payload.get("what_happened_after"))
+                frozen = _dict(payload.get("frozen_economics"))
+                windows = []
+                for item in list(after.get("windows") or ()):
+                    item = _dict(item)
+                    windows.append({key: item.get(key) for key in (
+                        "window_seconds", "valid", "outcome_price",
+                        "signed_close_bps", "max_favorable_excursion_bps",
+                        "max_adverse_excursion_bps",
+                        "economic_screen_passed",
+                        "hypothetical_hard_sl_hit",
+                    ) if item.get(key) is not None})
+                rows.append({
+                    "ts": ts,
+                    "utc": _iso(ts),
+                    "vn": _iso(ts, VN),
+                    "version": payload.get("version"),
+                    "cycle_id": payload.get("cycle_id"),
+                    "causal_episode_id": payload.get("causal_episode_id"),
+                    "diagnostic_wave_id": payload.get("diagnostic_wave_id"),
+                    "persistent_candidate_id": payload.get(
+                        "persistent_metaorder_candidate_id"
+                    ),
+                    "sample_scope": payload.get("sample_scope"),
+                    "anchor_role": payload.get("anchor_role"),
+                    "side": payload.get("side"),
+                    "decision_count": payload.get("decision_count"),
+                    "why_no_entry": {
+                        key: why.get(key) for key in (
+                            "primary_reason", "all_reasons", "failed_gates",
+                            "diagnostic_reasons", "miss_taxonomy",
+                        ) if why.get(key) is not None
+                    },
+                    "what_happened_after": {
+                        "windows": windows,
+                        "max_favorable_excursion_bps": after.get(
+                            "max_favorable_excursion_bps"
+                        ),
+                        "max_adverse_excursion_bps": after.get(
+                            "max_adverse_excursion_bps"
+                        ),
+                        "hypothetical_hard_sl_hit": after.get(
+                            "hypothetical_hard_sl_hit"
+                        ),
+                        "valid": after.get("valid"),
+                        "invalid_reason": after.get("invalid_reason"),
+                    },
+                    "frozen_economics": {
+                        key: frozen.get(key) for key in (
+                            "execution_style", "cost_budget_bps",
+                            "minimum_net_edge_bps", "commission_verified",
+                        ) if frozen.get(key) is not None
+                    },
+                    "economic_miss_eligible": payload.get(
+                        "economic_miss_eligible"
+                    ),
+                    "raw_screen_passed": payload.get("raw_screen_passed"),
+                    "classification": payload.get("classification"),
+                    "economic_miss_confirmed": payload.get(
+                        "economic_miss_confirmed"
+                    ),
+                    "missing_confirmation": payload.get(
+                        "missing_confirmation"
+                    ),
+                    "guardian_counterfactual_net_bps": payload.get(
+                        "guardian_counterfactual_net_bps"
+                    ),
+                    "strategy_code_version": payload.get(
+                        "strategy_code_version"
+                    ),
+                    "strategy_config_version": payload.get(
+                        "strategy_config_version"
+                    ),
+                })
+    return list(rows)
+
+
 def _journal_delta(checkpoint):
     stat = JOURNAL.stat()
     same = (
@@ -420,6 +522,7 @@ def _publish(no_push=False):
         cutoff, 2000,
     )
     closed_trades = _closed_trade_history(cutoff)
+    opportunities = _opportunity_history(cutoff)
     candidates = _merge_unique(
         _load(target / "candidates.json", []), candidate_rows,
         lambda row: (
@@ -455,19 +558,22 @@ def _publish(no_push=False):
         "journal": str(JOURNAL), "retention_hours": 84,
         "branch": BRANCH,
     }, recent_trades=trades[-20:], recent_closed_trades=closed_trades[-20:],
-       recent_candidates=candidates[-40:])
+       recent_candidates=candidates[-40:],
+       recent_opportunities=opportunities[-20:])
 
     _write_json(target / "latest.json", latest)
     _write_json(target / "timeline.json", timeline)
     _write_json(target / "trades.json", trades)
     _write_json(target / "closed_trades.json", closed_trades)
     _write_json(target / "candidates.json", candidates)
+    _write_json(target / "opportunities.json", opportunities)
     (target / "README.md").write_text(
         "# WStrade live research telemetry\n\n"
         "Sanitized SHADOW-only evidence, refreshed about every three minutes. "
         "No API credentials, private account payloads, or raw WAL are published.\n\n"
-        "Start with `latest.json`, then inspect `closed_trades.json`, "
-        "`trades.json`, `candidates.json`, and `timeline.json`. "
+        "Start with `latest.json`, then inspect `opportunities.json`, "
+        "`closed_trades.json`, `trades.json`, `candidates.json`, and "
+        "`timeline.json`. "
         "Times are provided in UTC and UTC+7.\n",
         encoding="utf-8",
     )

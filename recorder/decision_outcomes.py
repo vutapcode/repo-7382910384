@@ -16,6 +16,8 @@ DIAGNOSTIC_WAVE_GAP_MS = 5_000
 DIAGNOSTIC_WAVE_PRICE_BPS = 3.0
 VERSION = "DECISION_COUNTERFACTUAL_V6_FINAL_ADJUDICATION"
 ADJUDICATION_VERSION = "ECONOMIC_MISS_ADJUDICATION_V2_NEUTRAL_SCREEN"
+DOSSIER_VERSION = "OPPORTUNITY_DOSSIER_V1_CAUSAL_TIMELINE"
+MAX_DECISION_TRACE = 32
 
 
 def _f(value, default=0.0):
@@ -23,6 +25,14 @@ def _f(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _items(value):
+    if value in (None, ""):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return [value]
 
 
 class DecisionOutcomeTracker:
@@ -108,6 +118,43 @@ class DecisionOutcomeTracker:
                     (decision.get("inputs") or {}).get("distance_to_boundary")
                     or {}
                 ),
+                "decision_evidence": {
+                    "event_time_ms": int(record.get("event_time_ms", 0) or 0),
+                    "cycle_id": decision.get("cycle_id") or payload.get("cycle_id"),
+                    "decision": output.get("decision") or payload.get("decision"),
+                    "reason": output.get("reason") or payload.get("reason"),
+                    "blocking_stage": payload.get("blocking_stage"),
+                    "blocking_reason": (
+                        payload.get("blocking_reason")
+                        or output.get("blocking_reason")
+                    ),
+                    "blocking_reasons": _items(
+                        payload.get("blocking_reasons")
+                        or output.get("blocking_reasons") or []
+                    ),
+                    "diagnostic_reasons": _items(
+                        payload.get("diagnostic_reasons")
+                        or output.get("diagnostic_reasons") or []
+                    ),
+                    "failed_gates": _items(
+                        output.get("failed_gates")
+                        or payload.get("failed_gates") or []
+                    ),
+                    "miss_taxonomy": (
+                        output.get("miss_taxonomy")
+                        or payload.get("miss_taxonomy")
+                    ),
+                    "entry_mode": payload.get("entry_mode"),
+                    "ignition_state": payload.get("ignition_state"),
+                    "ignition_proposer": payload.get("ignition_proposer"),
+                    "ignition_proof_type": payload.get("ignition_proof_type"),
+                    "consumed_fraction": payload.get(
+                        "impulse_consumed_fraction"
+                    ),
+                    "forward_edge_status": payload.get("forward_edge_status"),
+                    "cost_ok": payload.get("cost_ok"),
+                    "qualified_now": qualified_now,
+                },
             }
         if event in (
             "ENTRY_SKIPPED",
@@ -147,8 +194,56 @@ class DecisionOutcomeTracker:
                 "distance_to_boundary": dict(
                     payload.get("distance_to_boundary") or {}
                 ),
+                "decision_evidence": {
+                    "event_time_ms": int(record.get("event_time_ms", 0) or 0),
+                    "cycle_id": payload.get("cycle_id"),
+                    "decision": "ABORTED_EXECUTION",
+                    "reason": payload.get("reason"),
+                    "blocking_stage": "EXECUTION",
+                    "blocking_reason": payload.get("reason"),
+                    "blocking_reasons": _items(
+                        payload.get("failed_gates") or [
+                            payload.get("miss_taxonomy")
+                        ]
+                    ),
+                    "diagnostic_reasons": [],
+                    "failed_gates": _items(payload.get("failed_gates")),
+                    "miss_taxonomy": payload.get("miss_taxonomy"),
+                    "entry_mode": payload.get("entry_mode"),
+                    "qualified_now": False,
+                },
             }
         return None
+
+    @staticmethod
+    def _append_decision_evidence(tracker, candidate):
+        evidence = dict(candidate.get("decision_evidence") or {})
+        if not evidence:
+            return
+        trace = tracker.setdefault("decision_trace", [])
+        identity = (
+            evidence.get("cycle_id"), evidence.get("reason"),
+            evidence.get("blocking_reason"), evidence.get("event_time_ms"),
+        )
+        if not trace or (
+            trace[-1].get("cycle_id"), trace[-1].get("reason"),
+            trace[-1].get("blocking_reason"), trace[-1].get("event_time_ms"),
+        ) != identity:
+            trace.append(evidence)
+            if len(trace) > MAX_DECISION_TRACE:
+                del trace[:-MAX_DECISION_TRACE]
+
+    @staticmethod
+    def _unique_trace_values(trace, *keys):
+        values = []
+        for row in trace:
+            for key in keys:
+                value = row.get(key)
+                items = _items(value)
+                for item in items:
+                    if item not in (None, "") and item not in values:
+                        values.append(item)
+        return values
 
     def _diagnostic_wave_id(self, side, start_ms, reference):
         previous = self.diagnostic_waves.get(side)
@@ -215,6 +310,129 @@ class DecisionOutcomeTracker:
             guardian.get("net_pnl_bps_after_frozen_cost"), None
         )
 
+    def _classification(self, tracker):
+        if tracker.get("invalid_reason"):
+            return (
+                "UNPROVEN_DATA_GAP" if tracker.get("economic_miss_eligible")
+                else "INVALID_RESEARCH_WINDOW",
+                [str(tracker.get("invalid_reason"))], None,
+            )
+        if not tracker.get("economic_miss_eligible"):
+            return (
+                "RESEARCH_ONLY" if tracker.get("sample_scope")
+                == "PERSISTENT_METAORDER_SHADOW" else "DIAGNOSTIC_ONLY",
+                [], None,
+            )
+        counterfactual = tracker.get("counterfactual") or {}
+        screen = bool(tracker.get("economic_screen_ever", False))
+        causal = counterfactual.get("causal_continuity_confirmed")
+        fill = counterfactual.get("fill_feasible")
+        feed_clean = counterfactual.get("feed_clean")
+        guardian_net = self._guardian_counterfactual_net(tracker)
+        missing = []
+        if causal is not True:
+            missing.append("CAUSAL_CONTINUITY")
+        if fill is not True:
+            missing.append("EXECUTABLE_FILL")
+        if feed_clean is not True:
+            missing.append("CLEAN_FEED")
+        if guardian_net is None:
+            missing.append("GUARDIAN_COUNTERFACTUAL")
+        if causal is False:
+            classification = "DELAYED_UNRELATED_MOVE"
+        elif not missing and guardian_net > 0.0:
+            classification = "ECONOMIC_MISS_CONFIRMED"
+        elif not missing:
+            classification = "GOOD_REJECT_CONFIRMED"
+        elif not screen:
+            classification = "NO_ECONOMIC_SCREEN"
+        else:
+            classification = "MISS_SCREEN_ONLY"
+        return classification, missing, guardian_net
+
+    def _emit_opportunity_dossier(self, tracker, event_ms):
+        if tracker.get("dossier_emitted"):
+            return
+        trace = list(tracker.get("decision_trace") or [])
+        outcomes = list(tracker.get("outcome_windows") or [])
+        classification, missing, guardian_net = self._classification(tracker)
+        reasons = self._unique_trace_values(
+            trace, "blocking_reason", "reason", "blocking_reasons",
+        )
+        failed_gates = self._unique_trace_values(trace, "failed_gates")
+        diagnostics = self._unique_trace_values(trace, "diagnostic_reasons")
+        first = trace[0] if trace else {}
+        last = trace[-1] if trace else {}
+        max_favorable = max(
+            (_f(row.get("max_favorable_excursion_bps")) for row in outcomes),
+            default=0.0,
+        )
+        max_adverse = max(
+            (_f(row.get("max_adverse_excursion_bps")) for row in outcomes),
+            default=0.0,
+        )
+        self.emit(
+            "opportunity_dossier",
+            {
+                "version": DOSSIER_VERSION,
+                "authority": False,
+                "cycle_id": tracker.get("cycle_id"),
+                "causal_episode_id": tracker.get("causal_episode_id"),
+                "economic_wave_id": tracker.get("economic_wave_id"),
+                "economic_cluster_id": tracker.get("economic_cluster_id"),
+                "diagnostic_wave_id": tracker.get("diagnostic_wave_id"),
+                "persistent_metaorder_candidate_id": tracker.get(
+                    "persistent_metaorder_candidate_id"
+                ),
+                "sample_scope": tracker.get("sample_scope"),
+                "anchor_role": tracker.get("anchor_role"),
+                "side": tracker.get("side"),
+                "first_seen_ms": first.get("event_time_ms") or tracker.get("start_ms"),
+                "last_decision_ms": last.get("event_time_ms") or tracker.get("start_ms"),
+                "decision_count": len(trace),
+                "decision_trace": trace,
+                "why_no_entry": {
+                    "primary_reason": (
+                        last.get("blocking_reason") or last.get("reason")
+                        or tracker.get("reason")
+                    ),
+                    "all_reasons": reasons,
+                    "failed_gates": failed_gates,
+                    "diagnostic_reasons": diagnostics,
+                    "miss_taxonomy": tracker.get("miss_taxonomy"),
+                },
+                "what_happened_after": {
+                    "windows": outcomes,
+                    "max_favorable_excursion_bps": round(max_favorable, 6),
+                    "max_adverse_excursion_bps": round(max_adverse, 6),
+                    "hypothetical_hard_sl_hit": any(
+                        bool(row.get("hypothetical_hard_sl_hit"))
+                        for row in outcomes
+                    ),
+                    "valid": tracker.get("invalid_reason") is None,
+                    "invalid_reason": tracker.get("invalid_reason"),
+                },
+                "frozen_economics": tracker.get("frozen_economics") or {},
+                "economic_miss_eligible": bool(
+                    tracker.get("economic_miss_eligible", False)
+                ),
+                "raw_screen_passed": bool(
+                    tracker.get("economic_screen_ever", False)
+                ),
+                "classification": classification,
+                "economic_miss_confirmed": (
+                    classification == "ECONOMIC_MISS_CONFIRMED"
+                ),
+                "missing_confirmation": missing,
+                "guardian_counterfactual_net_bps": guardian_net,
+                "strategy_code_version": tracker.get("strategy_code_version"),
+                "strategy_config_version": tracker.get("strategy_config_version"),
+                "distance_to_boundary": tracker.get("distance_to_boundary") or {},
+            },
+            event_time_ms=int(event_ms),
+        )
+        tracker["dossier_emitted"] = True
+
     def _emit_final_adjudication(self, tracker, event_ms):
         if not tracker.get("economic_miss_eligible"):
             return
@@ -224,35 +442,9 @@ class DecisionOutcomeTracker:
             classification = "DUPLICATE_EPISODE"
             missing = []
         else:
-            counterfactual = tracker.get("counterfactual") or {}
-            screen = bool(tracker.get("economic_screen_ever", False))
-            causal = counterfactual.get("causal_continuity_confirmed")
-            fill = counterfactual.get("fill_feasible")
-            feed_clean = counterfactual.get("feed_clean")
-            guardian_net = self._guardian_counterfactual_net(tracker)
-            missing = []
-            if causal is not True:
-                missing.append("CAUSAL_CONTINUITY")
-            if fill is not True:
-                missing.append("EXECUTABLE_FILL")
-            if feed_clean is not True:
-                missing.append("CLEAN_FEED")
-            if guardian_net is None:
-                missing.append("GUARDIAN_COUNTERFACTUAL")
-            if causal is False:
-                classification = "DELAYED_UNRELATED_MOVE"
-            elif not missing and guardian_net > 0.0:
-                classification = "ECONOMIC_MISS_CONFIRMED"
-            elif not missing:
-                classification = "GOOD_REJECT_CONFIRMED"
-            elif not screen:
-                # A move that never cleared the raw economic screen says only
-                # that this cheap diagnostic saw no opportunity.  Without an
-                # executable fill and the canonical Guardian path it cannot
-                # prove that rejecting the setup was good.
-                classification = "NO_ECONOMIC_SCREEN"
-            else:
-                classification = "MISS_SCREEN_ONLY"
+            classification, missing, _guardian_net = self._classification(
+                tracker
+            )
             self.adjudicated_waves[wave_id] = {
                 "tracking_key": tracker.get("tracking_key"),
                 "causal_episode_id": tracker.get("causal_episode_id"),
@@ -343,6 +535,20 @@ class DecisionOutcomeTracker:
             "anchor_role": "PERSISTENT_METAORDER_CANDIDATE",
             "qualified_now": False,
             "authority": False,
+            "decision_evidence": {
+                "event_time_ms": start_ms,
+                "cycle_id": decision.get("cycle_id") or payload.get("cycle_id"),
+                "decision": "SHADOW_OBSERVATION",
+                "reason": str(report.get("status") or "PERSISTENT_CANDIDATE"),
+                "blocking_stage": "RESEARCH_ONLY",
+                "blocking_reason": None,
+                "blocking_reasons": [],
+                "diagnostic_reasons": [],
+                "failed_gates": [],
+                "miss_taxonomy": "PERSISTENT_METAORDER_SHADOW_CANDIDATE",
+                "entry_mode": None,
+                "qualified_now": False,
+            },
         }
 
     def _register_candidate(self, record, candidate):
@@ -351,8 +557,8 @@ class DecisionOutcomeTracker:
         side = str(cf.get("side") or "").upper()
         reference = _f(cf.get("reference_price"))
         if (
-            not cycle_id or not candidate.get("miss_taxonomy")
-            or not cf.get("eligible") or side not in ("LONG", "SHORT")
+            not cycle_id or not cf.get("eligible")
+            or side not in ("LONG", "SHORT")
             or reference <= 0.0
         ):
             return
@@ -394,7 +600,10 @@ class DecisionOutcomeTracker:
         if tracking_key in self.closed:
             return
         existing = self.pending.get(tracking_key)
+        carried_trace = []
         if existing is not None:
+            self._append_decision_evidence(existing, candidate)
+            carried_trace = list(existing.get("decision_trace") or [])
             candidate_rank = int(candidate.get("anchor_rank", 0) or 0)
             existing_rank = int(existing.get("anchor_rank", 0) or 0)
             better_anchor = candidate_rank > existing_rank
@@ -429,6 +638,9 @@ class DecisionOutcomeTracker:
             "low": reference,
             "last_price": reference,
             "completed": set(),
+            "decision_trace": carried_trace,
+            "outcome_windows": [],
+            "dossier_emitted": False,
             # Long-horizon waves are intentionally limited to the stable
             # persistent-metaorder cohort. Keeping every 100 ms reject alive
             # for 15 minutes would waste the host CPU budget and distort the
@@ -439,6 +651,7 @@ class DecisionOutcomeTracker:
                 else WINDOWS_MS
             ),
         }
+        self._append_decision_evidence(self.pending[tracking_key], candidate)
         if self.last_gap_event_ms >= start_ms:
             tracker = self.pending.pop(tracking_key)
             self._emit_invalid(
@@ -475,6 +688,7 @@ class DecisionOutcomeTracker:
             self.closed.popitem(last=False)
 
     def _emit_invalid(self, tracker, reason, at_ms):
+        tracker["invalid_reason"] = str(reason)
         self.emit(
             "decision_counterfactual",
             {
@@ -506,6 +720,7 @@ class DecisionOutcomeTracker:
             },
             event_time_ms=int(at_ms),
         )
+        self._emit_opportunity_dossier(tracker, at_ms)
 
     def _invalidate_all(self, reason, at_ms):
         for tracking_key, tracker in list(self.pending.items()):
@@ -643,7 +858,25 @@ class DecisionOutcomeTracker:
                     },
                     event_time_ms=event_ms,
                 )
+                tracker["outcome_windows"].append({
+                    "window_seconds": int(window // 1000),
+                    "valid": True,
+                    "outcome_price": price,
+                    "signed_close_bps": round(close_bps, 6),
+                    "max_favorable_excursion_bps": round(
+                        max(0.0, favorable), 6
+                    ),
+                    "max_adverse_excursion_bps": round(
+                        max(0.0, adverse), 6
+                    ),
+                    "economic_screen_passed": screen_passed,
+                    "hypothetical_hard_sl_hit": bool(
+                        stop_bps is not None and adverse >= float(stop_bps)
+                    ),
+                })
                 tracker["completed"].add(window)
+                if window == 60_000:
+                    self._emit_opportunity_dossier(tracker, event_ms)
                 if window == windows[-1]:
                     self._emit_final_adjudication(tracker, event_ms)
             if len(tracker["completed"]) == len(windows):
