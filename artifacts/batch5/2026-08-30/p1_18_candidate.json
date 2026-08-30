@@ -1,0 +1,34 @@
+{
+  "authority_parameters": {
+    "futures_only_opposition_warning": true
+  },
+  "blocker": "NO_VERSION_BOUNDED_SUBMIT_CANDIDATES",
+  "candidate_count": 0,
+  "candidate_population_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "causal_wave_matched": false,
+  "cost_contract_version": "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
+  "deterministic_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "executable_fill_replayed": false,
+  "false_positive_rate": 1.0,
+  "feed_clean": true,
+  "fill_model_version": "WAVEFRONT_EXECUTION_TWINS_V1",
+  "futures_only_cases_adjudicated": 0,
+  "guardian_net_bps_total": 0.0,
+  "guardian_replayed": false,
+  "guardian_version": "GUARDIAN_S_TIER_V11_PATH_AUTHORITY",
+  "inference_version": "IGNITION_INFERENCE_V3_AVAILABILITY_TIME",
+  "maker_fill_feasibility_checked": false,
+  "no_lookahead": true,
+  "rejected_candidates_adjudicated": false,
+  "repeat_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "report_hash": "eb79eb8cfb7b733783e60aa4b50800e844363e8cc785850717c4d870972c4f1d",
+  "rollback": {
+    "action": "KEEP_HARD_REJECT",
+    "authority_changed": false
+  },
+  "schema_version": "4",
+  "strategy_authority": "CANONICAL_MIRROR_NON_AUTHORITY",
+  "submit_reason_counts": {},
+  "version": "BATCH5_EVIDENCE_V1",
+  "wal_identity": "570ec59dea19043d92c48f6129d3049c294332cb35529e1f3c20b684f7a7c5f7"
+}

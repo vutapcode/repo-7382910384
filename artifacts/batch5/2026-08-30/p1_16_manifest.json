@@ -1,0 +1,91 @@
+{
+  "authority": false,
+  "blockers": [
+    "BASELINE_NOT_CANONICAL_LIVE_AUTHORITY",
+    "CANDIDATE_NOT_CANONICAL_LIVE_AUTHORITY",
+    "MISSING_CANONICAL_EVIDENCE:executable_fill_replayed",
+    "MISSING_CANONICAL_EVIDENCE:guardian_replayed",
+    "MISSING_CANONICAL_EVIDENCE:maker_fill_feasibility_checked",
+    "MISSING_CANONICAL_EVIDENCE:rejected_candidates_adjudicated",
+    "NO_GUARDIAN_NET_IMPROVEMENT"
+  ],
+  "candidate_count": 19,
+  "canonical_evidence": {
+    "causal_wave_matched": {
+      "baseline": true,
+      "candidate": true
+    },
+    "executable_fill_replayed": {
+      "baseline": false,
+      "candidate": false
+    },
+    "feed_clean": {
+      "baseline": true,
+      "candidate": true
+    },
+    "guardian_replayed": {
+      "baseline": false,
+      "candidate": false
+    },
+    "maker_fill_feasibility_checked": {
+      "baseline": false,
+      "candidate": false
+    },
+    "no_lookahead": {
+      "baseline": true,
+      "candidate": true
+    },
+    "rejected_candidates_adjudicated": {
+      "baseline": false,
+      "candidate": false
+    }
+  },
+  "changed_variables": [
+    "dual_cash_futures_optional"
+  ],
+  "decision": "REJECT_UNPROVEN",
+  "deterministic": true,
+  "false_positive_rate_delta": 0.0,
+  "guardian_net_bps_delta": 0.0,
+  "identity": {
+    "candidate_population_hash": {
+      "baseline": "56217c123550c115dedc9aef0072ce7bf67c76489a83f93e6946bae5780297b9",
+      "candidate": "56217c123550c115dedc9aef0072ce7bf67c76489a83f93e6946bae5780297b9",
+      "same": true
+    },
+    "cost_contract_version": {
+      "baseline": "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
+      "candidate": "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
+      "same": true
+    },
+    "fill_model_version": {
+      "baseline": "WAVEFRONT_EXECUTION_TWINS_V1",
+      "candidate": "WAVEFRONT_EXECUTION_TWINS_V1",
+      "same": true
+    },
+    "guardian_version": {
+      "baseline": "GUARDIAN_S_TIER_V11_PATH_AUTHORITY",
+      "candidate": "GUARDIAN_S_TIER_V11_PATH_AUTHORITY",
+      "same": true
+    },
+    "inference_version": {
+      "baseline": "IGNITION_INFERENCE_V3_AVAILABILITY_TIME",
+      "candidate": "IGNITION_INFERENCE_V3_AVAILABILITY_TIME",
+      "same": true
+    },
+    "schema_version": {
+      "baseline": "4",
+      "candidate": "4",
+      "same": true
+    },
+    "wal_identity": {
+      "baseline": "570ec59dea19043d92c48f6129d3049c294332cb35529e1f3c20b684f7a7c5f7",
+      "candidate": "570ec59dea19043d92c48f6129d3049c294332cb35529e1f3c20b684f7a7c5f7",
+      "same": true
+    }
+  },
+  "manifest_hash": "8c3bb6e4933ff1241cfd7b7919f4bd0d0dda81cf78118400451f7b5294d8454e",
+  "policy": "NO_PROMOTION_WITHOUT_CANONICAL_LIVE_AUTHORITY_REPLAY",
+  "requested_variable": "dual_cash_futures_optional",
+  "version": "PHASE4_PROMOTION_MANIFEST_V1"
+}

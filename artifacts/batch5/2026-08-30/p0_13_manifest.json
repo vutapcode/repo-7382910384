@@ -1,0 +1,51 @@
+{
+  "authority_changed": false,
+  "availability_time_checks": {
+    "availability_delay_ms_max": 195,
+    "availability_delay_ms_mean": 39.169146,
+    "availability_delay_ms_min": 1,
+    "batch_available_equals_outer_receive": 3429,
+    "batch_available_not_before_bucket_close": 3429,
+    "exchange_event_not_after_local_receive": 3429,
+    "pass": true,
+    "trade_batch_count": 3429
+  },
+  "commit": "914b15ced7ab9d96e0f246b8de59ab0d1e1851e4",
+  "decision": "KEEP_DATA_CORRECTNESS_PATCH",
+  "deterministic": true,
+  "item": "P0.13_AVAILABILITY_TIME_CORRECTNESS",
+  "manifest_hash": "dd498380fb8cbdd79d719107491f0d5d3e5ba0e8d5a11c122204df418a36547e",
+  "rollback": {
+    "action": "REVERT_P0_COMMIT_AND_INVALIDATE_SCHEMA_V4_COHORT",
+    "trigger": "AVAILABILITY_REGRESSION_OR_NONDETERMINISTIC_REPLAY"
+  },
+  "version": "BATCH5_EVIDENCE_V1",
+  "wal": {
+    "first_receive_time_ms": 1788054758063,
+    "last_receive_time_ms": 1788055355912,
+    "record_count": 11789,
+    "schema_version": "4",
+    "stream_counts": {
+      "binance_spot_ticker": 1989,
+      "binance_spot_trade_100ms": 1157,
+      "book_ticker": 1889,
+      "bot_event": 40,
+      "coinbase_spot_ticker": 721,
+      "coinbase_spot_trade_100ms": 1005,
+      "decision_counterfactual": 22,
+      "depth_checkpoint": 9,
+      "feature_1s": 594,
+      "futures_trade_100ms": 1267,
+      "liquidity_response": 1209,
+      "mark_price": 598,
+      "open_interest": 39,
+      "precursor_continuity": 1,
+      "premium_index": 39,
+      "spot_liquidity_response": 1148,
+      "wavefront_candidate": 62
+    },
+    "wal_code_version": "2d1d8e531a919602",
+    "wal_config_version": "b32fe2a64a8c13c4"
+  },
+  "wal_identity": "570ec59dea19043d92c48f6129d3049c294332cb35529e1f3c20b684f7a7c5f7"
+}

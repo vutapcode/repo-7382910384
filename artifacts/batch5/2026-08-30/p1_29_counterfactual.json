@@ -1,0 +1,33 @@
+{
+  "authority": false,
+  "authority_changed": false,
+  "blockers": [
+    "NO_REJECTED_CANDIDATES"
+  ],
+  "causal_wave_matching_required": true,
+  "cost_contract_version": "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
+  "decision": "HOLD_AUTHORITY_UNPROVEN",
+  "deterministic_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "frozen_cost": {
+    "maker_fee_bps": 2.0,
+    "source": "BINANCE_ACCOUNT_COMMISSION_RATE",
+    "taker_fee_bps": 5.0,
+    "verified": true
+  },
+  "fully_adjudicated": 0,
+  "guardian_version": "GUARDIAN_S_TIER_V11_PATH_AUTHORITY",
+  "item": "P1.29",
+  "positive_guardian_net": 0,
+  "rejected_candidates": 0,
+  "repeat_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "report_hash": "0b76e24a74e4a91721dcaad9c10f0c3e713b58204a2d4805d1e74fac15d8dc30",
+  "rollback": {
+    "reason": "NO_AUTHORITY_CHANGE",
+    "required": false
+  },
+  "same_wal": true,
+  "schema_version": "4",
+  "version": "BATCH5_EVIDENCE_V1",
+  "veto": "PERP_LED_VETO",
+  "wal_identity": "570ec59dea19043d92c48f6129d3049c294332cb35529e1f3c20b684f7a7c5f7"
+}

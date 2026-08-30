@@ -1,0 +1,52 @@
+{
+  "authority_parameters": {
+    "dual_cash_futures_optional": false
+  },
+  "candidate_count": 19,
+  "candidate_outcome_counts": {
+    "EXPIRED:FOLLOW_WINDOW_EXPIRED": 18,
+    "EXPIRED:FUTURES_LED": 1,
+    "PROPOSED:CASH_FLOW_PRICE_CONVERSION": 19,
+    "REJECT:FUTURES_LED": 13,
+    "WAIT:CAUSAL_LEAD_UNCERTAIN": 12
+  },
+  "candidate_population_hash": "56217c123550c115dedc9aef0072ce7bf67c76489a83f93e6946bae5780297b9",
+  "causal_wave_matched": true,
+  "cost_contract_version": "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
+  "deterministic_hash": "ad642da76fb9ce21d0cc8ff2af78a3e7f9f27a3b9df99d88e56f92cc6d13cf53",
+  "executable_fill_replayed": false,
+  "false_positive_rate": 1.0,
+  "false_positive_rate_known": false,
+  "feed_clean": true,
+  "fill_model_version": "WAVEFRONT_EXECUTION_TWINS_V1",
+  "frozen_cost": {
+    "maker_fee_bps": 2.0,
+    "source": "BINANCE_ACCOUNT_COMMISSION_RATE",
+    "taker_fee_bps": 5.0,
+    "verified": true
+  },
+  "generated_counts": {
+    "wavefront_candidate": 63
+  },
+  "guardian_net_bps_total": 0,
+  "guardian_replayed": false,
+  "guardian_version": "GUARDIAN_S_TIER_V11_PATH_AUTHORITY",
+  "inference_version": "IGNITION_INFERENCE_V3_AVAILABILITY_TIME",
+  "maker_fill_feasibility_checked": false,
+  "no_lookahead": true,
+  "qualified_count": 0,
+  "raw_record_count": 10017,
+  "rejected_candidates_adjudicated": false,
+  "repeat_generated_equal": true,
+  "repeat_hash": "ad642da76fb9ce21d0cc8ff2af78a3e7f9f27a3b9df99d88e56f92cc6d13cf53",
+  "report_hash": "a24ab178c95118e41a786187a71f49a8307936643db0e4d948870d202af2b4e1",
+  "rollback": {
+    "action": "KEEP_BASELINE_AUTHORITY",
+    "authority_changed": false
+  },
+  "schema_version": "4",
+  "sequence_gap_total": 0,
+  "strategy_authority": "CANONICAL_MIRROR_NON_AUTHORITY",
+  "version": "BATCH5_EVIDENCE_V1",
+  "wal_identity": "570ec59dea19043d92c48f6129d3049c294332cb35529e1f3c20b684f7a7c5f7"
+}
