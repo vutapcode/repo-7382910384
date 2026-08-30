@@ -1861,7 +1861,7 @@ async def _entry_loop():
                     opportunity=opportunity,
                 )
                 _append_event("DECISION_EVALUATED", {
-                    "schema_version": "TIER_S_DECISION_RECORD_V4_BOUNDARIES",
+                    "schema_version": "TIER_S_DECISION_RECORD_V5_AVAILABILITY_TIME",
                     "cycle_id": decision_cycle_id,
                     "decision": result.get("decision", "WAIT"),
                     "reason": result.get("reason", "UNKNOWN"),

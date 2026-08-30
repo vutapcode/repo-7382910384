@@ -9,7 +9,7 @@ from loi_he_thong import shadow_runtime_state as runtime_state
 class ShadowRuntimeStateTests(unittest.TestCase):
     def test_entry_economics_rows_are_version_bound(self):
         row = {
-            "economic_contract_version": "ENTRY_ECONOMICS_V5",
+            "economic_contract_version": "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
             "valid": True, "side": "LONG",
             "net_pnl_bps_after_frozen_cost": 3.0,
         }

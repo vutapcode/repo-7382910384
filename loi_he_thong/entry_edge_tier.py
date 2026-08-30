@@ -16,7 +16,7 @@ from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
 from loi_he_thong import verified_cost_model
 
-VERSION = "IGNITION_ENTRY_ECONOMICS_V5"
+VERSION = "IGNITION_ENTRY_ECONOMICS_V6_AVAILABILITY_TIME"
 EDGE_BPS = {
     "LOW_EDGE": 0.0, "NORMAL_EDGE": 13.0,
     "HIGH_EDGE": 20.0, "RUNNER_EDGE": 35.0,
@@ -66,13 +66,13 @@ def classify(result, state):
     hard_vetoes = []
     if candidate and not contract_ok:
         hard_vetoes.append("IGNITION_CONTRACT_FAIL")
-    v5_replay_approved = bool(
-        getattr(state, "entry_economics_v5_replay_approved", False)
+    v6_replay_approved = bool(
+        getattr(state, "entry_economics_v6_replay_approved", False)
     )
     # Preserve baseline demo semantics until a canonical replay explicitly
-    # approves V5. Once approved, the persistent cross-cash classifier replaces
+    # approves V6. Once approved, the persistent cross-cash classifier replaces
     # this single-snapshot legacy veto instead of stacking both vetoes.
-    if candidate and not v5_replay_approved and bool(
+    if candidate and not v6_replay_approved and bool(
         impact.get("flow_price_nonconversion")
     ):
         hard_vetoes.append("FLOW_PRICE_NONCONVERSION_VETO")
@@ -241,7 +241,7 @@ def classify(result, state):
         ),
         "execution_cost_contract": cost_contract,
         "economic_contract_version": entry_economics_v2.CONTRACT_VERSION,
-        "entry_economics_v5_replay_approved": v5_replay_approved,
+        "entry_economics_v6_replay_approved": v6_replay_approved,
         "economic_feature_snapshot": economic_snapshot,
         "forward_edge_status": forward_edge.get("status"),
         "forward_edge": forward_edge,

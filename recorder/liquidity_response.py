@@ -327,7 +327,7 @@ class SpotLiquidityResponseAnalyzer:
 
     def _emit(self, tracker, now_ms, valid=True, reason="COMPLETE"):
         payload = {
-            "schema_version": "WSTRADE_RECORDER_RESEARCH_V3",
+            "schema_version": "WSTRADE_RECORDER_RESEARCH_V4_AVAILABILITY_TIME",
             "version": SPOT_VERSION,
             "authority": False,
             "eligible_for_live_gate": False,

@@ -11,7 +11,7 @@ import hashlib
 import os
 
 
-VERSION = "IGNITION_SIGNALS_V1"
+VERSION = "IGNITION_SIGNALS_V2_AVAILABILITY_TIME"
 BUCKET_MS = 100
 HISTORY_BUCKETS = 64  # Fixed 6.4 s research window; bounded/O(1) memory.
 WARMUP_BUCKETS = max(5, int(os.getenv("WSTRADE_IGNITION_WARMUP_BUCKETS", "20")))
@@ -40,6 +40,7 @@ class _Venue:
         "name", "epoch", "bucket_start_ms", "buy_qty", "sell_qty",
         "buy_quote", "sell_quote", "first_price", "last_price", "high",
         "low", "first_event_ms", "last_event_ms", "trade_count", "samples",
+        "first_receive_ms", "last_trade_receive_ms",
         "mean_abs_quote", "mean_dev", "previous_intensity", "history",
         "clock_samples", "base_delay_ms", "jitter_ms", "last_corrected_ms",
         "clock_valid", "bid", "ask", "bid_qty", "ask_qty", "bbo_receive_ms",
@@ -69,6 +70,7 @@ class _Venue:
         self.first_price = self.last_price = 0.0
         self.high = self.low = 0.0
         self.first_event_ms = self.last_event_ms = 0
+        self.first_receive_ms = self.last_trade_receive_ms = 0
         self.trade_count = 0
 
     def reset(self, epoch=None):
@@ -122,11 +124,12 @@ class _Venue:
             return False
         bucket = receive_ms - receive_ms % BUCKET_MS
         if self.bucket_start_ms is not None and bucket != self.bucket_start_ms:
-            self.finalize()
+            self.finalize(available_time_ms=receive_ms)
         if self.bucket_start_ms is None:
             self.bucket_start_ms = bucket
             self.first_price = self.high = self.low = price
             self.first_event_ms = event_ms
+            self.first_receive_ms = receive_ms
         quote = price * qty
         if aggressive_buy:
             self.buy_qty += qty
@@ -138,14 +141,15 @@ class _Venue:
         self.last_price = price
         self.high, self.low = max(self.high, price), min(self.low, price)
         self.last_event_ms = event_ms
+        self.last_trade_receive_ms = receive_ms
         self._clock(event_ms, receive_ms)
         return True
 
     def finalize_due(self, now_ms):
         if self.bucket_start_ms is not None and int(now_ms) >= self.bucket_start_ms + BUCKET_MS:
-            self.finalize()
+            self.finalize(available_time_ms=now_ms)
 
-    def finalize(self):
+    def finalize(self, available_time_ms=None):
         if self.trade_count <= 0:
             self._clear_bucket()
             return None
@@ -180,10 +184,23 @@ class _Venue:
             (self.ask * self.bid_qty + self.bid * self.ask_qty) / qty_sum
             if mid > 0.0 and qty_sum > 0.0 else mid
         )
+        bucket_end_ms = int(self.bucket_start_ms) + BUCKET_MS
+        available_time_ms = max(
+            bucket_end_ms,
+            int(self.last_trade_receive_ms or 0),
+            int(available_time_ms or bucket_end_ms),
+        )
         row = {
             "venue": self.name, "epoch": self.epoch,
             "bucket_start_ms": self.bucket_start_ms,
-            "receive_time_ms": self.bucket_start_ms + BUCKET_MS,
+            "bucket_end_ms": bucket_end_ms,
+            "first_trade_receive_ms": self.first_receive_ms,
+            "last_trade_receive_ms": self.last_trade_receive_ms,
+            "available_time_ms": available_time_ms,
+            # Compatibility alias for consumers. In V2 it means when the
+            # finalized evidence became observable, never logical bucket end.
+            "receive_time_ms": available_time_ms,
+            "availability_delay_ms": available_time_ms - bucket_end_ms,
             "event_time_ms": self.last_event_ms,
             "corrected_event_time_ms": round(self.last_corrected_ms, 4),
             "clock_uncertainty_ms": round(self.uncertainty_ms, 4),
@@ -202,6 +219,7 @@ class _Venue:
             "bbo_mid": mid, "microprice": microprice,
             "bbo_qty_valid": qty_sum > 0.0,
             "bbo_receive_time_ms": self.bbo_receive_ms,
+            "signal_schema_version": VERSION,
         }
         evidence_id = _raw_evidence_id(
             self.name, self.epoch, self.bucket_start_ms

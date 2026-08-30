@@ -71,6 +71,40 @@ def evidence_row(receive_ms, side, price, *, strong=True, material=True):
 
 
 class IgnitionCoreTests(unittest.TestCase):
+    def test_bucket_availability_is_when_finalize_due_observes_it(self):
+        venue = ignition_signals._Venue("binance_spot")
+        venue.push(1_001, 991, 100.0, 0.01, True)
+        venue.push(1_051, 1_041, 100.01, 0.01, True)
+
+        venue.finalize_due(1_480)
+
+        row = venue.history[-1]
+        self.assertEqual(row["bucket_end_ms"], 1_100)
+        self.assertEqual(row["first_trade_receive_ms"], 1_001)
+        self.assertEqual(row["last_trade_receive_ms"], 1_051)
+        self.assertEqual(row["available_time_ms"], 1_480)
+        self.assertEqual(row["receive_time_ms"], 1_480)
+        self.assertEqual(row["availability_delay_ms"], 380)
+        self.assertEqual(
+            row["signal_schema_version"],
+            "IGNITION_SIGNALS_V2_AVAILABILITY_TIME",
+        )
+
+    def test_bucket_rollover_uses_trigger_receive_time_as_availability(self):
+        venue = ignition_signals._Venue("binance_spot")
+        venue.push(1_001, 991, 100.0, 0.01, True)
+        venue.push(1_051, 1_041, 100.01, 0.01, True)
+
+        venue.push(1_201, 1_191, 100.02, 0.01, True)
+
+        row = venue.history[-1]
+        self.assertEqual(row["bucket_end_ms"], 1_100)
+        self.assertEqual(row["available_time_ms"], 1_201)
+        self.assertGreaterEqual(row["available_time_ms"], row["bucket_end_ms"])
+        self.assertGreaterEqual(
+            row["available_time_ms"], row["last_trade_receive_ms"]
+        )
+
     def test_oi_episode_binding_preserves_before_and_detects_refresh(self):
         s = state(now=3.2)
         s.open_interest = 1000.0

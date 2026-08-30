@@ -358,7 +358,7 @@ def evaluate(state, result, impact, basis, liquidation):
     if q6["status"] in ("DERIVATIVES_LED_REJECT", "NO_CASH_AUTHORITY"):
         blockers.append("CROSS_VENUE_CORROBORATION_FAIL")
     replay_approved = bool(
-        getattr(state, "entry_economics_v5_replay_approved", False)
+        getattr(state, "entry_economics_v6_replay_approved", False)
     )
     if replay_approved and q3.get("composite_veto"):
         blockers.append("FLOW_NONCONVERSION_COMPOSITE_VETO")
@@ -397,7 +397,7 @@ def evaluate(state, result, impact, basis, liquidation):
         "blocking_reasons": blockers,
         "soft_wait_reasons": soft_waits,
         "forced_unwind_tail": forced_tail_veto,
-        "entry_economics_v5_replay_approved": replay_approved,
+        "entry_economics_v6_replay_approved": replay_approved,
         "policy": "COMPOSITE_CAUSAL_VETO_NO_SINGLE_SIGNAL_DIRECTION",
     }
 
