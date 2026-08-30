@@ -1,0 +1,53 @@
+{
+  "batch": "BATCH_6_CAUSAL_PROOF_SEMANTICS",
+  "baseline_revision": "dfaa19f1f7072604572cf55cd5031aec3f443a6d",
+  "candidate_revision": "8280829607527038441a7174855e4dfd12442b67",
+  "changed_variables": [
+    "failed_reversion_path_semantics",
+    "origin_vs_execution_proof",
+    "directional_flow_acceleration",
+    "background_vs_marginal_flow_questions",
+    "flow_evidence_families",
+    "contradiction_grades",
+    "cash_acceptance_vs_control",
+    "research_flow_price_causal_order"
+  ],
+  "versions": {
+    "recorder_schema": 5,
+    "decision_schema": "TIER_S_DECISION_RECORD_V6_CAUSAL_PROOF_SEMANTICS",
+    "ignition_inference": "IGNITION_INFERENCE_V4_CAUSAL_PROOF_SEMANTICS",
+    "economic_contract": "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
+    "shadow_state": "SHADOW_RUNTIME_STATE_V11_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
+  },
+  "test_result": {
+    "command": ".venv/bin/python -m unittest discover -s tests -v",
+    "passed": 604,
+    "skipped_retired_legacy": 2,
+    "failed": 0
+  },
+  "market_semantics_cross_check": {
+    "source": "Binance Spot and USD-M Futures public aggTrade plus OI",
+    "finding": "event timestamps and maker-side executions support direction-aware aggregation; same-timestamp Binance executions are not independent venue evidence",
+    "used_for_threshold_tuning": false
+  },
+  "authority": {
+    "shadow_demo": "ENABLED_AFTER_RUNTIME_VERIFICATION",
+    "mainnet": "LOCKED",
+    "guardian_changed": false,
+    "hard_risk_changed": false,
+    "research_depth_can_trade": false
+  },
+  "wal": {
+    "dataset_id": null,
+    "status": "POST_RESTART_V5_COLLECTION_REQUIRED",
+    "canonical_ignition_replay_available": false
+  },
+  "decision": "REJECT_MAINNET_UNPROVEN",
+  "rollback_triggers": [
+    "runtime import or schema failure",
+    "proof hash mismatch between GO and submit",
+    "cash acceptance mislabeled as surviving control",
+    "Binance Spot and Futures echo counted as independent quorum",
+    "recorder schema mixing or CPU rolling-window violation"
+  ]
+}
