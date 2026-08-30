@@ -6,7 +6,7 @@ private account payloads.  The dedicated branch is amended in place so a
 three-minute cadence does not create hundreds of commits on ``main``.
 """
 
-from collections import Counter
+from collections import Counter, deque
 from datetime import datetime, timezone, timedelta
 import fcntl
 import json
@@ -48,6 +48,7 @@ REMOTE = os.getenv(
 )
 BRANCH = os.getenv("WSTRADE_RESEARCH_BRANCH", "telemetry")
 RETENTION_SECONDS = 84 * 3600
+MAX_DELTA_ROWS = 2000
 # Bound first-run RAM/CPU on the 2 GB Lightsail. Subsequent runs are strictly
 # incremental from the durable byte offset.
 INITIAL_TAIL_BYTES = 8 * 1024 * 1024
@@ -288,16 +289,30 @@ def _journal_delta(checkpoint):
         sources = [(JOURNAL, max(0, stat.st_size - INITIAL_TAIL_BYTES))]
     elif same:
         sources = [(JOURNAL, int(checkpoint.get("offset", 0)))]
-    rows = []
+    # Publisher telemetry is deliberately bounded; the immutable journal
+    # segments remain canonical replay evidence. Never materialize an entire
+    # multi-GB historical segment inside this low-memory oneshot.
+    rows = deque(maxlen=MAX_DELTA_ROWS)
     offset = 0
     for source, start in sources:
+        source_size = source.stat().st_size
+        bounded_backfill = bool(
+            source != JOURNAL
+            and int(start) == 0
+            and source_size > INITIAL_TAIL_BYTES
+        )
+        if bounded_backfill:
+            start = max(0, source_size - INITIAL_TAIL_BYTES)
         with source.open("rb") as handle:
             handle.seek(int(start))
             # Only an initial bounded tail can start in the middle of a line.
             # A persisted cursor always points to an exact completed-line
             # boundary; consuming one more line there would silently drop the
             # first event appended after every publish cycle.
-            if not has_cursor and source == JOURNAL and start:
+            if (
+                (not has_cursor and source == JOURNAL and start)
+                or (bounded_backfill and start)
+            ):
                 handle.readline()
             while True:
                 line_start = handle.tell()
@@ -321,7 +336,7 @@ def _journal_delta(checkpoint):
         "device": stat.st_dev, "inode": stat.st_ino, "offset": offset,
         "journal_size": stat.st_size,
     }
-    return rows, next_checkpoint
+    return list(rows), next_checkpoint
 
 
 def _service_state(name):

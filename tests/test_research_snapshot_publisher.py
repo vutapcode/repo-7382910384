@@ -96,6 +96,46 @@ class ResearchPublisherTests(unittest.TestCase):
         self.assertEqual([row["cycle_id"] for row in rows], ["b"])
         self.assertGreater(next_checkpoint["offset"], checkpoint["offset"])
 
+    def test_rotated_zero_cursor_uses_bounded_backfill(self):
+        with tempfile.TemporaryDirectory() as folder:
+            journal = Path(folder) / "events.jsonl"
+            historical = "".join(
+                json.dumps({
+                    "event": "DECISION_EVALUATED", "cycle_id": str(i),
+                    "padding": "x" * 40,
+                }) + "\n" for i in range(20)
+            )
+            journal.write_text(historical, encoding="utf-8")
+            old_stat = journal.stat()
+            segment = publisher.journal_segments.prepare_append(
+                journal, max_bytes=1,
+            )
+            journal.write_text(
+                json.dumps({"event": "ENTRY", "cycle_id": "new"}) + "\n",
+                encoding="utf-8",
+            )
+            old_journal = publisher.JOURNAL
+            old_tail = publisher.INITIAL_TAIL_BYTES
+            publisher.JOURNAL = journal
+            publisher.INITIAL_TAIL_BYTES = 240
+            try:
+                rows, next_checkpoint = publisher._journal_delta({
+                    "device": old_stat.st_dev,
+                    "inode": old_stat.st_ino,
+                    "offset": 0,
+                })
+            finally:
+                publisher.JOURNAL = old_journal
+                publisher.INITIAL_TAIL_BYTES = old_tail
+            current_inode = journal.stat().st_ino
+            segment_exists = segment.exists()
+        ids = [row.get("cycle_id") for row in rows]
+        self.assertIn("new", ids)
+        self.assertNotIn("0", ids)
+        self.assertLess(len(rows), 20)
+        self.assertEqual(next_checkpoint["inode"], current_inode)
+        self.assertTrue(segment_exists)
+
 
 if __name__ == "__main__":
     unittest.main()
