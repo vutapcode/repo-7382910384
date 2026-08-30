@@ -205,12 +205,23 @@ class WavefrontShadowEvaluator:
         ablation = dict(ablation or {})
         if len(ablation) > 1:
             raise ValueError("CANONICAL_MIRROR_ABLATION_MUST_CHANGE_ONE_RULE")
+        unknown = set(ablation).difference({
+            "follow_max_ms", "material_price_bps",
+            "dual_cash_futures_optional",
+        })
+        if unknown:
+            raise ValueError(
+                "CANONICAL_MIRROR_ABLATION_UNKNOWN:" + ",".join(sorted(unknown))
+            )
         self.ablation = ablation
         if self.profile == CANONICAL_MIRROR_PROFILE:
             self.follow_max_ms = int(ignition_core.FOLLOW_MAX_MS)
             self.bucket_ms = int(ignition_signals.BUCKET_MS)
             self.min_qty = dict(ignition_signals.MIN_QTY)
             self.material_price_bps = float(ignition_core.MATERIAL_PRICE_BPS)
+            self.dual_cash_futures_optional = bool(
+                ablation.get("dual_cash_futures_optional", False)
+            )
             if "follow_max_ms" in ablation:
                 self.follow_max_ms = int(ablation["follow_max_ms"])
             elif "material_price_bps" in ablation:
@@ -222,6 +233,7 @@ class WavefrontShadowEvaluator:
             self.bucket_ms = 100
             self.min_qty = dict(MIN_QTY)
             self.material_price_bps = 0.15
+            self.dual_cash_futures_optional = False
         self.guardian = _load_guardian()
         self.risk = shadow_risk_guard
         risk_ratchet_price_quality_hook.install(self.risk)
@@ -633,6 +645,11 @@ class WavefrontShadowEvaluator:
             return
         episode["cash_hits"][signal["venue"]] = episode["cash_hits"].get(signal["venue"], 0) + 1
         episode["cash_signals"][signal["venue"]] = dict(signal)
+        if (
+            self.dual_cash_futures_optional
+            and len(episode["cash_hits"]) >= 2
+        ):
+            self._qualify_episode(signal, confirmation="DUAL_FRESH_CASH")
 
     def _observe_futures_signal(self, signal):
         if not signal["strong"] or self.episode is None:
@@ -661,6 +678,21 @@ class WavefrontShadowEvaluator:
             }, signal["receive_time_ms"])
             return
 
+        self._qualify_episode(
+            signal,
+            confirmation="FUTURES_FOLLOWER",
+            corrected_follow_ms=corrected_delta,
+            lead_lower_bound_ms=lead_lower_bound,
+        )
+
+    def _qualify_episode(
+        self, signal, *, confirmation, corrected_follow_ms=None,
+        lead_lower_bound_ms=None,
+    ):
+        """Finish one mirror episode without granting production authority."""
+        if self.episode is None:
+            return
+        episode = self.episode
         if not self._feeds_ready():
             self._publish("wavefront_candidate", {
                 **self._episode_payload(episode),
@@ -694,8 +726,15 @@ class WavefrontShadowEvaluator:
                 "decision": "RESEARCH_ONLY", "reason": "REVERSAL_BUILD_NOT_AUTHORIZED",
                 "bias_relation": bias_relation, "oi_intent": oi,
                 "bias_fresh": bias_fresh,
-                "corrected_follow_ms": round(corrected_delta, 4),
-                "lead_lower_bound_ms": round(lead_lower_bound, 4),
+                "confirmation": confirmation,
+                "corrected_follow_ms": (
+                    round(corrected_follow_ms, 4)
+                    if corrected_follow_ms is not None else None
+                ),
+                "lead_lower_bound_ms": (
+                    round(lead_lower_bound_ms, 4)
+                    if lead_lower_bound_ms is not None else None
+                ),
             }, signal["receive_time_ms"])
             self.episode = None
             return
@@ -705,20 +744,56 @@ class WavefrontShadowEvaluator:
                 "decision": "WAIT", "reason": "OI_OR_BIAS_CLASS_NOT_READY",
                 "bias_relation": bias_relation, "oi_intent": oi,
                 "bias_fresh": bias_fresh,
-                "corrected_follow_ms": round(corrected_delta, 4),
-                "lead_lower_bound_ms": round(lead_lower_bound, 4),
+                "confirmation": confirmation,
+                "corrected_follow_ms": (
+                    round(corrected_follow_ms, 4)
+                    if corrected_follow_ms is not None else None
+                ),
+                "lead_lower_bound_ms": (
+                    round(lead_lower_bound_ms, 4)
+                    if lead_lower_bound_ms is not None else None
+                ),
             }, signal["receive_time_ms"])
             return
 
+        futures = self.last_signal.get("futures")
+        futures_fresh_aligned = bool(
+            futures
+            and futures.get("side") == episode["side"]
+            and 0 <= signal["receive_time_ms"] - int(
+                futures.get("receive_time_ms", 0) or 0
+            ) <= self.follow_max_ms
+        )
         candidate = {
             **self._episode_payload(episode),
-            "decision": "QUALIFIED", "reason": "CASH_PROPOSER_FUTURES_FOLLOWER",
+            "decision": "QUALIFIED",
+            "reason": (
+                "DUAL_FRESH_CASH_FUTURES_OPTIONAL"
+                if confirmation == "DUAL_FRESH_CASH"
+                else "CASH_PROPOSER_FUTURES_FOLLOWER"
+            ),
             "causal_class": causal_class, "bias_relation": bias_relation,
             "bias_fresh": bias_fresh,
-            "oi_intent": oi, "futures_flow": dict(signal),
-            "corrected_follow_ms": round(corrected_delta, 4),
-            "receive_follow_ms": receive_delta,
-            "lead_lower_bound_ms": round(lead_lower_bound, 4),
+            "oi_intent": oi,
+            "confirmation": confirmation,
+            "futures_verifier": (
+                "ALIGNED_FRESH" if futures_fresh_aligned else "NOT_REQUIRED"
+            ),
+            "futures_flow": (
+                dict(signal) if confirmation == "FUTURES_FOLLOWER"
+                else dict(futures or {})
+            ),
+            "corrected_follow_ms": (
+                round(corrected_follow_ms, 4)
+                if corrected_follow_ms is not None else None
+            ),
+            "receive_follow_ms": (
+                signal["receive_time_ms"] - episode["started_receive_ms"]
+            ),
+            "lead_lower_bound_ms": (
+                round(lead_lower_bound_ms, 4)
+                if lead_lower_bound_ms is not None else None
+            ),
             "exchange_independence": {
                 "cash_group": sorted(episode["cash_hits"]),
                 "derivative_group": ["futures", "open_interest"],
@@ -832,7 +907,14 @@ class WavefrontShadowEvaluator:
             }
             self.twins[name] = twin
             if name == "TAKER_TWIN":
-                slip = cost["entry_slippage_bps"] - cost["half_spread_bps"]
+                mid = _mid(bid, ask)
+                half_spread = (
+                    (ask - bid) / mid * 5_000.0 if mid > 0.0 else 0.0
+                )
+                slip = max(
+                    0.0,
+                    _f(cost.get("entry_slippage_bps")) - half_spread,
+                )
                 fill = ask * (1.0 + slip / 10_000.0) if twin["side"] == "LONG" else bid * (1.0 - slip / 10_000.0)
                 self._fill_twin(twin, fill, now_ms, "IMMEDIATE_EXECUTABLE_BBO")
         self._persist()

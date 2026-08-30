@@ -11,11 +11,12 @@ from recorder.replay import DeterministicReplay
 
 
 class WavefrontHarness:
-    def __init__(self):
+    def __init__(self, *, profile="WAVEFRONT", ablation=None):
         self.rows = []
         self.engine = WavefrontShadowEvaluator(
             self.emit, warmup_samples=2,
             runtime_health_path=None, cpu_status_path=None,
+            profile=profile, ablation=ablation,
         )
         self.sequence = {
             "binance_spot_trade_100ms": 0,
@@ -91,6 +92,56 @@ class WavefrontHarness:
 
 
 class WavefrontCausalityTests(unittest.TestCase):
+    def test_dual_cash_futures_optional_is_mirror_only_one_variable(self):
+        baseline = WavefrontHarness(profile="CANONICAL_MIRROR")
+        baseline.prepare_aligned_build()
+        baseline.record(
+            "binance_spot_trade_100ms", 100_800,
+            baseline.batch(100.10, buy=0.20, sell=0.0), event_ms=100_750,
+        )
+        baseline.record(
+            "coinbase_spot_trade_100ms", 101_000,
+            baseline.batch(100.11, buy=0.20, sell=0.0), event_ms=100_950,
+        )
+        self.assertFalse(any(
+            payload.get("decision") == "QUALIFIED"
+            for stream, payload, _ in baseline.rows
+            if stream == "wavefront_candidate"
+        ))
+
+        candidate = WavefrontHarness(
+            profile="CANONICAL_MIRROR",
+            ablation={"dual_cash_futures_optional": True},
+        )
+        candidate.prepare_aligned_build()
+        candidate.record(
+            "binance_spot_trade_100ms", 100_800,
+            candidate.batch(100.10, buy=0.20, sell=0.0), event_ms=100_750,
+        )
+        candidate.record(
+            "coinbase_spot_trade_100ms", 101_000,
+            candidate.batch(100.11, buy=0.20, sell=0.0), event_ms=100_950,
+        )
+        qualified = [
+            payload for stream, payload, _ in candidate.rows
+            if stream == "wavefront_candidate"
+            and payload.get("decision") == "QUALIFIED"
+        ]
+        self.assertEqual(len(qualified), 1)
+        self.assertEqual(
+            qualified[0]["reason"], "DUAL_FRESH_CASH_FUTURES_OPTIONAL"
+        )
+        self.assertEqual(qualified[0]["confirmation"], "DUAL_FRESH_CASH")
+        self.assertFalse(qualified[0]["authority"])
+
+    def test_canonical_mirror_rejects_unknown_ablation(self):
+        with self.assertRaisesRegex(ValueError, "ABLATION_UNKNOWN"):
+            WavefrontShadowEvaluator(
+                lambda *args, **kwargs: None,
+                profile="CANONICAL_MIRROR",
+                ablation={"invented_rule": True},
+            )
+
     def test_executable_twin_freezes_first_positive_net_timestamp(self):
         h = WavefrontHarness()
         h.prepare_aligned_build()
