@@ -8,6 +8,8 @@ import time
 
 import orjson
 
+from loi_he_thong import journal_segments
+
 
 _CYCLE_FIELDS = (
     'position_cycle_id', 'setup_id', 'setup_generation', 'symbol', 'mode',
@@ -141,32 +143,38 @@ class DecisionTap:
         path = self.config.journal_events_path
         if not path.exists():
             return [], self.offset
-        stat = path.stat()
-        identity = (int(stat.st_dev), int(stat.st_ino))
-        if identity != (self.event_device, self.event_inode):
-            self.offset = 0
-            self.event_device, self.event_inode = identity
-        elif stat.st_size < self.offset:
-            self.offset = 0
         rows = []
-        with open(path, 'rb') as handle:
-            handle.seek(self.offset)
-            while True:
-                line_start = handle.tell()
-                line = handle.readline()
-                if not line:
-                    break
-                if not line.endswith(b'\n'):
-                    handle.seek(line_start)
-                    break
-                try:
-                    rows.append(orjson.loads(line))
-                except orjson.JSONDecodeError:
-                    if self.health is not None:
-                        self.health.decision_tap_parse_errors += 1
-                        self.health.errors['decision_tap_parse_errors'] += 1
-                    continue
-            new_offset = handle.tell()
+        sources = journal_segments.cursor_sources(
+            path, self.event_device, self.event_inode, self.offset,
+        )
+        new_offset = 0
+        for source, start in sources:
+            try:
+                size = source.stat().st_size
+            except OSError:
+                continue
+            start = int(start) if 0 <= int(start) <= size else 0
+            with open(source, 'rb') as handle:
+                handle.seek(start)
+                while True:
+                    line_start = handle.tell()
+                    line = handle.readline()
+                    if not line:
+                        break
+                    if not line.endswith(b'\n'):
+                        handle.seek(line_start)
+                        break
+                    try:
+                        rows.append(orjson.loads(line))
+                    except orjson.JSONDecodeError:
+                        if self.health is not None:
+                            self.health.decision_tap_parse_errors += 1
+                            self.health.errors['decision_tap_parse_errors'] += 1
+                        continue
+                if source == path:
+                    new_offset = handle.tell()
+        stat = path.stat()
+        self.event_device, self.event_inode = int(stat.st_dev), int(stat.st_ino)
         return rows, new_offset
 
     async def loop(self):

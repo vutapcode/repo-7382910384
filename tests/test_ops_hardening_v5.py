@@ -2,6 +2,7 @@ from pathlib import Path
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -78,7 +79,7 @@ class OpsHardeningV5Tests(unittest.TestCase):
             base = types.SimpleNamespace(
                 _close_shadow=broken_close,
                 app=types.SimpleNamespace(state=state),
-                EVENTS_PATH=journal,
+                EVENT_PATH=journal,
             )
             safe = ns["install"](types.SimpleNamespace(base=base))
             self.assertIsNone(safe(pos, {}, 10.0))
@@ -86,6 +87,39 @@ class OpsHardeningV5Tests(unittest.TestCase):
             self.assertEqual(state.mainnet_shadow_balance_usdt, 5.4)
             self.assertEqual(state.mainnet_shadow_trades, 0)
             self.assertEqual(journal.read_bytes(), b"ENTRY\n")
+
+    def test_close_snapshot_rotates_before_transaction_and_never_sparse_extends(self):
+        ns, _ = load_source(ROOT / "loi_he_thong" / "close_durability_guard.py")
+        with tempfile.TemporaryDirectory() as td:
+            journal = Path(td) / "events.jsonl"
+            journal.write_bytes(b"ENTRY\n")
+            state = types.SimpleNamespace()
+            pos = types.SimpleNamespace(active=True)
+
+            def broken_close(pos, result, now):
+                with journal.open("ab") as handle:
+                    handle.write(b"EXIT\n")
+                pos.active = False
+                raise OSError("checkpoint failed")
+
+            base = types.SimpleNamespace(
+                _close_shadow=broken_close,
+                app=types.SimpleNamespace(state=state),
+                EVENT_PATH=journal,
+            )
+            actual_prepare = ns["journal_segments"].prepare_append
+            with patch.object(
+                ns["journal_segments"], "prepare_append",
+                side_effect=lambda path: actual_prepare(path, max_bytes=1),
+            ):
+                safe = ns["install"](types.SimpleNamespace(base=base))
+                self.assertIsNone(safe(pos, {}, 10.0))
+
+            self.assertTrue(pos.active)
+            self.assertEqual(journal.read_bytes(), b"")
+            segments = list(Path(td).glob("events.segment.*.jsonl"))
+            self.assertEqual(len(segments), 1)
+            self.assertEqual(segments[0].read_bytes(), b"ENTRY\n")
 
 
 if __name__ == "__main__":

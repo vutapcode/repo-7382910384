@@ -3,6 +3,8 @@ import logging
 import os
 import time
 
+from loi_he_thong import journal_segments
+
 _STATE_FIELDS = (
     "mainnet_shadow_balance_usdt",
     "mainnet_shadow_realized_pnl",
@@ -25,10 +27,13 @@ _MISSING = object()
 
 
 def _journal_size(base):
-    path = getattr(base, "EVENTS_PATH", None)
+    path = getattr(base, "EVENT_PATH", None) or getattr(base, "EVENTS_PATH", None)
     if path is None:
         return None, None
     try:
+        # Establish the segment boundary before CLOSE mutates position/state so
+        # a rollback always truncates the same current inode it snapshotted.
+        journal_segments.prepare_append(path)
         return path, path.stat().st_size if path.exists() else 0
     except OSError:
         return path, None

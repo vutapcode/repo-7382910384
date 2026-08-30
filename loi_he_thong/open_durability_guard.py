@@ -3,6 +3,8 @@ import logging
 import os
 import time
 
+from loi_he_thong import journal_segments
+
 _STATE_FIELDS = (
     "mainnet_shadow_position",
     "mainnet_shadow_position_status",
@@ -17,10 +19,16 @@ _MISSING = object()
 
 
 def _journal_size(base):
-    path = getattr(base, "EVENTS_PATH", None)
+    # The canonical launcher exposes EVENT_PATH. EVENTS_PATH is retained only
+    # for compatibility with older wrappers/tests.
+    path = getattr(base, "EVENT_PATH", None) or getattr(base, "EVENTS_PATH", None)
     if path is None:
         return None, None
     try:
+        # Rotate before the transaction snapshot. Rotating during a failed
+        # OPEN and then truncating the new inode to the old inode's size would
+        # create a sparse/NUL-filled journal.
+        journal_segments.prepare_append(path)
         return path, path.stat().st_size if path.exists() else 0
     except OSError:
         return path, None

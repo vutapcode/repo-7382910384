@@ -13,8 +13,14 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import tempfile
 import time
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from loi_he_thong import journal_segments
 
 
 SOURCE = Path(os.getenv(
@@ -345,6 +351,8 @@ class AuditMirror:
         self.latest_json = self.output_dir / LATEST_JSON.name
         self.latest_text = self.output_dir / LATEST_TEXT.name
         self.offset = 0
+        self.source_device = 0
+        self.source_inode = 0
         self.active = {}
         self.decisions = OrderedDict()
         self.completed = set()
@@ -366,9 +374,13 @@ class AuditMirror:
         try:
             state = json.loads(self.checkpoint.read_text(encoding="utf-8"))
             self.offset = max(0, int(state.get("source_offset", 0) or 0))
+            self.source_device = int(state.get("source_device", 0) or 0)
+            self.source_inode = int(state.get("source_inode", 0) or 0)
             self.active = dict(state.get("active_trades") or {})
         except (OSError, ValueError, json.JSONDecodeError):
             self.offset = 0
+            self.source_device = 0
+            self.source_inode = 0
             self.active = {}
 
     def _save(self):
@@ -376,6 +388,8 @@ class AuditMirror:
             "schema_version": 1,
             "source": str(self.source),
             "source_offset": self.offset,
+            "source_device": self.source_device,
+            "source_inode": self.source_inode,
             "updated_at": time.time(),
             "active_trades": self.active,
         })
@@ -526,25 +540,43 @@ class AuditMirror:
     def run_once(self):
         if not self.source.exists():
             return 0
-        size = self.source.stat().st_size
-        if size < self.offset:
-            self.offset = 0
         count = 0
-        with self.source.open("r", encoding="utf-8") as handle:
-            handle.seek(self.offset)
-            while True:
-                start = handle.tell()
-                line = handle.readline()
-                if not line:
-                    break
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    handle.seek(start)
-                    break
-                self.offset = handle.tell()
-                self.process(row, source_offset=start)
-                count += 1
+        sources = journal_segments.cursor_sources(
+            self.source, self.source_device, self.source_inode, self.offset,
+        )
+        new_offset = 0
+        for source, requested_start in sources:
+            try:
+                size = source.stat().st_size
+            except OSError:
+                continue
+            requested_start = (
+                int(requested_start)
+                if 0 <= int(requested_start) <= size else 0
+            )
+            with source.open("r", encoding="utf-8") as handle:
+                handle.seek(requested_start)
+                while True:
+                    start = handle.tell()
+                    line = handle.readline()
+                    if not line:
+                        break
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        handle.seek(start)
+                        break
+                    self.process(
+                        row,
+                        source_offset="%s:%d" % (source.name, start),
+                    )
+                    count += 1
+                if source == self.source:
+                    new_offset = handle.tell()
+        stat = self.source.stat()
+        self.offset = new_offset
+        self.source_device = int(stat.st_dev)
+        self.source_inode = int(stat.st_ino)
         if count:
             self._save()
         return count

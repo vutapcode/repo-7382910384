@@ -1,5 +1,7 @@
 import importlib.util
+import json
 from pathlib import Path
+import tempfile
 import unittest
 
 
@@ -56,8 +58,6 @@ class ResearchPublisherTests(unittest.TestCase):
         self.assertNotIn("private_payload", recovery)
 
     def test_closed_trade_history_uses_second_allowlist(self):
-        import json
-        import tempfile
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "trades.jsonl"
             source.write_text(json.dumps({
@@ -73,6 +73,28 @@ class ResearchPublisherTests(unittest.TestCase):
         self.assertEqual(rows[0]["net_pnl_bps"], 4.0)
         self.assertNotIn("api_secret", rows[0])
         self.assertNotIn("must-not-leak", str(rows[0]))
+
+    def test_checkpoint_boundary_does_not_skip_first_new_event(self):
+        with tempfile.TemporaryDirectory() as folder:
+            journal = Path(folder) / "events.jsonl"
+            first = json.dumps({"event": "DECISION_EVALUATED", "cycle_id": "a"}) + "\n"
+            journal.write_text(first, encoding="utf-8")
+            stat = journal.stat()
+            checkpoint = {
+                "device": stat.st_dev,
+                "inode": stat.st_ino,
+                "offset": stat.st_size,
+            }
+            with journal.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"event": "ENTRY", "cycle_id": "b"}) + "\n")
+            old = publisher.JOURNAL
+            publisher.JOURNAL = journal
+            try:
+                rows, next_checkpoint = publisher._journal_delta(checkpoint)
+            finally:
+                publisher.JOURNAL = old
+        self.assertEqual([row["cycle_id"] for row in rows], ["b"])
+        self.assertGreater(next_checkpoint["offset"], checkpoint["offset"])
 
 
 if __name__ == "__main__":

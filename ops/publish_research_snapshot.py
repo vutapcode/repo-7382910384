@@ -16,6 +16,11 @@ import subprocess
 import sys
 import time
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from loi_he_thong import journal_segments
+
 
 JOURNAL = Path(os.getenv(
     "WSTRADE_RESEARCH_JOURNAL",
@@ -273,31 +278,45 @@ def _journal_delta(checkpoint):
         and checkpoint.get("inode") == stat.st_ino
         and 0 <= int(checkpoint.get("offset", 0)) <= stat.st_size
     )
-    start = int(checkpoint.get("offset", 0)) if same else max(
-        0, stat.st_size - INITIAL_TAIL_BYTES,
+    has_cursor = bool(checkpoint.get("device") and checkpoint.get("inode"))
+    sources = journal_segments.cursor_sources(
+        JOURNAL,
+        checkpoint.get("device", 0), checkpoint.get("inode", 0),
+        checkpoint.get("offset", 0),
     )
+    if not has_cursor:
+        sources = [(JOURNAL, max(0, stat.st_size - INITIAL_TAIL_BYTES))]
+    elif same:
+        sources = [(JOURNAL, int(checkpoint.get("offset", 0)))]
     rows = []
-    offset = start
-    with JOURNAL.open("rb") as handle:
-        handle.seek(start)
-        if start:
-            handle.readline()
-            offset = handle.tell()
-        while True:
-            line_start = handle.tell()
-            raw = handle.readline()
-            if not raw:
-                break
-            if not raw.endswith(b"\n"):
-                offset = line_start
-                break
-            offset = handle.tell()
-            try:
-                row = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, ValueError):
-                continue
-            if row.get("event") in {"DECISION_EVALUATED", "ENTRY", "EXIT"}:
-                rows.append(row)
+    offset = 0
+    for source, start in sources:
+        with source.open("rb") as handle:
+            handle.seek(int(start))
+            # Only an initial bounded tail can start in the middle of a line.
+            # A persisted cursor always points to an exact completed-line
+            # boundary; consuming one more line there would silently drop the
+            # first event appended after every publish cycle.
+            if not has_cursor and source == JOURNAL and start:
+                handle.readline()
+            while True:
+                line_start = handle.tell()
+                raw = handle.readline()
+                if not raw:
+                    break
+                if not raw.endswith(b"\n"):
+                    if source == JOURNAL:
+                        offset = line_start
+                    break
+                if source == JOURNAL:
+                    offset = handle.tell()
+                try:
+                    row = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    continue
+                if row.get("event") in {"DECISION_EVALUATED", "ENTRY", "EXIT"}:
+                    rows.append(row)
+    stat = JOURNAL.stat()
     next_checkpoint = {
         "device": stat.st_dev, "inode": stat.st_ino, "offset": offset,
         "journal_size": stat.st_size,

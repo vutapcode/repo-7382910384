@@ -1,7 +1,9 @@
-"""Durability hook for critical shadow journal transitions only."""
+"""Durability and bounded-segment hook for the active shadow journal."""
 import os
 
-VERSION = "DURABLE_SHADOW_JOURNAL_V1"
+from loi_he_thong import journal_segments
+
+VERSION = "DURABLE_SHADOW_JOURNAL_V2_BOUNDED_SEGMENTS"
 _CRITICAL = {"ENTRY", "EXIT"}
 
 
@@ -26,6 +28,7 @@ def install(shadow):
     original = shadow._append_event
 
     def append_event_durable(event, payload):
+        journal_segments.prepare_append(shadow.EVENT_PATH)
         out = original(event, payload)
         if str(event).upper() in _CRITICAL:
             _fsync_path_and_parent(shadow.EVENT_PATH)

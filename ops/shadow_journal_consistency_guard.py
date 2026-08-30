@@ -5,6 +5,11 @@ import os
 import sys
 from pathlib import Path
 
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+from loi_he_thong import journal_segments
+
 ROOT = Path(
     os.environ.get("SMC_JOURNAL_DIR")
     or (Path.home() / ".local" / "state" / "smc2026" / "mainnet_shadow")
@@ -15,33 +20,9 @@ _RELEVANT = {"ENTRY", "EXIT"}
 
 
 def _last_relevant_event(path, block_size=65536):
-    if not path.exists() or path.stat().st_size <= 0:
-        return None
-    with path.open("rb") as handle:
-        handle.seek(0, os.SEEK_END)
-        pos = handle.tell()
-        carry = b""
-        while pos > 0:
-            start = max(0, pos - int(block_size))
-            handle.seek(start)
-            chunk = handle.read(pos - start)
-            data = chunk + carry
-            lines = data.split(b"\n")
-            carry = lines[0]
-            for raw in reversed(lines[1:]):
-                raw = raw.strip()
-                if not raw:
-                    continue
-                row = json.loads(raw.decode("utf-8"))
-                if row.get("event") in _RELEVANT:
-                    return row
-            pos = start
-        raw = carry.strip()
-        if raw:
-            row = json.loads(raw.decode("utf-8"))
-            if row.get("event") in _RELEVANT:
-                return row
-    return None
+    return journal_segments.last_matching_event(
+        path, _RELEVANT, block_size=block_size,
+    )
 
 
 def _fail(reason):

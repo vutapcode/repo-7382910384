@@ -5,6 +5,11 @@ import os
 import sys
 from pathlib import Path
 
+REPO = Path(__file__).resolve().parents[1]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+from loi_he_thong import journal_segments
+
 
 STATE_REQUIRING_EVENTS = frozenset({
     "ENTRY", "EXIT", "LIVE_ENTRY", "LIVE_EXIT", "LIVE_EXCHANGE_EXIT",
@@ -14,20 +19,15 @@ STATE_REQUIRING_EVENTS = frozenset({
 
 def journal_requires_state(path):
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            for number, line in enumerate(handle, 1):
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                except (TypeError, ValueError) as exc:
-                    raise RuntimeError(
-                        f"journal_corrupt_line:{number}:{type(exc).__name__}"
-                    ) from exc
-                if str((row or {}).get("event", "")) in STATE_REQUIRING_EVENTS:
-                    return True
-        return False
-    except OSError as exc:
+        return bool(journal_segments.last_matching_event(
+            path, STATE_REQUIRING_EVENTS,
+        ))
+    except json.JSONDecodeError as exc:
+        # Keep the established operator-facing reason stable: malformed
+        # journal evidence must fail closed and must not look like a generic
+        # filesystem read failure.
+        raise RuntimeError(f"journal_corrupt_line:{exc}") from exc
+    except (OSError, UnicodeError, ValueError) as exc:
         raise RuntimeError(f"journal_read:{type(exc).__name__}:{exc}") from exc
 
 root = Path(
@@ -42,7 +42,10 @@ events_path = Path(
 
 if not state_path.exists():
     try:
-        journal_size = events_path.stat().st_size if events_path.exists() else 0
+        journal_size = sum(
+            path.stat().st_size
+            for path in journal_segments.ordered_paths(events_path)
+        )
     except OSError as exc:
         print(
             f"[SHADOW-RECOVERY] FAIL journal_stat:{type(exc).__name__}:{exc}",
