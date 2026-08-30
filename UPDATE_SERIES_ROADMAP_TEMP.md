@@ -474,7 +474,11 @@ Batch 6 shadow checkpoint:
   independent quorum; Coinbase+Futures or two cash venues can corroborate.
 - Schema boundary: recorder V5, Ignition inference V4, economics V7 and shadow
   state V11. V4/V6 rows cannot train the new cohort.
-- Verification: 604 tests passed, 2 retired legacy tests skipped. Mainnet
+- Runtime deployment exposed a recorder shutdown defect: in-flight compaction
+  checked the shutdown/CPU guard only after Arrow/zstd work, so systemd reached
+  its 90-second timeout. Commit `7d6f808` checks before WAL decode and before
+  Arrow conversion; no strategy authority changed.
+- Verification: 605 tests passed, 2 retired legacy tests skipped. Mainnet
   promotion decision remains `REJECT_UNPROVEN`; a clean post-restart V5 WAL is
   required before empirical evaluation.
 
