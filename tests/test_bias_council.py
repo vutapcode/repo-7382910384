@@ -221,6 +221,52 @@ class BiasCouncilTests(unittest.TestCase):
         self.assertAlmostEqual(imbalance, 1.0)
         self.assertAlmostEqual(volume, 60.0)
 
+    def test_background_pressure_and_marginal_control_are_separate_questions(self):
+        s = state()
+        s.flow_1s_buffer = deque(
+            {"ts": float(sec), "buy": 1.0, "sell": 0.0}
+            for sec in range(96, 101)
+        )
+        s.futures_flow_1s_buffer = deque(
+            {"ts": float(sec), "buy": 1.0, "sell": 0.0}
+            for sec in range(96, 101)
+        )
+        s.coinbase_cvd_3s = -1.0
+        s.coinbase_volume_3s = 1.0
+        s.coinbase_flow_3s_ts = 100.0
+        report = council.evaluate(s, now=100.0)
+        context = report["flow_question_context"]
+        self.assertIn(
+            context["background_pressure_60s"]["side"],
+            ("LONG", "SHORT", "ABSTAIN"),
+        )
+        self.assertFalse(
+            context["marginal_control_1_5s"]["authority"]
+        )
+        self.assertTrue(
+            context["causal_families"]["binance_complex_echo"]
+        )
+        self.assertEqual(
+            context["causal_families"]["cash_family"]["dual_cash_side"],
+            "UNKNOWN",
+        )
+
+    def test_spot_futures_echo_does_not_form_independent_s3_quorum(self):
+        agreed, reason = council.flow_family_consensus([
+            ("spot", "LONG", 0.8),
+            ("futures", "LONG", 0.9),
+        ])
+        self.assertEqual(agreed, [])
+        self.assertEqual(reason, "BINANCE_COMPLEX_ECHO_UNCORROBORATED")
+
+    def test_coinbase_futures_can_form_cross_family_s3_quorum(self):
+        agreed, reason = council.flow_family_consensus([
+            ("coinbase", "SHORT", 0.8),
+            ("futures", "SHORT", 0.9),
+        ])
+        self.assertEqual([row[0] for row in agreed], ["coinbase", "futures"])
+        self.assertEqual(reason, "CASH_DERIVATIVE_FLOW")
+
 
 if __name__ == "__main__":
     unittest.main()

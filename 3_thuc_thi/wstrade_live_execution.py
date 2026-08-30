@@ -693,6 +693,19 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
                     "flow_decayed_before_submit": timing.get(
                         "flow_decayed_before_submit", False
                     ),
+                    "authority_proof_hash": result.get(
+                        "authority_proof_hash"
+                    ),
+                    "causal_origin_proof": dict(
+                        (result.get("authority_dependencies") or {}).get(
+                            "causal_origin_proof"
+                        ) or {}
+                    ),
+                    "current_execution_proof": dict(
+                        (result.get("authority_dependencies") or {}).get(
+                            "current_execution_proof"
+                        ) or {}
+                    ),
                 },
             )
         if not causal_ok:

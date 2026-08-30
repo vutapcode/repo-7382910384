@@ -493,6 +493,7 @@ def _record_post_go_rejection(
     if result.get("decision") != "GO":
         return False
     ignition = dict(result.get("ignition") or {})
+    dependencies = dict(result.get("authority_dependencies") or {})
     _append_event("ENTRY_POST_GO_REJECTED", {
         "schema_version": "POST_GO_REJECTION_V1",
         "cycle_id": result.get("decision_cycle_id"),
@@ -502,6 +503,12 @@ def _record_post_go_rejection(
         "blocking_reason": str(blocking_reason or "UNKNOWN"),
         "authority_basis": result.get("authority_basis"),
         "proof_hash": result.get("authority_proof_hash"),
+        "causal_origin_proof": dict(
+            dependencies.get("causal_origin_proof") or {}
+        ),
+        "current_execution_proof": dict(
+            dependencies.get("current_execution_proof") or {}
+        ),
         "failed_dependency": failed_dependency,
         "proof_type": ignition.get("proof_type"),
         "execution_policy": result.get("execution_policy"),
@@ -1348,6 +1355,17 @@ async def _open_position(side, result, now):
                 "flow_decayed_before_submit", False
             ),
             "authority_basis": causal_detail.get("authority_basis"),
+            "authority_proof_hash": result.get("authority_proof_hash"),
+            "causal_origin_proof": dict(
+                (result.get("authority_dependencies") or {}).get(
+                    "causal_origin_proof"
+                ) or {}
+            ),
+            "current_execution_proof": dict(
+                (result.get("authority_dependencies") or {}).get(
+                    "current_execution_proof"
+                ) or {}
+            ),
             "scope": "SHADOW_DEMO_AND_LIVE_PRE_SUBMIT",
         })
         if not causal_ok:
@@ -1861,7 +1879,7 @@ async def _entry_loop():
                     opportunity=opportunity,
                 )
                 _append_event("DECISION_EVALUATED", {
-                    "schema_version": "TIER_S_DECISION_RECORD_V5_AVAILABILITY_TIME",
+                    "schema_version": "TIER_S_DECISION_RECORD_V6_CAUSAL_PROOF_SEMANTICS",
                     "cycle_id": decision_cycle_id,
                     "decision": result.get("decision", "WAIT"),
                     "reason": result.get("reason", "UNKNOWN"),

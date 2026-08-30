@@ -128,29 +128,27 @@ def _install_bias(base):
             ):
                 rows.append((name, "LONG" if imbalance > 0 else "SHORT",
                              min(1.0, abs(imbalance) / 0.35), volume, imbalance))
-        longs = [r for r in rows if r[1] == "LONG"]
-        shorts = [r for r in rows if r[1] == "SHORT"]
         metrics = [{"venue": r[0], "side": r[1], "strength": round(r[2], 6),
                     "volume_btc": round(r[3], 6), "imbalance": round(r[4], 6)}
                    for r in rows]
-        if longs and shorts:
-            return bias.vote(reason="MULTI_VENUE_FLOW_CONFLICT",
-                             venues=metrics,
-                             material_floor_btc_by_venue=floors,
-                             coverage_sec_by_venue=warmup,
-                             horizon_sec=BIAS_FLOW_SEC)
-        agreed = longs if len(longs) >= 2 else shorts if len(shorts) >= 2 else []
+        agreed, family = bias.flow_family_consensus(rows)
         if not agreed:
-            return bias.vote(reason="INSUFFICIENT_MATERIAL_FLOW_CONSENSUS",
+            reason = (
+                "INSUFFICIENT_MATERIAL_FLOW_CONSENSUS"
+                if family == "INSUFFICIENT_FLOW_CONSENSUS" else family
+            )
+            return bias.vote(reason=reason,
                              venues=metrics,
+                             evidence_family=family,
                              material_floor_btc_by_venue=floors,
                              coverage_sec_by_venue=warmup,
                              horizon_sec=BIAS_FLOW_SEC)
         strength = sum(r[2] for r in agreed) / len(agreed)
         return bias.vote(agreed[0][1],
-                        0.52 + 0.12 * max(0, len(agreed) - 2) + 0.30 * strength,
-                         "MULTI_VENUE_MATERIAL_FLOW",
+                        0.52 + 0.30 * strength,
+                         "CAUSAL_FAMILY_MATERIAL_FLOW",
                         venues=metrics, strength=round(strength, 6),
+                        evidence_family=family,
                         material_floor_btc_by_venue=floors,
                         coverage_sec_by_venue=warmup,
                         horizon_sec=BIAS_FLOW_SEC)

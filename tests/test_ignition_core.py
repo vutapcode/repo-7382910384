@@ -87,7 +87,7 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(row["availability_delay_ms"], 380)
         self.assertEqual(
             row["signal_schema_version"],
-            "IGNITION_SIGNALS_V2_AVAILABILITY_TIME",
+            "IGNITION_SIGNALS_V3_DIRECTIONAL_ACCELERATION",
         )
 
     def test_bucket_rollover_uses_trigger_receive_time_as_availability(self):
@@ -340,6 +340,7 @@ class IgnitionCoreTests(unittest.TestCase):
             "LONG", 10_000,
         )
         self.assertTrue(report["confirmed"])
+        self.assertFalse(report["venues"]["binance_spot"]["control_survived"])
         self.assertEqual(
             report["venues"]["binance_spot"]["receive_time_ms"], 9_800,
         )
@@ -348,6 +349,31 @@ class IgnitionCoreTests(unittest.TestCase):
             "LONG", 10_500,
         )
         self.assertFalse(stale["confirmed"])
+
+    def test_one_cash_bucket_is_acceptance_not_surviving_control(self):
+        binance = (
+            evidence_row(9_600, "LONG", 100.01),
+            evidence_row(9_800, "LONG", 100.02),
+        )
+        coinbase = (
+            evidence_row(9_700, "LONG", 100.01),
+            evidence_row(9_900, "LONG", 100.02),
+        )
+        for row in coinbase:
+            row["venue"] = "coinbase_spot"
+        report = ignition_core._current_cash_conversion(
+            {"binance_spot": binance, "coinbase_spot": coinbase},
+            "LONG", 10_000,
+        )
+        self.assertTrue(report["dual_cash_synchronous_acceptance"])
+        self.assertTrue(report["dual_cash_control"])
+        one = ignition_core._current_cash_conversion(
+            {"binance_spot": (binance[-1],),
+             "coinbase_spot": (coinbase[-1],)},
+            "LONG", 10_000,
+        )
+        self.assertTrue(one["dual_cash_synchronous_acceptance"])
+        self.assertFalse(one["dual_cash_control"])
 
     def test_bias_wait_reasons_are_diagnostic_only(self):
         abstain = state(now=3.0)
@@ -526,7 +552,8 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertFalse(premature["confirmed"])
         self.assertFalse(premature["old_side_failure_confirmed"])
-        self.assertTrue(premature["new_side_cash_control_confirmed"])
+        self.assertTrue(premature["new_side_cash_acceptance_confirmed"])
+        self.assertFalse(premature["new_side_cash_control_confirmed"])
         self.assertEqual(premature["status"], "CROSS_CASH_ACCEPTED")
 
         # The old-side conversion classifier is independent evidence captured
@@ -556,6 +583,11 @@ class IgnitionCoreTests(unittest.TestCase):
             promoted["transition_authority"]["old_side_failure_confirmed"]
         )
         self.assertTrue(
+            promoted["transition_authority"][
+                "new_side_cash_acceptance_confirmed"
+            ]
+        )
+        self.assertFalse(
             promoted["transition_authority"][
                 "new_side_cash_control_confirmed"
             ]
@@ -1051,6 +1083,9 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertEqual(transition["status"], "TRANSITION_FAILED")
         self.assertTrue(transition["hard_contradiction"])
+        self.assertEqual(
+            transition["contradiction_grade"], "DUAL_CASH_CONTROL"
+        )
         self.assertFalse(transition["confirmed"])
 
     def test_synchronous_dual_cash_transition_resolves_leader_uncertainty(self):
@@ -1726,7 +1761,9 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertIsNotNone(proof)
         detail = proof["_failed_reversion_evidence"]
-        self.assertEqual(detail["version"], "FAILED_REVERSION_V4")
+        self.assertEqual(
+            detail["version"], "FAILED_REVERSION_V5_RETEST_STATE"
+        )
         self.assertGreaterEqual(detail["acceptance_duration_ms"], 400)
         self.assertGreaterEqual(detail["acceptance_material_buckets"], 1)
 
@@ -1740,6 +1777,103 @@ class IgnitionCoreTests(unittest.TestCase):
             [pre, initial, shock, reclaim, acceptance_1, weak_acceptance], "LONG", 1_000
         )
         self.assertIsNone(rejected)
+
+    def test_failed_reversion_allows_controlled_retest_not_converting_break(self):
+        rows = [
+            evidence_row(900, "LONG", 100.0),
+            evidence_row(1_000, "LONG", 100.002),
+            evidence_row(1_100, "SHORT", 99.995),
+            evidence_row(1_200, "LONG", 100.001),
+            evidence_row(1_300, "LONG", 100.003),
+            evidence_row(1_400, "SHORT", 100.001),
+            evidence_row(1_600, "LONG", 100.005),
+        ]
+        rows[2]["low"] = 99.995
+        assessment = ignition_core._failed_reversion_assessment(
+            rows, "LONG", 1_000
+        )
+        self.assertEqual(assessment["state"], "RETEST_HOLD")
+        self.assertIsNotNone(assessment["proof"])
+        evidence = assessment["proof"]["_failed_reversion_evidence"]
+        self.assertGreaterEqual(evidence["retest_buckets"], 1)
+        self.assertEqual(evidence["converting_counterflow_buckets"], 0)
+
+    def test_failed_reversion_fails_when_counterflow_converts_below_reclaim(self):
+        rows = [
+            evidence_row(900, "LONG", 100.0),
+            evidence_row(1_000, "LONG", 100.002),
+            evidence_row(1_100, "SHORT", 99.995),
+            evidence_row(1_200, "LONG", 100.001),
+            evidence_row(1_300, "LONG", 100.003),
+            evidence_row(1_600, "LONG", 100.005),
+            evidence_row(1_700, "SHORT", 99.998),
+        ]
+        rows[2]["low"] = 99.995
+        assessment = ignition_core._failed_reversion_assessment(
+            rows, "LONG", 1_000
+        )
+        self.assertEqual(assessment["state"], "FAIL")
+        self.assertEqual(
+            assessment["reason"],
+            "CONVERTING_COUNTERFLOW_LOST_RECLAIM",
+        )
+        self.assertIsNone(assessment["proof"])
+
+    def test_opposite_burst_cannot_create_same_side_acceleration(self):
+        venue = ignition_signals._Venue("binance_spot")
+        venue.samples = ignition_signals.WARMUP_BUCKETS
+        venue.mean_abs_quote = 10.0
+        venue.mean_dev = 2.0
+        venue.push(1_001, 1_001, 100.0, 2.0, False)
+        venue.finalize(available_time_ms=1_101)
+        venue.push(1_201, 1_201, 99.99, 1.5, True)
+        venue.push(1_202, 1_202, 99.98, 3.0, False)
+        row = venue.finalize(available_time_ms=1_301)
+        self.assertEqual(row["side"], "SHORT")
+        self.assertGreater(row["opposite_side_intensity_delta"], 0.0)
+        self.assertGreater(row["same_side_intensity_delta"], 0.0)
+        self.assertLess(row["net_directional_acceleration"], 0.0)
+        self.assertEqual(
+            row["flow_acceleration"], row["net_directional_acceleration"]
+        )
+
+    def test_same_side_acceleration_is_not_total_absolute_intensity(self):
+        venue = ignition_signals._Venue("binance_spot")
+        venue.samples = ignition_signals.WARMUP_BUCKETS
+        venue.mean_abs_quote = 10.0
+        venue.mean_dev = 2.0
+        venue.push(1_001, 1_001, 100.0, 2.0, False)
+        venue.finalize(available_time_ms=1_101)
+        venue.push(1_201, 1_201, 100.01, 0.2, False)
+        venue.push(1_202, 1_202, 100.02, 3.0, True)
+        row = venue.finalize(available_time_ms=1_301)
+        self.assertEqual(row["side"], "LONG")
+        self.assertGreater(row["same_side_intensity_delta"], 0.0)
+        self.assertLess(row["opposite_side_intensity_delta"], 0.0)
+        self.assertGreater(row["flow_acceleration"], 0.0)
+
+    def test_opposite_flow_collapse_cannot_hide_same_side_fading(self):
+        first = evidence_row(3_100, "LONG", 100.001)
+        second = evidence_row(3_200, "LONG", 100.003)
+        first.update({
+            "same_side_intensity_delta": 5.0,
+            "opposite_side_intensity_delta": 4.0,
+            "net_directional_acceleration": 1.0,
+        })
+        second.update({
+            "same_side_intensity_delta": -2.0,
+            "opposite_side_intensity_delta": -9.0,
+            "net_directional_acceleration": 7.0,
+        })
+        episode = {
+            "side": "LONG", "started_receive_ms": 3_000,
+            "signals": [first, second],
+        }
+        proof_type, _, _ = ignition_core._proof(
+            episode,
+            {"binance_spot": (first, second)},
+        )
+        self.assertIsNone(proof_type)
 
     def test_phase_is_observed_cash_displacement_over_atr(self):
         s = state()
@@ -1988,6 +2122,35 @@ class IgnitionCoreTests(unittest.TestCase):
         )
 
         self.assertIsNone(proof_type)
+
+    def test_origin_proof_is_immutable_while_execution_proof_can_advance(self):
+        episode = {}
+        origin_signal = evidence_row(3_100, "LONG", 100.001)
+        current_signal = evidence_row(3_400, "LONG", 100.004)
+        first = (
+            "FAILED_REVERSION", origin_signal, "binance_spot",
+        )
+        second = (
+            "METAORDER_CONTINUATION", current_signal, "coinbase_spot",
+        )
+        self.assertEqual(
+            ignition_core._select_proof_contract(episode, [first])[0],
+            "FAILED_REVERSION",
+        )
+        origin = dict(episode["causal_origin_proof"])
+        selected = ignition_core._select_proof_contract(
+            episode, [first, second]
+        )
+        self.assertEqual(selected[0], "METAORDER_CONTINUATION")
+        self.assertEqual(episode["causal_origin_proof"], origin)
+        self.assertEqual(
+            episode["current_execution_proof"]["proof_type"],
+            "METAORDER_CONTINUATION",
+        )
+        self.assertNotEqual(
+            episode["causal_origin_proof"]["proof_hash"],
+            episode["current_execution_proof"]["proof_hash"],
+        )
 
     def test_futures_alert_never_self_opens(self):
         s = state()

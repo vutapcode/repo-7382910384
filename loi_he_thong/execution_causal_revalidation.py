@@ -108,7 +108,10 @@ def _authority_contract(state, side, result, now):
         }
         if not (
             transition.get("old_side_failure")
-            and transition.get("new_side_cash_control")
+            and transition.get(
+                "new_side_cash_acceptance",
+                transition.get("new_side_cash_control"),
+            )
             and transition.get("dual_cash_acceptance")
             and {"binance_spot", "coinbase_spot"}.issubset(accepted)
             and {"binance_spot", "coinbase_spot"}.issubset(set(fresh))

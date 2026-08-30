@@ -14,7 +14,7 @@ from recorder.depth import DepthGap, LocalOrderBook
 
 VERSION = "LIQUIDITY_RESPONSE_RESEARCH_V3"
 HORIZONS_MS = (250, 1_000, 3_000)
-SPOT_VERSION = "SPOT_LIQUIDITY_RESPONSE_RESEARCH_V1"
+SPOT_VERSION = "SPOT_LIQUIDITY_RESPONSE_RESEARCH_V2_CAUSAL_ORDER"
 SPOT_HORIZONS_MS = (50, 100, 250, 500)
 
 
@@ -244,6 +244,7 @@ class SpotLiquidityResponseAnalyzer:
         self.emit = emit
         self.pending = deque(maxlen=max(1, int(max_pending)))
         self.book = None
+        self.book_history = deque(maxlen=32)
         self.completed = 0
         self.invalid = 0
 
@@ -326,8 +327,24 @@ class SpotLiquidityResponseAnalyzer:
         }
 
     def _emit(self, tracker, now_ms, valid=True, reason="COMPLETE"):
+        responses = tracker["responses"]
+        first_positive_ms = next((
+            horizon for horizon in SPOT_HORIZONS_MS
+            if _f((responses.get(horizon) or {}).get(
+                "signed_microprice_response_bps"
+            )) > 0.0
+        ), None)
+        pre_move_bps = _f(tracker.get("pre_impulse_signed_mid_move_bps"))
+        if pre_move_bps > 0.0:
+            causal_order = "FLOW_CHASES_PRICE"
+        elif first_positive_ms in (50, 100):
+            causal_order = "COINCIDENT"
+        elif first_positive_ms in (250, 500):
+            causal_order = "FLOW_LEADS_PRICE"
+        else:
+            causal_order = "NONCONVERSION"
         payload = {
-            "schema_version": "WSTRADE_RECORDER_RESEARCH_V4_AVAILABILITY_TIME",
+            "schema_version": "WSTRADE_RECORDER_RESEARCH_V5_CAUSAL_PROOF_SEMANTICS",
             "version": SPOT_VERSION,
             "authority": False,
             "eligible_for_live_gate": False,
@@ -353,9 +370,14 @@ class SpotLiquidityResponseAnalyzer:
                 if key not in ("bids", "asks")
             },
             "responses": {
-                str(horizon): tracker["responses"].get(horizon)
+                str(horizon): responses.get(horizon)
                 for horizon in SPOT_HORIZONS_MS
             },
+            "pre_impulse_signed_mid_move_bps": round(pre_move_bps, 6),
+            "pre_impulse_lookback_ms": tracker.get("pre_impulse_lookback_ms"),
+            "first_positive_response_ms": first_positive_ms,
+            "flow_price_causal_order": causal_order,
+            "causal_order_policy": "SIGN_ORDER_RESEARCH_ONLY_NO_AUTHORITY",
             "static_imbalance_authority": False,
             "depth_without_executed_flow_authority": False,
             "mechanism_status": "RESEARCH_HYPOTHESIS_ONLY",
@@ -370,6 +392,24 @@ class SpotLiquidityResponseAnalyzer:
         while self.pending:
             self._emit(self.pending.popleft(), now_ms, False, reason)
         self.book = None
+        self.book_history.clear()
+
+    def _pre_impulse_move(self, now_ms, side):
+        rows = [
+            (at_ms, snapshot) for at_ms, snapshot in self.book_history
+            if 0 <= int(now_ms) - int(at_ms) <= 500
+        ]
+        if not rows or self.book is None:
+            return 0.0, None
+        at_ms, before = rows[0]
+        old_mid = _f(before.get("mid"))
+        current_mid = _f(self.book.get("mid"))
+        direction = 1.0 if side == "LONG" else -1.0
+        move = (
+            direction * (current_mid - old_mid) / old_mid * 10_000.0
+            if old_mid > 0.0 and current_mid > 0.0 else 0.0
+        )
+        return move, max(0, int(now_ms) - int(at_ms))
 
     def _advance(self, now_ms, snapshot=None):
         keep = deque(maxlen=self.pending.maxlen)
@@ -412,6 +452,7 @@ class SpotLiquidityResponseAnalyzer:
                 self.reset(now_ms, "INVALID_SPOT_DEPTH5")
                 return
             self.book = snapshot
+            self.book_history.append((now_ms, dict(snapshot)))
             self._advance(now_ms, snapshot)
             return
 
@@ -427,6 +468,7 @@ class SpotLiquidityResponseAnalyzer:
             return
         side = "LONG" if imbalance > 0.0 else "SHORT"
         start_ms = now_ms
+        pre_move_bps, pre_lookback_ms = self._pre_impulse_move(start_ms, side)
         first_id = payload.get("first_trade_id")
         last_id = payload.get("last_trade_id")
         self.pending.append({
@@ -443,6 +485,8 @@ class SpotLiquidityResponseAnalyzer:
             "sell_qty": sell,
             "imbalance": round(imbalance, 6),
             "before": dict(self.book),
+            "pre_impulse_signed_mid_move_bps": pre_move_bps,
+            "pre_impulse_lookback_ms": pre_lookback_ms,
             "responses": {},
         })
 

@@ -16,7 +16,8 @@ V7 = "SHADOW_RUNTIME_STATE_V7_ENTRY_ECONOMICS_V3"
 V8 = "SHADOW_RUNTIME_STATE_V8_ENTRY_ECONOMICS_V4"
 V9 = "SHADOW_RUNTIME_STATE_V9_ENTRY_ECONOMICS_V5"
 V10 = "SHADOW_RUNTIME_STATE_V10_ENTRY_ECONOMICS_V6_AVAILABILITY_TIME"
-VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8, V9, V10}
+V11 = "SHADOW_RUNTIME_STATE_V11_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
+VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11}
 
 
 def fail(msg):
@@ -77,9 +78,9 @@ wins = counter(raw, "wins")
 losses = counter(raw, "losses")
 breakevens = counter(raw, "breakevens", optional=True)
 event_seq = counter(raw, "event_seq", optional=True)
-if version in {V2, V3, V4, V5, V6, V7, V8, V9, V10} and trades != wins + losses + breakevens:
+if version in {V2, V3, V4, V5, V6, V7, V8, V9, V10, V11} and trades != wins + losses + breakevens:
     fail(f"counter_invariant:{trades}!={wins}+{losses}+{breakevens}")
-if version in {V3, V4, V5, V6, V7, V8, V9, V10}:
+if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
     evaluations = counter(raw, "decision_evaluations", optional=True)
     near_misses = counter(raw, "near_misses", optional=True)
     if near_misses > evaluations:
@@ -136,7 +137,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10}:
                 row[8], f"edge_calibration_rows.{index}.execution_cost_bps",
                 nonnegative=True,
             )
-    if version in {V4, V5, V6, V7, V8, V9, V10}:
+    if version in {V4, V5, V6, V7, V8, V9, V10, V11}:
         for name in (
             "edge_calibration_code_version",
             "edge_calibration_config_version",
@@ -144,7 +145,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10}:
             value = raw.get(name)
             if not isinstance(value, str) or not value:
                 fail(f"{name}:missing")
-    if version in {V6, V7, V8, V9, V10}:
+    if version in {V6, V7, V8, V9, V10, V11}:
         economics = raw.get("entry_economics_v2_rows")
         if not isinstance(economics, list) or len(economics) > 1024:
             fail("entry_economics_v2_rows:invalid")
@@ -161,6 +162,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10}:
             V8: "ENTRY_ECONOMICS_V4",
             V9: "ENTRY_ECONOMICS_V5",
             V10: "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
+            V11: "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
         }[version]
         for index, row in enumerate(economics):
             if not isinstance(row, dict) or row.get(
@@ -190,7 +192,7 @@ if pos is not None:
             fail(f"position.side:{side or 'missing'}")
         num(pos.get("qty"), "position.qty", positive=True)
         entry = num(pos.get("entry_price"), "position.entry_price", positive=True)
-        if version in {V2, V3, V4, V5, V6, V7, V8, V9, V10}:
+        if version in {V2, V3, V4, V5, V6, V7, V8, V9, V10, V11}:
             r = num(pos.get("r"), "position.r", positive=True)
             hard_sl = num(pos.get("hard_sl"), "position.hard_sl", positive=True)
             best = num(pos.get("best"), "position.best", positive=True)

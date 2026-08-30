@@ -3,6 +3,9 @@ from types import SimpleNamespace
 import unittest
 
 from loi_he_thong import runtime_hardening_v3 as hardening
+from importlib import import_module
+
+council = import_module("2_suy_luan_mapping.bias_council")
 
 
 def _vote(side="ABSTAIN", conf=0.0, reason="", **metrics):
@@ -16,7 +19,9 @@ def _vote(side="ABSTAIN", conf=0.0, reason="", **metrics):
 
 class RuntimeBiasFlowHorizonTests(unittest.TestCase):
     def _base(self):
-        bias = SimpleNamespace(vote=_vote)
+        bias = SimpleNamespace(
+            vote=_vote, flow_family_consensus=council.flow_family_consensus,
+        )
         return SimpleNamespace(
             bias_council=bias,
             entry_council=SimpleNamespace(MIN_VOL_BTC_BY_VENUE={
@@ -59,6 +64,16 @@ class RuntimeBiasFlowHorizonTests(unittest.TestCase):
         self.assertEqual(result["vote"], "ABSTAIN")
         self.assertEqual(result["reason"], "INSUFFICIENT_MATERIAL_FLOW_CONSENSUS")
         self.assertEqual(result["metrics"]["horizon_sec"], 60.0)
+
+    def test_binance_spot_futures_echo_is_not_independent_flow_quorum(self):
+        base = self._base()
+        hardening._install_bias(base)
+        s = self._state(60)
+        s.coinbase_volume_1m = 0.0
+        s.coinbase_cvd_1m = 0.0
+        result = base.bias_council.s3(s, 100.0)
+        self.assertEqual(result["vote"], "ABSTAIN")
+        self.assertEqual(result["reason"], "BINANCE_COMPLEX_ECHO_UNCORROBORATED")
 
 
 if __name__ == "__main__":

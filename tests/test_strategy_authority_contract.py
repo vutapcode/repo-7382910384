@@ -70,7 +70,7 @@ class StrategyAuthorityContractTests(unittest.TestCase):
     def test_active_journal_records_decision_inputs_outputs_and_misses(self):
         active = self.text("mainnet_tier_s_shadow_launcher.py")
         for marker in (
-            "TIER_S_DECISION_RECORD_V5_AVAILABILITY_TIME", '"cycle_id"',
+            "TIER_S_DECISION_RECORD_V6_CAUSAL_PROOF_SEMANTICS", '"cycle_id"',
             '"s1_price_quorum"', '"s2_executed_flow_quorum"',
             '"exchange_independence"', '"miss_taxonomy"',
             '"counterfactual"', "TIER_S_SHADOW_EXECUTION_V1",
@@ -81,6 +81,8 @@ class StrategyAuthorityContractTests(unittest.TestCase):
             self.assertIn(marker, active)
         self.assertIn('_append_event("ENTRY_SKIPPED"', active)
         self.assertIn('"FLOW_NONCONVERSION_COMPOSITE_VETO"', active)
+        self.assertIn('"causal_origin_proof"', active)
+        self.assertIn('"current_execution_proof"', active)
         edge = self.text("loi_he_thong/entry_edge_tier.py")
         self.assertIn("not v6_replay_approved", edge)
         self.assertIn(

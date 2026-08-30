@@ -399,6 +399,39 @@ class CashRecorderTests(unittest.TestCase):
             payload['responses']['500']['signed_microprice_response_bps'],
             payload['responses']['50']['signed_microprice_response_bps'],
         )
+        self.assertEqual(payload['flow_price_causal_order'], 'COINCIDENT')
+        self.assertEqual(payload['pre_impulse_lookback_ms'], 100)
+        self.assertFalse(payload['authority'])
+
+    def test_spot_response_marks_flow_chasing_preexisting_price_move(self):
+        rows = []
+        analyzer = SpotLiquidityResponseAnalyzer(
+            lambda stream, payload, event_time_ms=None: rows.append(payload)
+        )
+        analyzer.observe({
+            'stream': 'binance_spot_depth5', 'receive_time_ms': 5_000,
+            'payload': {'bids': [['99', '2']], 'asks': [['101', '2']]},
+        })
+        analyzer.observe({
+            'stream': 'binance_spot_depth5', 'receive_time_ms': 5_400,
+            'payload': {'bids': [['100', '2']], 'asks': [['102', '2']]},
+        })
+        analyzer.observe({
+            'stream': 'binance_spot_trade_100ms', 'receive_time_ms': 5_450,
+            'payload': {
+                'buy_qty': 2, 'sell_qty': 0, 'first_trade_id': 1,
+                'last_trade_id': 1, 'last_event_time_ms': 5_440,
+            },
+        })
+        for at_ms in (5_500, 5_550, 5_700, 5_950):
+            analyzer.observe({
+                'stream': 'binance_spot_depth5', 'receive_time_ms': at_ms,
+                'payload': {'bids': [['100', '2']], 'asks': [['102', '2']]},
+            })
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['flow_price_causal_order'], 'FLOW_CHASES_PRICE')
+        self.assertGreater(rows[0]['pre_impulse_signed_mid_move_bps'], 0.0)
+        self.assertFalse(rows[0]['eligible_for_live_gate'])
 
     def test_spot_response_waits_for_depth_and_emits_tracker_once(self):
         rows = []

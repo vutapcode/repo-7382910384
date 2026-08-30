@@ -210,6 +210,34 @@ class ShadowStateGuardV3Tests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OK version=SHADOW_RUNTIME_STATE_V10", result.stdout)
 
+    def test_v11_causal_proof_checkpoint_is_accepted(self):
+        result = self.run_guard({
+            "version": (
+                "SHADOW_RUNTIME_STATE_V11_ENTRY_ECONOMICS_V7_"
+                "CAUSAL_PROOF_SEMANTICS"
+            ),
+            "balance": 5.4, "realized_pnl": 0.1,
+            "trades": 1, "wins": 1, "losses": 0, "breakevens": 0,
+            "event_seq": 1, "decision_evaluations": 1,
+            "near_misses": 0, "decision_funnel": {"READY": 1},
+            "edge_calibration_rows": [],
+            "edge_calibration_code_version": "code-v11",
+            "edge_calibration_config_version": "config-v11",
+            "entry_economics_v2_rows": [{
+                "economic_contract_version": (
+                    "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
+                ),
+                "valid": True,
+                "net_pnl_bps_after_frozen_cost": 2.0,
+                "execution_cost_bps": 8.0,
+            }],
+            "entry_economics_code_version": "code-v11",
+            "entry_economics_config_version": "config-v11",
+            "position": None,
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OK version=SHADOW_RUNTIME_STATE_V11", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

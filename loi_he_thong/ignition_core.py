@@ -40,8 +40,8 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-INFERENCE_VERSION = "IGNITION_INFERENCE_V3_AVAILABILITY_TIME"
-ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME"
+INFERENCE_VERSION = "IGNITION_INFERENCE_V4_CAUSAL_PROOF_SEMANTICS"
+ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
 PERSISTENT_AUTHORITY_SCOPE = {
     "shadow_bootstrap_authority": True,
     "live_authority": False,
@@ -1104,12 +1104,31 @@ def _transition_snapshot(pending, histories, now_ms):
         stored_failure.get("proved")
         and old_failure_venues and not old_side_continuing_venues
     )
-    new_side_cash_control_confirmed = synchronous
+    new_side_cash_acceptance_confirmed = synchronous
+    new_side_cash_control_confirmed = bool(
+        synchronous and current_cash.get("dual_cash_control")
+    )
     failed_continuation = old_side_failure_confirmed
-    hard_contradiction = set(opposing_return_venues) == set(CASH)
+    latest_cash_accept_ms = max(first_accept_ms, default=0)
+    futures_opposing_return = any(
+        latest_cash_accept_ms > 0
+        and int(row.get("receive_time_ms", 0) or 0) > latest_cash_accept_ms
+        and str(row.get("side") or "").upper() == background
+        and _directional_material_flow(row, background)
+        for row in histories.get("futures", ())
+    )
+    if set(opposing_return_venues) == set(CASH):
+        contradiction_grade = "DUAL_CASH_CONTROL"
+    elif opposing_return_venues:
+        contradiction_grade = "SINGLE_CASH_RECLAIM"
+    elif futures_opposing_return:
+        contradiction_grade = "FUTURES_ONLY_WARNING"
+    else:
+        contradiction_grade = "NONE"
+    hard_contradiction = contradiction_grade == "DUAL_CASH_CONTROL"
     confirmed = bool(
         old_side_failure_confirmed
-        and new_side_cash_control_confirmed
+        and new_side_cash_acceptance_confirmed
         and not hard_contradiction
     )
     if hard_contradiction:
@@ -1201,7 +1220,10 @@ def _transition_snapshot(pending, histories, now_ms):
             ),
             "current_cash_confirmed": bool(current_cash.get("confirmed")),
             "current_cash_dual": bool(
-                current_cash.get("dual_cash_synchronous_control")
+                current_cash.get("dual_cash_synchronous_acceptance")
+            ),
+            "current_cash_control": bool(
+                current_cash.get("dual_cash_control")
             ),
             "max_age_ms": FOLLOW_MAX_MS,
             "authority": "ENTRY_TIMING_ONLY",
@@ -1223,12 +1245,24 @@ def _transition_snapshot(pending, histories, now_ms):
         "old_failure_venues": old_failure_venues,
         "old_side_failure_node": stored_failure,
         "old_side_continuing_venues": old_side_continuing_venues,
+        "new_side_cash_acceptance_confirmed": (
+            new_side_cash_acceptance_confirmed
+        ),
         "new_side_cash_control_confirmed": new_side_cash_control_confirmed,
         "old_impulse_venues": sorted(old_impulse_venues),
         "accepted_cash_venues": sorted(accepted_venues),
         "cash_acceptance_span_ms": acceptance_span_ms,
         "cash_synchronous_transition": synchronous,
         "opposing_return_venues": sorted(opposing_return_venues),
+        "futures_opposing_return": futures_opposing_return,
+        "contradiction_grade": contradiction_grade,
+        "contradiction_owner": "FAST_TRANSITION",
+        "contradiction_authority": {
+            "NONE": "NO_EFFECT",
+            "FUTURES_ONLY_WARNING": "DIAGNOSTIC_ONLY",
+            "SINGLE_CASH_RECLAIM": "DETERIORATE_NOT_KILL",
+            "DUAL_CASH_CONTROL": "HARD_TRANSITION_INVALIDATION",
+        }[contradiction_grade],
         "hard_contradiction": hard_contradiction,
         "control_transfer_memory_valid": control_transfer_memory_valid,
         "old_failure_valid_until_ms": (
@@ -1493,7 +1527,10 @@ def _strict_transition_side(episode):
         and transition.get("status") == "REVERSAL_CONFIRMED"
         and str(transition.get("side") or "ABSTAIN").upper() == side
         and transition.get("old_side_failure_confirmed")
-        and transition.get("new_side_cash_control_confirmed")
+        and transition.get(
+            "new_side_cash_acceptance_confirmed",
+            transition.get("new_side_cash_control_confirmed"),
+        )
         and transition.get("cash_synchronous_transition")
         and not transition.get("hard_contradiction")
         and CASH.issubset(accepted)
@@ -1800,6 +1837,25 @@ def _current_cash_conversion(histories, side, now_ms):
             rows.append(row)
         if not rows:
             continue
+        rows.sort(key=lambda row: int(row.get("receive_time_ms", 0) or 0))
+        latest = rows[-1]
+        control_rows = [latest]
+        for row in reversed(rows[:-1]):
+            later = control_rows[-1]
+            if (
+                int(later.get("bucket_start_ms", 0) or 0)
+                - int(row.get("bucket_start_ms", 0) or 0)
+                > EVIDENCE_GAP_MS
+            ):
+                break
+            control_rows.append(row)
+        control_rows.reverse()
+        control_survived = len(control_rows) >= 2
+        control_span_ms = (
+            int(control_rows[-1].get("receive_time_ms", 0) or 0)
+            - int(control_rows[0].get("receive_time_ms", 0) or 0)
+            if control_survived else None
+        )
         latest = max(rows, key=lambda row: int(
             row.get("receive_time_ms", 0) or 0
         ))
@@ -1812,23 +1868,46 @@ def _current_cash_conversion(histories, side, now_ms):
                 sign * _f(latest.get("price_conversion_bps")), 6
             ),
             "epoch": int(latest.get("epoch", 0) or 0),
+            "acceptance_buckets": len(rows),
+            "control_survived": control_survived,
+            "control_span_ms": control_span_ms,
         }
     times = [row["receive_time_ms"] for row in accepted.values()]
     span = max(times) - min(times) if len(times) == len(CASH) else None
-    dual = bool(
+    dual_acceptance = bool(
         set(accepted) == CASH and span is not None and span <= FOLLOW_MAX_MS
     )
+    control_times = [
+        row["receive_time_ms"] for row in accepted.values()
+        if row.get("control_survived")
+    ]
+    control_span = (
+        max(control_times) - min(control_times)
+        if len(control_times) == len(CASH) else None
+    )
+    dual_control = bool(
+        len(control_times) == len(CASH)
+        and control_span is not None and control_span <= FOLLOW_MAX_MS
+    )
     return {
-        "version": "CURRENT_CASH_CONVERSION_V1",
+        "version": "CURRENT_CASH_CONVERSION_V2_ACCEPTANCE_CONTROL",
         "side": side,
         "confirmed": bool(accepted),
         "accepted_cash_venues": sorted(accepted),
         "venues": accepted,
-        "dual_cash_synchronous_control": dual,
+        "dual_cash_synchronous_acceptance": dual_acceptance,
+        "dual_cash_control": dual_control,
+        "dual_cash_control_span_ms": control_span,
+        # Deprecated compatibility field. Existing consumers are moved to
+        # the accurately named acceptance field in this schema boundary.
+        "dual_cash_synchronous_control": dual_acceptance,
         "acceptance_span_ms": span,
         "max_age_ms": FOLLOW_MAX_MS,
         "authority": "ENTRY_TIMING_ONLY",
-        "policy": "CURRENT_EXECUTED_CASH_FLOW_AND_PRICE_CONVERSION",
+        "policy": (
+            "ONE_BUCKET_IS_ACCEPTANCE_TWO_CAUSALLY_CONTIGUOUS_BUCKETS_"
+            "ARE_CONTROL"
+        ),
     }
 
 
@@ -1847,12 +1926,31 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
     transition_cash = {
         str(value) for value in transition.get("accepted_cash_venues") or ()
     }
+    fallback_proof = _proof_descriptor((
+        str(proof_type or ""),
+        {
+            "receive_time_ms": int(payload.get("last_evidence_ms", 0) or 0),
+            "bucket_start_ms": int(payload.get("last_evidence_ms", 0) or 0),
+            "epoch": 0,
+            "evidence_id": "authority:%s:%s" % (
+                str(causal_episode_id or ""), str(proof_type or "")
+            ),
+        },
+        str(payload.get("proof_venue") or ""),
+    ))
+    origin_proof = dict(payload.get("causal_origin_proof") or fallback_proof)
+    current_proof = dict(
+        payload.get("current_execution_proof") or fallback_proof
+    )
     transition_confirmed = bool(
         payload.get("transition_confirmed")
         and transition.get("status") == "REVERSAL_CONFIRMED"
         and str(transition.get("side") or "ABSTAIN").upper() == side
         and transition.get("old_side_failure_confirmed")
-        and transition.get("new_side_cash_control_confirmed")
+        and transition.get(
+            "new_side_cash_acceptance_confirmed",
+            transition.get("new_side_cash_control_confirmed"),
+        )
         and transition.get("cash_synchronous_transition")
         and not transition.get("hard_contradiction")
         and CASH.issubset(transition_cash)
@@ -1873,11 +1971,13 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
         }
     frozen_bias = dict(payload.get("bias_snapshot") or {})
     dependencies = {
-        "version": "ENTRY_AUTHORITY_DEPENDENCIES_V2_FLOW_AT_GO",
+        "version": "ENTRY_AUTHORITY_DEPENDENCIES_V3_ORIGIN_EXECUTION_PROOF",
         "causal_episode_id": str(causal_episode_id or ""),
         "side": side,
         "proof_type": str(proof_type or ""),
         "proof_venue": str(payload.get("proof_venue") or ""),
+        "causal_origin_proof": origin_proof,
+        "current_execution_proof": current_proof,
         "flow_state_at_go": str(
             wave_snapshot.get("flow_efficiency_state")
             or flow_efficiency_state(
@@ -1918,7 +2018,10 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
                 transition.get("old_failure_venues") or ()
             ),
             "new_side": side,
-            "new_side_cash_control": True,
+            "new_side_cash_acceptance": True,
+            "new_side_cash_control": bool(
+                transition.get("new_side_cash_control_confirmed")
+            ),
             "dual_cash_acceptance": True,
             "qualified_acceptance_span_ms": transition.get(
                 "cash_acceptance_span_ms"
@@ -1973,6 +2076,14 @@ def validate_frozen_authority(result):
         ignition.get("proof_type") or ""
     ):
         return False, "AUTHORITY_PROOF_TYPE_CHANGED", {}
+    origin = dict(dependencies.get("causal_origin_proof") or {})
+    current = dict(dependencies.get("current_execution_proof") or {})
+    if not origin or not current:
+        return False, "ORIGIN_OR_EXECUTION_PROOF_MISSING", {}
+    if str(current.get("proof_type") or "") != str(
+        ignition.get("proof_type") or ""
+    ):
+        return False, "CURRENT_EXECUTION_PROOF_CHANGED", {}
     if basis == "TRANSITION_CONFIRMED":
         transition = dict(dependencies.get("transition") or {})
         accepted = {
@@ -1981,7 +2092,7 @@ def validate_frozen_authority(result):
         )}
         if not (
             transition.get("old_side_failure")
-            and transition.get("new_side_cash_control")
+            and transition.get("new_side_cash_acceptance")
             and transition.get("dual_cash_acceptance")
             and CASH.issubset(accepted)
             and str(transition.get("new_side") or "").upper() == side
@@ -2086,19 +2197,25 @@ def _venue_anchor(history, started_receive_ms):
     return 0.0, "UNAVAILABLE"
 
 
-def _failed_reversion(history, side, proposer_ms):
-    """Prove material opposition -> excursion -> reclaim -> acceptance on one cash venue."""
+def _failed_reversion_assessment(history, side, proposer_ms):
+    """Classify shock -> reclaim -> controlled retest -> hold/fail.
+
+    A counterprint is not a contradiction by itself.  The reclaimed area only
+    fails when opposite executed flow converts through the anchor and the
+    latest cash price does not recover it.  This keeps normal retests while
+    refusing to call a price-only bounce a failed-reversion proof.
+    """
     sign = _sign(side)
     rows = [
         row for row in history
         if int(row.get("receive_time_ms", 0)) >= int(proposer_ms)
     ]
     if len(rows) < 4:
-        return None
+        return {"state": "OBSERVING", "reason": "INSUFFICIENT_ROWS"}
 
     anchor, anchor_method = _venue_anchor(history, proposer_ms)
     if anchor <= 0.0:
-        return None
+        return {"state": "OBSERVING", "reason": "ANCHOR_UNAVAILABLE"}
 
     latest = rows[-1]
     latest_ms = int(latest.get("receive_time_ms", 0))
@@ -2148,17 +2265,20 @@ def _failed_reversion(history, side, proposer_ms):
         acceptance_ms = latest_ms - reclaim_ms
         if acceptance_ms < MIN_ACCEPTANCE_MS:
             continue
-        if any(
-            sign * _bps(_f(row.get("price")), anchor) < 0.0
-            for row in acceptance_rows
-            if _f(row.get("price")) > 0.0
-        ):
-            continue
-        if any(
-            str(row.get("side")) != str(side) and _material_flow(row)
-            for row in acceptance_rows
-        ):
-            continue
+        opposite = "SHORT" if str(side).upper() == "LONG" else "LONG"
+        retest_rows = []
+        converting_counterflow = []
+        for row in acceptance_rows:
+            price = _f(row.get("price"))
+            held_bps = sign * _bps(price, anchor) if price > 0.0 else 0.0
+            is_counter = str(row.get("side") or "").upper() == opposite
+            counter_converts = bool(
+                is_counter and _directional_material_flow(row, opposite)
+            )
+            if is_counter or held_bps < 0.0:
+                retest_rows.append(row)
+            if counter_converts and held_bps < 0.0:
+                converting_counterflow.append(row)
         material_acceptance = [
             row for row in acceptance_rows
             if str(row.get("side")) == str(side) and _material_flow(row)
@@ -2171,10 +2291,28 @@ def _failed_reversion(history, side, proposer_ms):
         if material_acceptance_ms < MIN_ACCEPTANCE_MS:
             continue
 
+        latest_hold_bps = sign * _bps(_f(latest.get("price")), anchor)
+        if converting_counterflow and latest_hold_bps < 0.0:
+            return {
+                "state": "FAIL",
+                "reason": "CONVERTING_COUNTERFLOW_LOST_RECLAIM",
+                "venue": str(shock.get("venue") or latest.get("venue") or ""),
+                "anchor_price": round(anchor, 10),
+                "reclaim_receive_time_ms": int(
+                    rows[reclaim_index].get("receive_time_ms", 0)
+                ),
+                "counterflow_buckets": len(converting_counterflow),
+                "latest_hold_bps": round(latest_hold_bps, 6),
+                "proof": None,
+            }
+        if latest_hold_bps < 0.0:
+            continue
+
         reclaim = rows[reclaim_index]
         proof = dict(latest)
         proof["_failed_reversion_evidence"] = {
-            "version": "FAILED_REVERSION_V4",
+            "version": "FAILED_REVERSION_V5_RETEST_STATE",
+            "path_state": "RETEST_HOLD" if retest_rows else "HOLD",
             "venue": str(shock.get("venue") or latest.get("venue") or ""),
             "anchor_price": round(anchor, 10),
             "anchor_method": anchor_method,
@@ -2191,9 +2329,70 @@ def _failed_reversion(history, side, proposer_ms):
             "acceptance_material_buckets": len(material_acceptance),
             "acceptance_duration_ms": acceptance_ms,
             "material_acceptance_duration_ms": material_acceptance_ms,
+            "retest_buckets": len(retest_rows),
+            "converting_counterflow_buckets": len(converting_counterflow),
+            "latest_hold_bps": round(latest_hold_bps, 6),
+            "counterflow_policy": (
+                "CONTRADICTS_ONLY_IF_EXECUTED_FLOW_CONVERTS_AND_"
+                "RECLAIM_AREA_FAILS"
+            ),
         }
-        return proof
-    return None
+        return {
+            "state": "RETEST_HOLD" if retest_rows else "HOLD",
+            "reason": "RECLAIM_SURVIVED_CAUSAL_RETEST",
+            "venue": proof["_failed_reversion_evidence"]["venue"],
+            "proof": proof,
+        }
+    return {"state": "OBSERVING", "reason": "NO_COMPLETE_REVERSION_PATH"}
+
+
+def _failed_reversion(history, side, proposer_ms):
+    assessment = _failed_reversion_assessment(history, side, proposer_ms)
+    return assessment.get("proof")
+
+
+def _proof_descriptor(candidate):
+    proof_type, signal, venue = candidate
+    observed_at_ms = int(signal.get("receive_time_ms", 0) or 0)
+    evidence_id = str(
+        signal.get("evidence_id")
+        or "bucket:%s:%s:%s" % (
+            venue,
+            int(signal.get("epoch", 0) or 0),
+            int(signal.get("bucket_start_ms", 0) or 0),
+        )
+    )
+    value = {
+        "proof_type": str(proof_type),
+        "proof_venue": str(venue),
+        "observed_at_ms": observed_at_ms,
+        "evidence_id": evidence_id,
+    }
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    value["proof_hash"] = hashlib.sha256(encoded).hexdigest()
+    return value
+
+
+def _select_proof_contract(episode, candidates):
+    """Freeze wave origin while selecting the freshest executable proof."""
+    if not candidates:
+        episode["current_execution_proof"] = {}
+        return None
+    rank = {"METAORDER_CONTINUATION": 0, "FAILED_REVERSION": 1}
+    ordered = sorted(candidates, key=lambda item: (
+        int(item[1].get("receive_time_ms", 0) or 0),
+        rank[item[0]], item[2],
+    ))
+    if not episode.get("causal_origin_proof"):
+        episode["causal_origin_proof"] = _proof_descriptor(ordered[0])
+    current = max(ordered, key=lambda item: (
+        int(item[1].get("receive_time_ms", 0) or 0),
+        rank[item[0]], item[2],
+    ))
+    episode["current_execution_proof"] = _proof_descriptor(current)
+    return current
 
 
 def _proof(episode, histories):
@@ -2207,7 +2406,7 @@ def _proof(episode, histories):
         if row["venue"] in CASH and row["side"] == side
     })
     candidates = []
-    proof_rank = {"METAORDER_CONTINUATION": 0, "FAILED_REVERSION": 1}
+    reversion_assessments = {}
     for venue in cash_venues:
         venue_history = tuple(histories.get(venue, ()))
         rows = [
@@ -2216,7 +2415,19 @@ def _proof(episode, histories):
             and int(row.get("receive_time_ms", 0)) >= proof_segment_start
         ]
         if len(rows) >= 2 and rows[-1].get("strong") and rows[-2].get("strong"):
-            if _f(rows[-1].get("flow_acceleration")) >= 0.0:
+            same_side_delta = _f(
+                rows[-1].get(
+                    "same_side_intensity_delta",
+                    rows[-1].get("flow_acceleration"),
+                )
+            )
+            net_acceleration = _f(
+                rows[-1].get(
+                    "net_directional_acceleration",
+                    rows[-1].get("flow_acceleration"),
+                )
+            )
+            if same_side_delta >= 0.0 and net_acceleration >= 0.0:
                 first_bucket = int(rows[-2].get("bucket_start_ms", 0) or 0)
                 second_bucket = int(rows[-1].get("bucket_start_ms", 0) or 0)
                 intervening = [
@@ -2258,20 +2469,22 @@ def _proof(episode, histories):
                     "proof_policy": "OBSERVED_BRIEF_PAUSE_ONLY_MAX_CAUSAL_DECAY",
                 }
                 candidates.append(("METAORDER_CONTINUATION", proof, venue))
-        failed = _failed_reversion(
+        assessment = _failed_reversion_assessment(
             venue_history, side, proof_segment_start,
         )
+        reversion_assessments[venue] = {
+            key: value for key, value in assessment.items() if key != "proof"
+        }
+        failed = assessment.get("proof")
         if failed is not None:
             candidates.append(("FAILED_REVERSION", failed, venue))
 
-    if not candidates:
+    episode["failed_reversion_assessments"] = reversion_assessments
+
+    selected = _select_proof_contract(episode, candidates)
+    if selected is None:
         return None, None, None
-    candidates.sort(key=lambda item: (
-        int(item[1].get("receive_time_ms", 0)),
-        proof_rank[item[0]],
-        item[2],
-    ))
-    proof_type, proof_signal, proof_venue = candidates[0]
+    proof_type, proof_signal, proof_venue = selected
     return proof_type, proof_signal, proof_venue
 
 
@@ -2859,6 +3072,18 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         }
         for name, rows in histories.items() if rows and name in names
     }
+    persistent_proof = _proof_descriptor((
+        "PERSISTENT_METAORDER",
+        {
+            "receive_time_ms": latest_evidence_ms,
+            "bucket_start_ms": wave_started_ms,
+            "epoch": int(
+                (clock_quality.get(proposer) or {}).get("epoch", 0) or 0
+            ),
+            "evidence_id": "persistent:%s" % candidate_id,
+        },
+        proposer,
+    ))
     payload = {
         "causal_episode_id": candidate_id,
         "inference_version": INFERENCE_VERSION,
@@ -2870,6 +3095,8 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "bias_snapshot": frozen,
         "proof_type": "PERSISTENT_METAORDER",
         "proof_venue": proposer,
+        "causal_origin_proof": dict(persistent_proof),
+        "current_execution_proof": dict(persistent_proof),
         "cash_venues": cash,
         "cash_opponents": [],
         "supporting_venues": sorted(names),
@@ -2883,8 +3110,12 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "last_evidence_ms": latest_evidence_ms,
         "current_cash_conversion": current_cash,
         "causal_wave_snapshot": shared_wave,
+        "dual_cash_synchronous_acceptance": bool(
+            current_cash.get("dual_cash_synchronous_acceptance")
+        ),
+        "dual_cash_control": bool(current_cash.get("dual_cash_control")),
         "dual_cash_synchronous_control": bool(
-            current_cash.get("dual_cash_synchronous_control")
+            current_cash.get("dual_cash_synchronous_acceptance")
         ),
         "bounded_wave_ledger": dict(
             (snapshot or {}).get("bounded_wave_ledger") or {}
@@ -3212,6 +3443,12 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "persistent_metaorder_shadow": persistent_shadow,
         "bias_snapshot": dict(episode["bias_snapshot"]), "proof_type": proof_type,
         "proof_venue": proof_venue,
+        "causal_origin_proof": dict(
+            episode.get("causal_origin_proof") or {}
+        ),
+        "current_execution_proof": dict(
+            episode.get("current_execution_proof") or {}
+        ),
         "cash_venues": cash_venues, "cash_opponents": cash_opponents,
         "supporting_venues": sorted({row["venue"] for row in episode["signals"] if row["side"] == side}),
         "futures_response": futures_response,
@@ -3222,8 +3459,12 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "last_evidence_ms": int(episode.get("last_evidence_ms", 0) or 0),
         "current_cash_conversion": current_cash,
         "causal_wave_snapshot": shared_wave,
+        "dual_cash_synchronous_acceptance": bool(
+            current_cash.get("dual_cash_synchronous_acceptance")
+        ),
+        "dual_cash_control": bool(current_cash.get("dual_cash_control")),
         "dual_cash_synchronous_control": bool(
-            current_cash.get("dual_cash_synchronous_control")
+            current_cash.get("dual_cash_synchronous_acceptance")
         ),
         "bounded_wave_ledger": {
             "version": "BOUNDED_WAVE_LEDGER_V1",
@@ -3249,6 +3490,18 @@ def _result_from_episode(state, episode, histories, freshness, now):
             "volume_btc": _f(row.get("total_qty")),
             "surprise_ratio": _f(row.get("surprise_ratio")),
             "flow_acceleration": _f(row.get("flow_acceleration")),
+            "same_side_intensity_delta": _f(
+                row.get("same_side_intensity_delta")
+            ),
+            "opposite_side_intensity_delta": _f(
+                row.get("opposite_side_intensity_delta")
+            ),
+            "net_directional_acceleration": _f(
+                row.get(
+                    "net_directional_acceleration",
+                    row.get("flow_acceleration"),
+                )
+            ),
             "price_conversion_bps": round(
                 _sign(side) * _f(row.get("price_conversion_bps")), 6
             ),
@@ -3262,6 +3515,9 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "failed_reversion_evidence": (
             dict(proof_signal.get("_failed_reversion_evidence") or {})
             if proof_type == "FAILED_REVERSION" and isinstance(proof_signal, dict) else {}
+        ),
+        "failed_reversion_assessments": dict(
+            episode.get("failed_reversion_assessments") or {}
         ),
         "metaorder_proof_evidence": (
             dict(proof_signal.get("_metaorder_evidence") or {})
@@ -3355,14 +3611,14 @@ def _result_from_episode(state, episode, histories, freshness, now):
             "cash_synchronous_transition"
         )
     )
-    synchronous_cash_control = bool(
-        current_cash.get("dual_cash_synchronous_control")
+    synchronous_cash_acceptance = bool(
+        current_cash.get("dual_cash_synchronous_acceptance")
     )
     if (
         leader == "SIMULTANEOUS"
         and proof_type != "FAILED_REVERSION"
         and not synchronous_transition
-        and not synchronous_cash_control
+        and not synchronous_cash_acceptance
     ):
         return _wait(now, side, "WAIT_CAUSAL_LEADER_UNCERTAIN", "PROBE", payload, freshness)
     if proof_type is None:

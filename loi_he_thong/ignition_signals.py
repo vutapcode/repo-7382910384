@@ -11,7 +11,7 @@ import hashlib
 import os
 
 
-VERSION = "IGNITION_SIGNALS_V2_AVAILABILITY_TIME"
+VERSION = "IGNITION_SIGNALS_V3_DIRECTIONAL_ACCELERATION"
 BUCKET_MS = 100
 HISTORY_BUCKETS = 64  # Fixed 6.4 s research window; bounded/O(1) memory.
 WARMUP_BUCKETS = max(5, int(os.getenv("WSTRADE_IGNITION_WARMUP_BUCKETS", "20")))
@@ -41,7 +41,9 @@ class _Venue:
         "buy_quote", "sell_quote", "first_price", "last_price", "high",
         "low", "first_event_ms", "last_event_ms", "trade_count", "samples",
         "first_receive_ms", "last_trade_receive_ms",
-        "mean_abs_quote", "mean_dev", "previous_intensity", "history",
+        "mean_abs_quote", "mean_dev", "previous_intensity",
+        "previous_buy_intensity", "previous_sell_intensity",
+        "previous_net_intensity", "history",
         "clock_samples", "base_delay_ms", "jitter_ms", "last_corrected_ms",
         "clock_valid", "bid", "ask", "bid_qty", "ask_qty", "bbo_receive_ms",
     )
@@ -54,6 +56,9 @@ class _Venue:
         self.mean_abs_quote = 0.0
         self.mean_dev = 0.0
         self.previous_intensity = 0.0
+        self.previous_buy_intensity = 0.0
+        self.previous_sell_intensity = 0.0
+        self.previous_net_intensity = 0.0
         self.clock_samples = 0
         self.base_delay_ms = 0.0
         self.jitter_ms = 0.0
@@ -79,6 +84,9 @@ class _Venue:
         self.samples = 0
         self.mean_abs_quote = self.mean_dev = 0.0
         self.previous_intensity = 0.0
+        self.previous_buy_intensity = 0.0
+        self.previous_sell_intensity = 0.0
+        self.previous_net_intensity = 0.0
         self.clock_samples = 0
         self.base_delay_ms = self.jitter_ms = self.last_corrected_ms = 0.0
         self.clock_valid = True
@@ -166,9 +174,34 @@ class _Venue:
         )
         surprise = abs_quote / max(1.0, self.mean_abs_quote + self.mean_dev)
         intensity = abs_quote / BUCKET_MS
-        acceleration = intensity - self.previous_intensity
+        buy_intensity = self.buy_quote / BUCKET_MS
+        sell_intensity = self.sell_quote / BUCKET_MS
+        net_intensity = buy_intensity - sell_intensity
         side = "LONG" if signed_quote > 0.0 else "SHORT" if signed_quote < 0.0 else "NEUTRAL"
         sign = 1.0 if side == "LONG" else -1.0 if side == "SHORT" else 0.0
+        same_side_intensity = (
+            buy_intensity if sign > 0.0 else
+            sell_intensity if sign < 0.0 else 0.0
+        )
+        previous_same_side_intensity = (
+            self.previous_buy_intensity if sign > 0.0 else
+            self.previous_sell_intensity if sign < 0.0 else 0.0
+        )
+        opposite_side_intensity = (
+            sell_intensity if sign > 0.0 else
+            buy_intensity if sign < 0.0 else 0.0
+        )
+        previous_opposite_side_intensity = (
+            self.previous_sell_intensity if sign > 0.0 else
+            self.previous_buy_intensity if sign < 0.0 else 0.0
+        )
+        same_side_delta = same_side_intensity - previous_same_side_intensity
+        opposite_side_delta = (
+            opposite_side_intensity - previous_opposite_side_intensity
+        )
+        net_directional_acceleration = sign * (
+            net_intensity - self.previous_net_intensity
+        )
         strong = bool(
             self.samples >= WARMUP_BUCKETS
             and total >= MIN_QTY[self.name]
@@ -213,7 +246,16 @@ class _Venue:
             "price_conversion_bps": round(price_bps, 6),
             "surprise_ratio": round(surprise, 6),
             "flow_intensity": round(intensity, 6),
-            "flow_acceleration": round(acceleration, 6),
+            "buy_flow_intensity": round(buy_intensity, 6),
+            "sell_flow_intensity": round(sell_intensity, 6),
+            "same_side_intensity_delta": round(same_side_delta, 6),
+            "opposite_side_intensity_delta": round(opposite_side_delta, 6),
+            "net_directional_acceleration": round(
+                net_directional_acceleration, 6
+            ),
+            # Compatibility alias. V3 semantics are explicitly directional;
+            # an opposite-side burst can no longer prove continuation.
+            "flow_acceleration": round(net_directional_acceleration, 6),
             "baseline_samples": self.samples,
             "baseline_abs_quote": round(self.mean_abs_quote, 6),
             "bbo_mid": mid, "microprice": microprice,
@@ -239,6 +281,9 @@ class _Venue:
             self.mean_dev += 0.02 * (deviation - self.mean_dev)
         self.samples += 1
         self.previous_intensity = intensity
+        self.previous_buy_intensity = buy_intensity
+        self.previous_sell_intensity = sell_intensity
+        self.previous_net_intensity = net_intensity
         self.history.append(row)
         self._clear_bucket()
         return row

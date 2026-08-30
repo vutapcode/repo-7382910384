@@ -16,7 +16,7 @@ from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
 from loi_he_thong import verified_cost_model
 
-VERSION = "IGNITION_ENTRY_ECONOMICS_V6_AVAILABILITY_TIME"
+VERSION = "IGNITION_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
 EDGE_BPS = {
     "LOW_EDGE": 0.0, "NORMAL_EDGE": 13.0,
     "HIGH_EDGE": 20.0, "RUNNER_EDGE": 35.0,

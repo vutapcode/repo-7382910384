@@ -1,7 +1,7 @@
 """Tier-S direction estimator only. LONG/SHORT/ABSTAIN; never entry timing."""
 import time
 
-VERSION="BIAS_COUNCIL_V9_OBSERVATION_NEUTRAL"
+VERSION="BIAS_COUNCIL_V10_BACKGROUND_MARGINAL_FAMILIES"
 LOOKBACK=60.; TRIGGER=15.; CONTEXT=180.; FAST=4.; OI_CONTEXT=300.; HMAX=1536
 SPOT_AGE=3.; CB_AGE=5.; FUT_AGE=5.; OI_AGE=12.
 # OI is causal context, not an entry vote.  The 60-second build floor is kept
@@ -230,6 +230,21 @@ def flow_imb(s,now,fut=False):
    except (AttributeError,TypeError,ValueError):pass
  T=B+S;return ((B-S)/T if T>0 else 0.),T
 
+def flow_family_consensus(rows):
+ """Return independent flow support; Binance-local echo is one observation."""
+ by_name={str(r[0]):r for r in rows}
+ directions={str(r[1]) for r in rows}
+ if len(directions)>1:return [],"MULTI_FAMILY_FLOW_CONFLICT"
+ if not rows:return [],"INSUFFICIENT_FLOW_CONSENSUS"
+ names=set(by_name)
+ if {"spot","coinbase"}.issubset(names):
+  return [by_name["spot"],by_name["coinbase"]],"DUAL_CASH_FLOW"
+ if {"coinbase","futures"}.issubset(names):
+  return [by_name["coinbase"],by_name["futures"]],"CASH_DERIVATIVE_FLOW"
+ if {"spot","futures"}.issubset(names):
+  return [],"BINANCE_COMPLEX_ECHO_UNCORROBORATED"
+ return [],"INSUFFICIENT_FLOW_CONSENSUS"
+
 def s3(s,now):
  rows=[]
  for n,(i,v) in {"spot":flow_imb(s,now),"futures":flow_imb(s,now,True)}.items():
@@ -237,11 +252,42 @@ def s3(s,now):
  cb=float(getattr(s,"coinbase_cvd_1m",0) or 0); cv=float(getattr(s,"coinbase_volume_1m",0) or 0); ct=float(getattr(s,"thoi_gian_coinbase_cuoi",0) or 0)
  ci=cb/cv if cv>0 else 0.
  if fresh(ct,now,CB_AGE) and cv>0 and abs(ci)>=MIN_FLOW:rows.append(("coinbase","LONG" if ci>0 else "SHORT",C(abs(ci)/.35)))
- L=[r for r in rows if r[1]=="LONG"];S=[r for r in rows if r[1]=="SHORT"]
- if L and S:return vote(reason="MULTI_VENUE_FLOW_CONFLICT",venues=rows)
- a=L if len(L)>=2 else S if len(S)>=2 else []
- if not a:return vote(reason="INSUFFICIENT_FLOW_CONSENSUS",venues=rows)
- st=sum(r[2] for r in a)/len(a);return vote(a[0][1],.52+.12*max(0,len(a)-2)+.30*st,"MULTI_VENUE_FLOW",venues=rows,strength=st)
+ a,family=flow_family_consensus(rows)
+ if not a:return vote(reason=family,venues=rows,evidence_family=family)
+ st=sum(r[2] for r in a)/len(a);return vote(a[0][1],.52+.30*st,"CAUSAL_FAMILY_FLOW",venues=rows,strength=st,evidence_family=family)
+
+def _bounded_flow(s,now,seconds,fut=False):
+ rows=getattr(s,"futures_flow_1s_buffer" if fut else "flow_1s_buffer",()) or ()
+ cut=float(now)-float(seconds);B=S=0.;newest=0.
+ for r in list(rows):
+  try:
+   ts=float(r.get("ts",0) or 0)
+   if cut<=ts<=float(now):
+    B+=float(r.get("buy",0) or 0);S+=float(r.get("sell",0) or 0);newest=max(newest,ts)
+  except (AttributeError,TypeError,ValueError):pass
+ if newest<=0 or not fresh(newest,now,FUT_AGE):return {"side":"UNKNOWN","imbalance":0.,"volume":0.,"fresh":False}
+ T=B+S;i=(B-S)/T if T>0 else 0.;d="LONG" if i>=MIN_FLOW else "SHORT" if i<=-MIN_FLOW else "NEUTRAL"
+ return {"side":d,"imbalance":round(i,6),"volume":round(T,8),"fresh":True,"horizon_seconds":seconds}
+
+def flow_question_context(s,now,background_vote):
+ """Separate slow pressure from present control without changing Bias."""
+ spot=_bounded_flow(s,now,5.)
+ futures=_bounded_flow(s,now,5.,True)
+ cb_ts=float(getattr(s,"coinbase_flow_3s_ts",0) or getattr(s,"thoi_gian_coinbase_cuoi",0) or 0)
+ cb_v=float(getattr(s,"coinbase_volume_3s",0) or 0);cb_d=float(getattr(s,"coinbase_cvd_3s",0) or 0)
+ cb_i=cb_d/cb_v if cb_v>0 else 0.;cb_fresh=fresh(cb_ts,now,CB_AGE)
+ coinbase={"side":("LONG" if cb_i>=MIN_FLOW else "SHORT" if cb_i<=-MIN_FLOW else "NEUTRAL") if cb_fresh and cb_v>0 else "UNKNOWN",
+           "imbalance":round(cb_i,6),"volume":round(cb_v,8),"fresh":cb_fresh and cb_v>0,"horizon_seconds":3.}
+ cash_sides=[row["side"] for row in (spot,coinbase) if row["side"] in ("LONG","SHORT")]
+ dual_cash_side=cash_sides[0] if len(cash_sides)==2 and cash_sides[0]==cash_sides[1] else "UNKNOWN"
+ binance_echo=bool(spot["side"] in ("LONG","SHORT") and spot["side"]==futures["side"] and coinbase["side"]!=spot["side"])
+ marginal_side=dual_cash_side if dual_cash_side!="UNKNOWN" else spot["side"] if spot["side"] in ("LONG","SHORT") and futures["side"]!=spot["side"] else "UNKNOWN"
+ return {
+  "version":"BIAS_FLOW_QUESTION_CONTEXT_V1",
+  "background_pressure_60s":{"side":background_vote.get("vote","ABSTAIN"),"reason":background_vote.get("reason"),"authority":"BIAS_BACKGROUND_ONLY"},
+  "marginal_control_1_5s":{"side":marginal_side,"spot":spot,"coinbase":coinbase,"futures":futures,"authority":False,"policy":"OBSERVATION_ONLY_NO_BIAS_ACQUISITION"},
+  "causal_families":{"cash_family":{"binance_spot":spot,"coinbase_spot":coinbase,"dual_cash_side":dual_cash_side},"derivative_family":{"binance_futures":futures},"binance_complex_echo":binance_echo,"authority":False,"policy":"BINANCE_SPOT_FUTURES_ECHO_IS_NOT_TWO_INDEPENDENT_CONFIRMATIONS"},
+ }
 
 def story(sv):
  p,o,f=(sv[k]["vote"] for k in ("S1_cross_price","S2_price_x_oi","S3_multi_flow"))
@@ -305,6 +351,7 @@ def evaluate(s,now=None,force_full=False):
  "story":{"name":st[0],"direction":st[1],"confidence_adjustment":st[2],"veto":st[3]},"s_votes":sv,
  "a_votes":{"A1_funding_basis":vote(reason="CONTEXT_ONLY"),"A2_spot_lead":vote(reason="CONTEXT_ONLY")},
  "direction_scores":{"long":round(ls,6),"short":round(ss,6),"margin":round(C(abs(ls-ss)/total if total>0 else 0),6)},
+ "flow_question_context":flow_question_context(s,now,sv["S3_multi_flow"]),
  "direction_memory":memory,
  "freshness":{"spot":sf,"coinbase":fresh(ct,now,CB_AGE),"futures":fut>0,"oi_macro":mf},
  "contract":"DIRECTION_ONLY_NO_ENTRY_TIMING","futures_price_source":src,"ts":now}
