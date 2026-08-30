@@ -40,7 +40,7 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-INFERENCE_VERSION = "IGNITION_INFERENCE_V4_CAUSAL_PROOF_SEMANTICS"
+INFERENCE_VERSION = "IGNITION_INFERENCE_V5_RESPONSE_TIME_SEMANTICS"
 ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
 PERSISTENT_AUTHORITY_SCOPE = {
     "shadow_bootstrap_authority": True,
@@ -3084,6 +3084,13 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         },
         proposer,
     ))
+    futures_response_receive_ms = int(
+        (venue_reports.get("futures") or {}).get("first_aligned_ms") or 0
+    )
+    futures_follow_latency_ms = (
+        max(0, futures_response_receive_ms - int(wave_started_ms))
+        if futures_response_receive_ms > 0 and wave_started_ms > 0 else None
+    )
     payload = {
         "causal_episode_id": candidate_id,
         "inference_version": INFERENCE_VERSION,
@@ -3101,9 +3108,10 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         "cash_opponents": [],
         "supporting_venues": sorted(names),
         "futures_response": True,
-        "futures_response_ms": int(
-            (venue_reports.get("futures") or {}).get("first_aligned_ms") or 0
-        ) or None,
+        "futures_response_receive_ms": futures_response_receive_ms or None,
+        "futures_follow_latency_ms": futures_follow_latency_ms,
+        # Compatibility field now has one meaning everywhere: elapsed ms.
+        "futures_response_ms": futures_follow_latency_ms,
         "futures_follow_ok": True,
         "futures_follow_invalidated": False,
         "futures_cash_response_ok": True,
@@ -3350,8 +3358,12 @@ def _result_from_episode(state, episode, histories, freshness, now):
     cash_signals = [row for row in episode["signals"] if row["venue"] in CASH and row["side"] == side]
     futures_signals = [row for row in episode["signals"] if row["venue"] == "futures" and row["side"] == side]
     cash_venues = sorted({row["venue"] for row in cash_signals})
-    futures_response_ms = min((int(row["receive_time_ms"]) for row in futures_signals), default=0)
-    futures_response = bool(futures_response_ms)
+    futures_response_receive_ms = min((int(row["receive_time_ms"]) for row in futures_signals), default=0)
+    futures_follow_latency_ms = (
+        max(0, futures_response_receive_ms - int(episode["started_receive_ms"]))
+        if futures_response_receive_ms else None
+    )
+    futures_response = bool(futures_response_receive_ms)
     cash_opponents = sorted({row["venue"] for row in episode["signals"] if row["venue"] in CASH and row["side"] != side})
     proposer_is_futures = episode["proposer"] == "futures"
     cash_response_ms = min((int(row["receive_time_ms"]) for row in cash_signals), default=0)
@@ -3364,7 +3376,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
     for row in episode["signals"]:
         if row.get("venue") != "futures" or int(
             row.get("receive_time_ms", 0) or 0
-        ) <= futures_response_ms:
+        ) <= futures_response_receive_ms:
             continue
         bucket = int(row.get("bucket_start_ms", 0) or 0)
         opposing = bool(row.get("side") != side and _material_flow(row))
@@ -3383,7 +3395,10 @@ def _result_from_episode(state, episode, histories, freshness, now):
     futures_reversal_confirmed = len(futures_reversals) >= 2
     futures_follow_ok = bool(
         proposer_is_futures
-        or (futures_response_ms and futures_response_ms - episode["started_receive_ms"] <= FOLLOW_MAX_MS)
+        or (
+            futures_follow_latency_ms is not None
+            and futures_follow_latency_ms <= FOLLOW_MAX_MS
+        )
     ) and not futures_reversal_confirmed
     flow_efficiency = _flow_efficiency_snapshot(
         histories, side, cash_venues, now_ms=int(now * 1000.0),
@@ -3452,7 +3467,10 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "cash_venues": cash_venues, "cash_opponents": cash_opponents,
         "supporting_venues": sorted({row["venue"] for row in episode["signals"] if row["side"] == side}),
         "futures_response": futures_response,
-        "futures_response_ms": futures_response_ms or None,
+        "futures_response_receive_ms": futures_response_receive_ms or None,
+        "futures_follow_latency_ms": futures_follow_latency_ms,
+        # Compatibility field now has one meaning everywhere: elapsed ms.
+        "futures_response_ms": futures_follow_latency_ms,
         "futures_follow_ok": futures_follow_ok,
         "futures_follow_invalidated": futures_reversal_confirmed,
         "futures_reversal_buckets": len(futures_reversals),

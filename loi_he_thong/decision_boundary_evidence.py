@@ -53,7 +53,10 @@ def build(result, edge_report=None):
     consumed = _f(q5.get("shared_wave_consumed"), _f(
         ignition.get("consumed_fraction")
     ))
-    response_ms = _f(ignition.get("futures_response_ms"))
+    response_ms = _f(
+        ignition.get("futures_follow_latency_ms"),
+        _f(ignition.get("futures_response_ms")),
+    )
     basis = dict(edge.get("spot_perp_basis") or {})
     perp_lead = _f(basis.get("lead_bps"))
     expected_net = _f(edge.get("expected_net_bps_model"))
@@ -88,7 +91,7 @@ def build(result, edge_report=None):
             "ignition.follow_window", response_ms,
             None if response_ms is None else round(
                 float(registry.value("ignition.follow_window")) - response_ms, 6
-            ), source="ignition.futures_response_ms", relation="observed <= threshold",
+            ), source="ignition.futures_follow_latency_ms", relation="observed <= threshold",
         ),
         "perp_lead": _row(
             "entry.perp_lead_veto", perp_lead,
