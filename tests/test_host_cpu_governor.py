@@ -86,6 +86,26 @@ class HostCpuGovernorTests(unittest.TestCase):
                     snap['post_start_coverage_1h_seconds'], 10.0
                 )
 
+    def test_incomplete_rolling_history_blocks_live_but_not_shadow(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with patch.dict("os.environ", {
+                "WSTRADE_CPU_HISTORY_PATH": str(Path(temp) / "history.json"),
+            }):
+                governor = HostCpuGovernor(cpu_count=2)
+                governor.sample(
+                    now_mono=0, now_wall=1, counters=(100, 90),
+                    scan_processes=False,
+                )
+                snap = governor.sample(
+                    now_mono=10, now_wall=11, counters=(300, 270),
+                    scan_processes=False,
+                )
+        self.assertEqual(snap["governor_mode"], "NORMAL")
+        self.assertFalse(snap["cpu_admission_history_complete"])
+        self.assertFalse(snap["entry_cpu_allowed"])
+        self.assertFalse(snap["live_entry_cpu_allowed"])
+        self.assertTrue(snap["shadow_entry_cpu_allowed"])
+
 
 if __name__ == "__main__":
     unittest.main()

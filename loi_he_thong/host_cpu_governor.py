@@ -339,6 +339,14 @@ class HostCpuGovernor:
             float(external_peak) if external_peak is not None else 0.0,
         )
         self.mode = self._choose_mode(control_peak)
+        admission_history_complete = bool(
+            windows[900]["coverage_complete"]
+            and windows[3600]["coverage_complete"]
+        )
+        live_entry_allowed = bool(
+            admission_history_complete
+            and self.mode in ("NORMAL", "CONSERVE")
+        )
         payload = {
             "schema_version": 1,
             "version": VERSION,
@@ -368,6 +376,7 @@ class HostCpuGovernor:
             "post_start_coverage_1h_seconds": round(
                 self._post_start_coverage(now_mono, 3600), 3
             ),
+            "cpu_admission_history_complete": admission_history_complete,
             "governor_mode": self.mode,
             "host_cpu_p95_pct": round(p95, 4),
             "host_cpu_projected_peak_pct": round(projected_peak, 4),
@@ -375,8 +384,8 @@ class HostCpuGovernor:
             # gate.  Shadow execution must keep every otherwise eligible
             # sample; CPU pressure may only lower non-authoritative evaluation
             # cadence, never censor a demo trade.
-            "entry_cpu_allowed": self.mode in ("NORMAL", "CONSERVE"),
-            "live_entry_cpu_allowed": self.mode in ("NORMAL", "CONSERVE"),
+            "entry_cpu_allowed": live_entry_allowed,
+            "live_entry_cpu_allowed": live_entry_allowed,
             "shadow_entry_cpu_allowed": True,
             "hard_limit_respected": actual_peak < self.hard_pct and (
                 external_peak is None or float(external_peak) < self.hard_pct
@@ -413,6 +422,9 @@ class HostCpuGovernor:
         )
         state.cpu_post_start_coverage_1h_seconds = payload.get(
             "post_start_coverage_1h_seconds", 0.0
+        )
+        state.cpu_admission_history_complete = bool(
+            payload.get("cpu_admission_history_complete", False)
         )
         state.lightsail_cpu_last_seen = payload["lightsail_cpu_last_seen"]
         state.lightsail_metric_age_seconds = payload["metric_age_seconds"]
