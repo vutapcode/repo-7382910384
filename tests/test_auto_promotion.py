@@ -64,7 +64,7 @@ class AutoPromotionTests(unittest.TestCase):
     def test_stale_external_metric_and_cpu_violation_fail_closed(self):
         state = eligible_state()
         state.lightsail_metric_fresh = False
-        state.host_cpu_15m_pct = 20.0
+        state.host_cpu_15m_pct = 30.0
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
             'WSTRADE_MODE': 'AUTO_PROMOTE', 'WSTRADE_VALIDATION_HOURS': '0',
             'WSTRADE_REPLAY_REPORT_PATH': str(Path(temp) / 'replay.json'),
@@ -90,7 +90,7 @@ class AutoPromotionTests(unittest.TestCase):
 
     def test_cpu_fault_restarts_full_validation_epoch_and_evidence(self):
         state = eligible_state()
-        state.host_cpu_15m_pct = 20.0
+        state.host_cpu_15m_pct = 30.0
         state.host_cpu_hard_limit_respected = False
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
             'WSTRADE_MODE': 'AUTO_PROMOTE', 'WSTRADE_VALIDATION_HOURS': '72',
@@ -128,7 +128,7 @@ class AutoPromotionTests(unittest.TestCase):
 
     def test_p95_above_target_blocks_promotion_without_resetting_soak(self):
         state = eligible_state()
-        state.host_cpu_p95_pct = 18.0
+        state.host_cpu_p95_pct = 27.0
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
             'WSTRADE_MODE': 'AUTO_PROMOTE', 'WSTRADE_VALIDATION_HOURS': '72',
             'WSTRADE_REPLAY_REPORT_PATH': str(Path(temp) / 'replay.json'),

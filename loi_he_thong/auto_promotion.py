@@ -268,18 +268,24 @@ class PromotionController:
         cpu1h = float(getattr(state, "host_cpu_1h_pct", 0.0) or 0.0)
         cpu_p95 = float(getattr(state, "host_cpu_p95_pct", 0.0) or 0.0)
         cpu_snapshot = getattr(state, "host_cpu_snapshot", {}) or {}
+        cpu_hard_pct = float(
+            cpu_snapshot.get("hard_pct")
+            or os.getenv("WSTRADE_CPU_HARD_PCT", "30")
+        )
+        cpu_p95_limit = float(os.getenv("WSTRADE_CPU_P95_PCT", "26"))
         cpu_coverage = bool(
             cpu_snapshot.get("coverage_15m_complete", False)
             and cpu_snapshot.get("coverage_1h_complete", False)
         )
         # Bursts are permitted by policy. Only a hard rolling-window breach
-        # invalidates/restarts the soak; p95 >17 remains a promotion blocker
+        # invalidates/restarts the soak; p95 above the internal operating limit
+        # remains a promotion blocker
         # until the host is quiet enough, without erasing otherwise valid time.
         cpu_hard_windows_ok = bool(
             getattr(state, "host_cpu_hard_limit_respected", False)
-            and cpu15 < 20.0 and cpu1h < 20.0
+            and cpu15 < cpu_hard_pct and cpu1h < cpu_hard_pct
         )
-        cpu_p95_ok = cpu_p95 <= 17.0
+        cpu_p95_ok = cpu_p95 <= cpu_p95_limit
         cpu_ok = cpu_coverage and cpu_hard_windows_ok and cpu_p95_ok
         integrity_fault = bool(
             getattr(state, "shadow_integrity_fault", False)
@@ -382,8 +388,8 @@ class PromotionController:
         external_peak = (getattr(state, "host_cpu_snapshot", {}) or {}).get(
             "max_window_pct"
         )
-        if external_peak is None or float(external_peak) >= 20.0:
-            blockers.append("LIGHTSAIL_CPU_NOT_BELOW_20")
+        if external_peak is None or float(external_peak) >= cpu_hard_pct:
+            blockers.append("LIGHTSAIL_CPU_NOT_BELOW_HARD_LIMIT")
         if getattr(state, "production_workload_blockers", ()):
             blockers.append("INTERACTIVE_WORKLOAD_PRESENT")
         if integrity_fault:

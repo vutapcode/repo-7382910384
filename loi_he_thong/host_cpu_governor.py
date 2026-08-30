@@ -138,15 +138,22 @@ class HostCpuGovernor:
         self.cpu_count = max(1, int(cpu_count or os.cpu_count() or 1))
         self.windows = tuple(windows or _windows_env())
         self.target_pct = float(
-            _float_env("WSTRADE_CPU_TARGET_PCT", "15")
+            _float_env("WSTRADE_CPU_TARGET_PCT", "24")
             if target_pct is None else target_pct
         )
         self.hard_pct = float(
-            _float_env("WSTRADE_CPU_HARD_PCT", "20")
+            _float_env("WSTRADE_CPU_HARD_PCT", "30")
             if hard_pct is None else hard_pct
         )
         if not 0.0 < self.target_pct < self.hard_pct <= 100.0:
             raise ValueError("INVALID_CPU_BUDGET")
+        headroom = self.hard_pct - self.target_pct
+        # Modes express how much of the target-to-hard safety margin remains;
+        # they automatically follow the instance policy instead of embedding
+        # the retired 17/18.5/19.5 thresholds.
+        self.conserve_pct = self.target_pct + headroom / 3.0
+        self.defensive_pct = self.target_pct + headroom * 0.75
+        self.safety_pct = self.hard_pct - min(0.5, headroom / 12.0)
         self.samples = deque()
         self.previous = None
         self.mode = "WARMUP"
@@ -281,11 +288,11 @@ class HostCpuGovernor:
         }
 
     def _choose_mode(self, peak):
-        if peak >= 19.5:
+        if peak >= self.safety_pct:
             return "SAFETY_ONLY"
-        if peak >= 18.5:
+        if peak >= self.defensive_pct:
             return "DEFENSIVE"
-        if peak >= 17.0:
+        if peak >= self.conserve_pct:
             return "CONSERVE"
         return "NORMAL"
 
@@ -354,6 +361,9 @@ class HostCpuGovernor:
             "cpu_count": self.cpu_count,
             "target_pct": self.target_pct,
             "hard_pct": self.hard_pct,
+            "conserve_pct": round(self.conserve_pct, 4),
+            "defensive_pct": round(self.defensive_pct, 4),
+            "safety_pct": round(self.safety_pct, 4),
             "host_cpu_15m_pct": round(windows[900]["pct"], 4),
             "host_cpu_1h_pct": round(windows[3600]["pct"], 4),
             "cpu_budget_15m_remaining": round(

@@ -369,7 +369,7 @@ def run(args):
             and not strategy_result['invariant_violations']
             and final_cpu['coverage_15m_complete']
             and final_cpu['coverage_1h_complete']
-            and cpu_peak < 20.0
+            and cpu_peak < 30.0
         )
         report = {
             'schema_version': 2, 'passed': passed,

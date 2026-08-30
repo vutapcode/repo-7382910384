@@ -17,7 +17,7 @@ while Guardian exits and REST reconciliation remain active.
 2. Copy `.env.example` to `.env`; fill only the Lightsail instance and region.
 3. Install dependencies: `.venv/bin/pip install -r requirements.txt`.
 4. Install units: `sudo ops/install_wstrade_services.sh`.
-5. Optionally configure the 17% and 20% Lightsail alarms:
+5. Optionally configure the 26% warning and 30% critical Lightsail alarms:
    `.venv/bin/python ops/configure_lightsail_alarms.py`.
 6. Activate credentials and start all services with
    `sudo ops/activate_direct_live.sh`. Do not run VS Code, Codex, compilers, package

@@ -23,7 +23,7 @@ class HostCpuGovernorTests(unittest.TestCase):
                     now_mono=10, now_wall=11, counters=(300, 240), scan_processes=False
                 )
         self.assertAlmostEqual(snap["host_cpu_15m_pct"], 20.0)
-        self.assertEqual(snap["governor_mode"], "SAFETY_ONLY")
+        self.assertEqual(snap["governor_mode"], "NORMAL")
         self.assertFalse(snap["entry_cpu_allowed"])
         self.assertFalse(snap["live_entry_cpu_allowed"])
         self.assertTrue(snap["shadow_entry_cpu_allowed"])
@@ -34,10 +34,10 @@ class HostCpuGovernorTests(unittest.TestCase):
                 "WSTRADE_CPU_HISTORY_PATH": str(Path(temp) / "history.json"),
             }):
                 governor = HostCpuGovernor(cpu_count=2)
-                self.assertEqual(governor._choose_mode(16.99), "NORMAL")
-                self.assertEqual(governor._choose_mode(17.0), "CONSERVE")
-                self.assertEqual(governor._choose_mode(18.5), "DEFENSIVE")
-                self.assertEqual(governor._choose_mode(19.5), "SAFETY_ONLY")
+                self.assertEqual(governor._choose_mode(25.99), "NORMAL")
+                self.assertEqual(governor._choose_mode(26.0), "CONSERVE")
+                self.assertEqual(governor._choose_mode(28.5), "DEFENSIVE")
+                self.assertEqual(governor._choose_mode(29.5), "SAFETY_ONLY")
                 state = SimpleNamespace()
                 payload = {
                     "host_cpu_15m_pct": 12.0, "host_cpu_1h_pct": 11.0,

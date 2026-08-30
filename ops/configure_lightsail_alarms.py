@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently create the WStrade 17% warning and 20% critical alarms."""
+"""Idempotently create the WStrade 26% warning and 30% critical alarms."""
 
 import os
 
@@ -21,8 +21,8 @@ def configure():
         "notificationEnabled": True,
     }
     alarms = (
-        ("wstrade-cpu-warning-17", 17.0, 3, 3),
-        ("wstrade-cpu-critical-20", 20.0, 1, 1),
+        ("wstrade-cpu-warning-26", 26.0, 3, 3),
+        ("wstrade-cpu-critical-30", 30.0, 1, 1),
     )
     for name, threshold, periods, datapoints in alarms:
         client.put_alarm(
