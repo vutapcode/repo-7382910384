@@ -104,6 +104,10 @@ class DecisionOutcomeTracker:
                 "anchor_rank": rank,
                 "anchor_role": anchor_role,
                 "qualified_now": qualified_now,
+                "distance_to_boundary": dict(
+                    (decision.get("inputs") or {}).get("distance_to_boundary")
+                    or {}
+                ),
             }
         if event in (
             "ENTRY_SKIPPED",
@@ -140,6 +144,9 @@ class DecisionOutcomeTracker:
                 "anchor_rank": 5,
                 "anchor_role": "EXECUTION",
                 "qualified_now": False,
+                "distance_to_boundary": dict(
+                    payload.get("distance_to_boundary") or {}
+                ),
             }
         return None
 
@@ -276,6 +283,7 @@ class DecisionOutcomeTracker:
                 "primary_wave_tracker": primary,
                 "strategy_code_version": tracker.get("strategy_code_version"),
                 "strategy_config_version": tracker.get("strategy_config_version"),
+                "distance_to_boundary": tracker.get("distance_to_boundary") or {},
                 "adjudicated_at_seconds": int(
                     (tracker.get("windows_ms") or WINDOWS_MS)[-1] // 1000
                 ),
@@ -603,6 +611,9 @@ class DecisionOutcomeTracker:
                         "strategy_config_version": tracker.get("strategy_config_version"),
                         "miss_taxonomy": tracker["miss_taxonomy"],
                         "failed_gates": tracker.get("failed_gates", []),
+                        "distance_to_boundary": (
+                            tracker.get("distance_to_boundary") or {}
+                        ),
                         "decision": tracker.get("decision"),
                         "decision_reason": tracker.get("reason"),
                         "valid": True,

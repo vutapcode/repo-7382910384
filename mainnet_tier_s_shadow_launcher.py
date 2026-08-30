@@ -16,6 +16,8 @@ from types import SimpleNamespace
 import time
 
 from loi_he_thong import canonical_opportunity
+from loi_he_thong import causal_threshold_registry
+from loi_he_thong import decision_boundary_evidence
 from loi_he_thong import execution_causal_revalidation
 from loi_he_thong import host_cpu_governor
 from loi_he_thong import microstructure_regime
@@ -686,13 +688,15 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "forward_edge": (edge_report or {}).get("forward_edge"),
         "time_to_edge": (edge_report or {}).get("time_to_edge"),
     }
+    boundaries = decision_boundary_evidence.build(result, edge_report)
     return {
         "cycle_id": cycle_id,
         "decision_time_ms": int(now * 1000),
         "strategy_authority": "IGNITION_CORE_V1",
         "strategy_code_version": getattr(state, "code_version", None),
         "strategy_config_version": getattr(state, "strategy_config_version", None),
-        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V6_BLOCKER_DIAGNOSTIC_SPLIT",
+        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V7_BOUNDARY_EVIDENCE",
+        "threshold_registry_version": causal_threshold_registry.VERSION,
         "causal_episode_id": (opportunity or {}).get("causal_episode_id"),
         "inputs": {
             "bias": {
@@ -735,6 +739,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "opportunity_research": dict(
                 (result or {}).get("opportunity_research") or {}
             ),
+            "distance_to_boundary": boundaries,
         },
         "output": {
             "decision": (result or {}).get("decision", "WAIT"),
@@ -1856,7 +1861,7 @@ async def _entry_loop():
                     opportunity=opportunity,
                 )
                 _append_event("DECISION_EVALUATED", {
-                    "schema_version": "TIER_S_DECISION_RECORD_V3",
+                    "schema_version": "TIER_S_DECISION_RECORD_V4_BOUNDARIES",
                     "cycle_id": decision_cycle_id,
                     "decision": result.get("decision", "WAIT"),
                     "reason": result.get("reason", "UNKNOWN"),

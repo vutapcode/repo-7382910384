@@ -5,7 +5,10 @@ an order; it only turns already-computed Bias/Ignition evidence into stable
 cohort labels for later canonical replay and Guardian counterfactuals.
 """
 
-VERSION = "OPPORTUNITY_RESEARCH_MATRIX_V1"
+from loi_he_thong import decision_boundary_evidence
+
+
+VERSION = "OPPORTUNITY_RESEARCH_MATRIX_V2_BOUNDARY_EVIDENCE"
 BIAS_MIN_CONF = 0.55
 BORDERLINE_MIN_CONF = 0.50
 CASH = frozenset(("binance_spot", "coinbase_spot"))
@@ -158,6 +161,7 @@ def build(state, result, edge_report=None):
         }
         for name, row in votes.items() if isinstance(row, dict)
     }
+    boundary_evidence = decision_boundary_evidence.build(result, edge_report)
     return {
         "version": VERSION,
         "authority": False,
@@ -211,4 +215,5 @@ def build(state, result, edge_report=None):
         "economics": "UNMEASURED_REQUIRES_FROZEN_COST_AND_GUARDIAN_EXIT",
         "guardian": "NO_COUNTERFACTUAL",
         "edge_class_metadata": (edge_report or {}).get("edge_class"),
+        "distance_to_boundary": boundary_evidence,
     }
