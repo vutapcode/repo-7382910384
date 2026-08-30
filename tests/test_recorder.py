@@ -22,7 +22,7 @@ from recorder.health import HealthState
 from recorder.liquidity_response import SpotLiquidityResponseAnalyzer
 from recorder.replay import DeterministicReplay, iter_merged_records
 from recorder.storage import (
-    AppendOnlyStore, compact_wal, cpu_allows_compaction,
+    AppendOnlyStore, CompactionCpuDeferred, compact_wal, cpu_allows_compaction,
     prune_expired_partitions, wal_path,
 )
 
@@ -823,6 +823,25 @@ class ReplayTests(unittest.TestCase):
 
 
 class StorageTests(unittest.TestCase):
+    def test_compactor_honors_shutdown_before_arrow_conversion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            wal = root / 'raw/wal/agg_trade/2026-08-10/08.jsonl'
+            wal.parent.mkdir(parents=True)
+            record = {
+                'schema_version': 5, 'code_version': 'c', 'config_version': 'x',
+                'source': 'test', 'symbol': 'BTCUSDT', 'stream': 'agg_trade',
+                'event_time_ms': 1, 'receive_time_ms': 1,
+                'sequence_start': 1, 'sequence_end': 1,
+                'previous_sequence': None, 'payload': {'p': '100'},
+            }
+            wal.write_bytes(orjson.dumps(record) + b'\n')
+            with self.assertRaises(CompactionCpuDeferred):
+                compact_wal(wal, root, cpu_guard=lambda: False)
+            self.assertFalse(
+                (root / 'raw/parquet/agg_trade/2026-08-10/08.parquet').exists()
+            )
+
     def test_replay_merges_parquet_and_wal_without_duplicate_hour(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

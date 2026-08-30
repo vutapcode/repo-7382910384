@@ -149,6 +149,11 @@ def compact_wal(
         nonlocal writer, rows_bytes
         if not rows:
             return
+        # Shutdown/CPU revocation must be observed before Arrow conversion or
+        # zstd writing. Checking only after a large flush can exceed systemd's
+        # stop timeout and leave the WAL process to be SIGKILLed.
+        if cpu_guard is not None and not cpu_guard():
+            raise CompactionCpuDeferred('CPU_BUDGET_CHANGED_BEFORE_COMPACTION')
         table = pa.Table.from_pylist(rows, schema=PARQUET_SCHEMA)
         if writer is None:
             writer = pq.ParquetWriter(temp_name, PARQUET_SCHEMA, compression='zstd')
@@ -162,6 +167,10 @@ def compact_wal(
     try:
         with open(wal_file, 'rb') as handle:
             for line in handle:
+                if cpu_guard is not None and not cpu_guard():
+                    raise CompactionCpuDeferred(
+                        'CPU_BUDGET_CHANGED_DURING_WAL_SCAN'
+                    )
                 if not line.strip():
                     continue
                 record, recovered = _decode_wal_line(line)
