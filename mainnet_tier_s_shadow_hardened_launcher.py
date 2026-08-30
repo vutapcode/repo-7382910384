@@ -8,18 +8,26 @@ ROOT = Path(__file__).resolve().parent
 os.environ.setdefault("SMC_RUNTIME_DIR", "/home/ubuntu/.local/state/smc2026/runtime")
 os.environ.setdefault("SMC_JOURNAL_DIR", "/home/ubuntu/.local/state/smc2026/mainnet_shadow")
 
-subprocess.run(
-    [sys.executable, str(ROOT / "ops" / "shadow_journal_recovery_guard.py")],
-    check=True,
+STARTUP_GUARDS = (
+    "shadow_journal_recovery_guard.py",
+    "shadow_journal_consistency_guard.py",
+    "shadow_state_guard.py",
 )
-subprocess.run(
-    [sys.executable, str(ROOT / "ops" / "shadow_journal_consistency_guard.py")],
-    check=True,
-)
-subprocess.run(
-    [sys.executable, str(ROOT / "ops" / "shadow_state_guard.py")],
-    check=True,
-)
+
+
+def _run_startup_guards():
+    for guard in STARTUP_GUARDS:
+        subprocess.run(
+            [sys.executable, str(ROOT / "ops" / guard)],
+            check=True,
+        )
+
+
+# The integrity scanner imports the complete canonical graph in a disposable
+# fail-closed process. It validates guard wiring and source separately, while
+# systemd/runtime startup still executes every state/journal guard below.
+if os.getenv("WSTRADE_CANONICAL_IMPORT_SMOKE", "false").lower() != "true":
+    _run_startup_guards()
 
 import mainnet_tier_s_shadow_risk_launcher as runtime
 

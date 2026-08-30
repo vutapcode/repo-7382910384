@@ -62,6 +62,7 @@ def smoke_error():
         "SMC_MAINNET_TRADING_ENABLED": "false",
         "SMC_MAINNET_ARMED": "false",
         "SMC_MAINNET_EXCLUSIVE_ACCOUNT": "false",
+        "WSTRADE_CANONICAL_IMPORT_SMOKE": "true",
     })
     try:
         done = subprocess.run(

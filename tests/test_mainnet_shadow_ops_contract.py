@@ -142,6 +142,20 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         self.assertNotIn("ÿ", text)
         self.assertNotIn("ï»¿", text)
 
+    def test_integrity_import_skips_only_duplicate_guard_execution(self):
+        integrity = (ROOT / "ops" / "repo_integrity_check.py").read_text(
+            encoding="utf-8"
+        )
+        hardened = (
+            ROOT / "mainnet_tier_s_shadow_hardened_launcher.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"WSTRADE_CANONICAL_IMPORT_SMOKE": "true"', integrity)
+        self.assertIn("STARTUP_GUARDS = (", hardened)
+        self.assertIn("_run_startup_guards()", hardened)
+        self.assertIn(
+            'os.getenv("WSTRADE_CANONICAL_IMPORT_SMOKE", "false")', hardened
+        )
+
     def test_qualified_transition_bypasses_decision_telemetry_debounce(self):
         path = ROOT / "mainnet_tier_s_shadow_launcher.py"
         text = path.read_text(encoding="utf-8")
