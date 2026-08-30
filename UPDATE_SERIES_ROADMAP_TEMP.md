@@ -482,9 +482,18 @@ Batch 6 shadow checkpoint:
   subprocesses and exceeded its 15-second timeout on Lightsail. Commit
   `07f048c` skips only those duplicate side effects in the disposable import
   process; normal runtime/systemd startup still executes every guard.
-- Verification: 606 tests passed, 2 retired legacy tests skipped. Mainnet
-  promotion decision remains `REJECT_UNPROVEN`; a clean post-restart V5 WAL is
-  required before empirical evaluation.
+- Verification: 606 tests passed, 2 retired legacy tests skipped. Recorder
+  shutdown completed cleanly in 5.12 seconds and both services recovered in
+  SHADOW with the position flat and Mainnet unarmed.
+- Clean post-restart V5 WAL cohort
+  `batch6-v5-4214ebfb711873a4-b32fe2a64a8c13c4-1788090734016-1788090945969`
+  contains 3,762 receive-ordered rows from one code/config version. Two
+  transport replays produced identical output and content hashes with zero
+  depth gaps and zero feature-flow mismatches.
+- This replay remains non-authoritative for live Ignition/Guardian promotion;
+  it proves transport determinism, not strategy profitability. Mainnet
+  promotion decision therefore remains `REJECT_UNPROVEN` pending canonical
+  causal-wave, fill, frozen-cost and current-Guardian adjudication.
 
 ## Global acceptance gate
 

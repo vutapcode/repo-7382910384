@@ -2,7 +2,11 @@
   "batch": "BATCH_6_CAUSAL_PROOF_SEMANTICS",
   "baseline_revision": "dfaa19f1f7072604572cf55cd5031aec3f443a6d",
   "candidate_revision": "8280829607527038441a7174855e4dfd12442b67",
-  "deployment_revision": "07f048c",
+  "deployment_revision": "b9d7289",
+  "operational_fix_revisions": {
+    "bounded_recorder_shutdown": "7d6f808b54c50faaf3b90ab7d4fdde0d3c46e65b",
+    "isolated_canonical_import_smoke": "07f048c"
+  },
   "changed_variables": [
     "failed_reversion_path_semantics",
     "origin_vs_execution_proof",
@@ -39,9 +43,33 @@
     "research_depth_can_trade": false
   },
   "wal": {
-    "dataset_id": null,
-    "status": "POST_RESTART_V5_COLLECTION_REQUIRED",
+    "dataset_id": "batch6-v5-4214ebfb711873a4-b32fe2a64a8c13c4-1788090734016-1788090945969",
+    "status": "CLEAN_V5_DETERMINISTIC_TRANSPORT_REPLAY_PASS",
+    "schema_version": 5,
+    "code_version": "4214ebfb711873a4",
+    "config_version": "b32fe2a64a8c13c4",
+    "start_receive_time_ms": 1788090734016,
+    "end_receive_time_ms": 1788090945969,
+    "records": 3762,
+    "transport_replay": {
+      "runs": 2,
+      "output_sha256": "06b9a704750de3ed360485139273033914838808f2e68522b7d555367c383ca1",
+      "digest_sha256": "47a5e2407aff04f21c559fab48348fc8247684696bf14b4fea19ee3c48ec69e9",
+      "depth_gaps": 0,
+      "feature_flow_mismatches": 0,
+      "canonical_mirror_generated_records": 16,
+      "authority": false
+    },
     "canonical_ignition_replay_available": false
+  },
+  "runtime_verification": {
+    "mode": "SHADOW",
+    "mainnet_armed": false,
+    "position_before_restart": "FLAT",
+    "recorder_shutdown_seconds": 5.12,
+    "recorder_shutdown_result": "CLEAN",
+    "cpu_15m_pct_before_replay": 8.5194,
+    "cpu_1h_pct_before_replay": 8.5194
   },
   "decision": "REJECT_MAINNET_UNPROVEN",
   "rollback_triggers": [
