@@ -2,7 +2,7 @@
   "batch": "BATCH_6_CAUSAL_PROOF_SEMANTICS",
   "baseline_revision": "dfaa19f1f7072604572cf55cd5031aec3f443a6d",
   "candidate_revision": "8280829607527038441a7174855e4dfd12442b67",
-  "deployment_revision": "7d6f808b54c50faaf3b90ab7d4fdde0d3c46e65b",
+  "deployment_revision": "07f048c",
   "changed_variables": [
     "failed_reversion_path_semantics",
     "origin_vs_execution_proof",
@@ -22,7 +22,7 @@
   },
   "test_result": {
     "command": ".venv/bin/python -m unittest discover -s tests -v",
-    "passed": 605,
+    "passed": 606,
     "skipped_retired_legacy": 2,
     "failed": 0
   },

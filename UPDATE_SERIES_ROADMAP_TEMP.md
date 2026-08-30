@@ -478,7 +478,11 @@ Batch 6 shadow checkpoint:
   checked the shutdown/CPU guard only after Arrow/zstd work, so systemd reached
   its 90-second timeout. Commit `7d6f808` checks before WAL decode and before
   Arrow conversion; no strategy authority changed.
-- Verification: 605 tests passed, 2 retired legacy tests skipped. Mainnet
+- The canonical import smoke also duplicated three journal/state guard
+  subprocesses and exceeded its 15-second timeout on Lightsail. Commit
+  `07f048c` skips only those duplicate side effects in the disposable import
+  process; normal runtime/systemd startup still executes every guard.
+- Verification: 606 tests passed, 2 retired legacy tests skipped. Mainnet
   promotion decision remains `REJECT_UNPROVEN`; a clean post-restart V5 WAL is
   required before empirical evaluation.
 
