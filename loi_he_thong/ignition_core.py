@@ -45,7 +45,7 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-INFERENCE_VERSION = "IGNITION_INFERENCE_V5_RESPONSE_TIME_SEMANTICS"
+INFERENCE_VERSION = "IGNITION_INFERENCE_V6_CAUSAL_REVERSAL_HANDOFF"
 ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
 PERSISTENT_AUTHORITY_SCOPE = {
     "shadow_bootstrap_authority": True,
@@ -1500,8 +1500,18 @@ def _current_bias_confirmation(state, side, now_s, onset_ms):
     return current
 
 
-def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
-    """Promote the same onset after Bias flip or a strict cash transition."""
+def _resolve_pending_reversal(
+    state, histories, now_ms, allow_promotion=True,
+    allow_transition_preemption=False,
+):
+    """Promote the same onset after Bias flip or a strict cash transition.
+
+    An ordinary Bias flip may promote only when no Ignition episode owns the
+    lane.  A fully proved Fast Transition may replace an opposite active
+    episode immediately because it is the canonical proof that market control
+    transferred; waiting for the disproved old episode to self-clear creates a
+    one-cycle authority bubble.
+    """
     pending = getattr(state, "_ignition_pending_reversal_episode", None)
     if not isinstance(pending, dict):
         return None
@@ -1563,7 +1573,25 @@ def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
         state._ignition_last_reject_payload = dict(pending)
         return None
     pending["new_side_evidence_stale"] = False
-    if not allow_promotion:
+    active_episode = getattr(state, "_ignition_episode", None)
+    transition_candidate = dict(pending)
+    transition_candidate["transition_authority"] = transition
+    transition_candidate["transition_confirmed"] = bool(
+        transition.get("confirmed")
+    )
+    strict_transition_side = _strict_transition_side(transition_candidate)
+    strict_transition_preemption = bool(
+        allow_transition_preemption
+        and strict_transition_side == str(
+            pending.get("side") or "ABSTAIN"
+        ).upper()
+        and isinstance(active_episode, dict)
+        and str(active_episode.get("side") or "ABSTAIN").upper()
+            in ("LONG", "SHORT")
+        and str(active_episode.get("side") or "ABSTAIN").upper()
+            != str(pending.get("side") or "ABSTAIN").upper()
+    )
+    if not allow_promotion and not strict_transition_preemption:
         state._ignition_last_reject_payload = dict(pending)
         return None
     confirmation = _current_bias_confirmation(
@@ -1592,6 +1620,20 @@ def _resolve_pending_reversal(state, histories, now_ms, allow_promotion=True):
         else "BIAS_ALIGNMENT_BYPASS_ONLY"
     )
     pending["promotion_ts"] = now_ms / 1000.0
+    if strict_transition_preemption:
+        pending["superseded_episode"] = {
+            "causal_episode_id": str(
+                active_episode.get("causal_episode_id")
+                or active_episode.get("episode_id") or ""
+            ),
+            "episode_hash": active_episode.get("episode_hash"),
+            "side": str(
+                active_episode.get("side") or "ABSTAIN"
+            ).upper(),
+            "reason": "STRICT_CASH_CONTROL_TRANSFER",
+            "superseded_at_ms": int(now_ms),
+            "authority": False,
+        }
     pending["flow_efficiency_at_promotion"] = _flow_efficiency_snapshot(
         histories, pending.get("side"), CASH, now_ms=now_ms,
     )
@@ -3754,6 +3796,9 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "transition_confirmed": bool(
             episode.get("transition_confirmed")
         ),
+        "superseded_episode": dict(
+            episode.get("superseded_episode") or {}
+        ),
         "clock_quality": {name: {
             "uncertainty_ms": rows[-1].get("clock_uncertainty_ms"),
             "valid": rows[-1].get("clock_valid"), "epoch": rows[-1].get("epoch"),
@@ -3937,6 +3982,7 @@ def evaluate(state, now=None, side=None):
     pending_handled = _observe_pending_reversal(state, rows, histories)
     promoted = _resolve_pending_reversal(
         state, histories, now_ms, allow_promotion=episode is None,
+        allow_transition_preemption=episode is not None,
     )
     if promoted is not None:
         episode = promoted
