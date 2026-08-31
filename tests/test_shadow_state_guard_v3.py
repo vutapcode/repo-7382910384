@@ -238,6 +238,33 @@ class ShadowStateGuardV3Tests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OK version=SHADOW_RUNTIME_STATE_V11", result.stdout)
 
+    def test_v12_time_to_event_checkpoint_is_accepted(self):
+        result = self.run_guard({
+            "version": "SHADOW_RUNTIME_STATE_V12_ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
+            "balance": 5.4, "realized_pnl": 0.1,
+            "trades": 1, "wins": 1, "losses": 0, "breakevens": 0,
+            "event_seq": 1, "decision_evaluations": 1,
+            "near_misses": 0, "decision_funnel": {"READY": 1},
+            "edge_calibration_rows": [],
+            "edge_calibration_code_version": "code-v12",
+            "edge_calibration_config_version": "config-v12",
+            "entry_economics_v2_rows": [{
+                "economic_contract_version": "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
+                "valid": True,
+                "net_pnl_bps_after_frozen_cost": 2.0,
+                "execution_cost_bps": 8.0,
+                "time_to_positive_net_event": True,
+                "time_to_positive_net_termination": "FIRST_POSITIVE_NET",
+                "time_to_positive_net_seconds": 1.2,
+                "time_to_positive_net_observation_seconds": 2.0,
+            }],
+            "entry_economics_code_version": "code-v12",
+            "entry_economics_config_version": "config-v12",
+            "position": None,
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("OK version=SHADOW_RUNTIME_STATE_V12", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

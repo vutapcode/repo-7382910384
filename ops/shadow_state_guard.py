@@ -17,7 +17,8 @@ V8 = "SHADOW_RUNTIME_STATE_V8_ENTRY_ECONOMICS_V4"
 V9 = "SHADOW_RUNTIME_STATE_V9_ENTRY_ECONOMICS_V5"
 V10 = "SHADOW_RUNTIME_STATE_V10_ENTRY_ECONOMICS_V6_AVAILABILITY_TIME"
 V11 = "SHADOW_RUNTIME_STATE_V11_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
-VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11}
+V12 = "SHADOW_RUNTIME_STATE_V12_ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
+VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12}
 
 
 def fail(msg):
@@ -137,7 +138,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
                 row[8], f"edge_calibration_rows.{index}.execution_cost_bps",
                 nonnegative=True,
             )
-    if version in {V4, V5, V6, V7, V8, V9, V10, V11}:
+    if version in {V4, V5, V6, V7, V8, V9, V10, V11, V12}:
         for name in (
             "edge_calibration_code_version",
             "edge_calibration_config_version",
@@ -145,7 +146,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
             value = raw.get(name)
             if not isinstance(value, str) or not value:
                 fail(f"{name}:missing")
-    if version in {V6, V7, V8, V9, V10, V11}:
+    if version in {V6, V7, V8, V9, V10, V11, V12}:
         economics = raw.get("entry_economics_v2_rows")
         if not isinstance(economics, list) or len(economics) > 1024:
             fail("entry_economics_v2_rows:invalid")
@@ -163,6 +164,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
             V9: "ENTRY_ECONOMICS_V5",
             V10: "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
             V11: "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
+            V12: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
         }[version]
         for index, row in enumerate(economics):
             if not isinstance(row, dict) or row.get(
@@ -178,6 +180,33 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
                 f"entry_economics_v2_rows.{index}.execution_cost_bps",
                 nonnegative=True,
             )
+            if version == V12:
+                event = row.get("time_to_positive_net_event")
+                if not isinstance(event, bool):
+                    fail(f"entry_economics_v2_rows.{index}.event:invalid")
+                termination = row.get("time_to_positive_net_termination")
+                expected = (
+                    "FIRST_POSITIVE_NET" if event
+                    else "GUARDIAN_CLOSE_BEFORE_POSITIVE"
+                )
+                if termination != expected:
+                    fail(f"entry_economics_v2_rows.{index}.termination:invalid")
+                observed = row.get("time_to_positive_net_observation_seconds")
+                if observed is not None:
+                    num(
+                        observed,
+                        f"entry_economics_v2_rows.{index}.observation_seconds",
+                        nonnegative=True,
+                    )
+                event_time = row.get("time_to_positive_net_seconds")
+                if event and event_time is None:
+                    fail(f"entry_economics_v2_rows.{index}.event_time:missing")
+                if event_time is not None:
+                    num(
+                        event_time,
+                        f"entry_economics_v2_rows.{index}.event_time",
+                        nonnegative=True,
+                    )
 
 pos = raw.get("position")
 if pos is not None:
@@ -192,7 +221,7 @@ if pos is not None:
             fail(f"position.side:{side or 'missing'}")
         num(pos.get("qty"), "position.qty", positive=True)
         entry = num(pos.get("entry_price"), "position.entry_price", positive=True)
-        if version in {V2, V3, V4, V5, V6, V7, V8, V9, V10, V11}:
+        if version in {V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12}:
             r = num(pos.get("r"), "position.r", positive=True)
             hard_sl = num(pos.get("hard_sl"), "position.hard_sl", positive=True)
             best = num(pos.get("best"), "position.best", positive=True)

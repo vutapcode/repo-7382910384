@@ -8,8 +8,8 @@ execution cost.  Unknown cohorts remain bootstrap telemetry.
 import math
 
 
-VERSION = "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
-CONTRACT_VERSION = "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
+VERSION = "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
+CONTRACT_VERSION = "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
 MAX_ROWS = 1024
 EXACT_MIN = 30
 PARENT_MIN = 50
@@ -119,17 +119,30 @@ def _parent_key(snapshot):
 
 
 def record(state, snapshot, *, net_bps, execution_cost_bps,
-           time_to_positive_net_seconds=None, valid=True):
+           time_to_positive_net_seconds=None, observation_seconds=None,
+           valid=True):
     snapshot = dict(snapshot or {})
     if snapshot.get("economic_contract_version") != CONTRACT_VERSION:
         return None
+    event_time = (
+        None if time_to_positive_net_seconds is None
+        else max(0.0, float(time_to_positive_net_seconds))
+    )
+    observed_for = (
+        event_time if observation_seconds is None and event_time is not None
+        else None if observation_seconds is None
+        else max(0.0, float(observation_seconds))
+    )
     row = {
         **snapshot,
         "net_pnl_bps_after_frozen_cost": float(net_bps),
         "execution_cost_bps": float(execution_cost_bps),
-        "time_to_positive_net_seconds": (
-            None if time_to_positive_net_seconds is None
-            else max(0.0, float(time_to_positive_net_seconds))
+        "time_to_positive_net_seconds": event_time,
+        "time_to_positive_net_observation_seconds": observed_for,
+        "time_to_positive_net_event": event_time is not None,
+        "time_to_positive_net_termination": (
+            "FIRST_POSITIVE_NET" if event_time is not None
+            else "GUARDIAN_CLOSE_BEFORE_POSITIVE"
         ),
         "valid": bool(valid),
         "code_version": str(getattr(state, "code_version", "") or ""),
@@ -145,18 +158,6 @@ def record(state, snapshot, *, net_bps, execution_cost_bps,
     return row
 
 
-def _percentile(values, q):
-    ordered = sorted(float(value) for value in values)
-    if not ordered:
-        return None
-    index = (len(ordered) - 1) * float(q)
-    lo, hi = int(math.floor(index)), int(math.ceil(index))
-    if lo == hi:
-        return ordered[lo]
-    weight = index - lo
-    return ordered[lo] * (1.0 - weight) + ordered[hi] * weight
-
-
 def _stats(rows):
     values = sorted(float(row["net_pnl_bps_after_frozen_cost"]) for row in rows)
     trim = max(1, int(len(values) * 0.10))
@@ -165,22 +166,39 @@ def _stats(rows):
     variance = sum((value - mean) ** 2 for value in core) / max(1, len(core) - 1)
     stderr = math.sqrt(max(0.0, variance)) / math.sqrt(max(1, len(core)))
     lcb = mean - 1.645 * stderr
-    winners = [
+    events = [
         float(row["time_to_positive_net_seconds"])
         for row in rows
-        if float(row["net_pnl_bps_after_frozen_cost"]) > 0.0
+        if row.get("time_to_positive_net_event") is True
         and row.get("time_to_positive_net_seconds") is not None
     ]
+    competing = sum(
+        row.get("time_to_positive_net_event") is False for row in rows
+    )
+    event_fraction = len(events) / len(rows)
+    # This is a competing-event empirical incidence, not a winner-conditioned
+    # percentile and not a fabricated survival probability.  P80 is only
+    # identifiable when at least 80% of the complete cohort actually reached
+    # positive net before Guardian termination.
+    p80 = None
+    if len(events) >= TIME_MIN_WINNERS and event_fraction >= 0.80:
+        event_rank = max(0, min(len(events) - 1, math.ceil(0.80 * len(rows)) - 1))
+        p80 = sorted(events)[event_rank]
     return {
         "samples": len(rows),
         "expected_guardian_net_bps": round(mean, 6),
         "lower_confidence_bound_bps": round(lcb, 6),
         "win_rate": round(sum(value > 0.0 for value in values) / len(values), 6),
         "positive_net": bool(mean > 0.0 and lcb >= 0.0),
-        "time_to_positive_net_winners": len(winners),
+        "time_to_positive_net_events": len(events),
+        "time_to_positive_net_competing_terminations": competing,
+        "time_to_positive_net_event_fraction": round(event_fraction, 6),
+        "time_to_positive_net_calibration_status": (
+            "IDENTIFIED" if p80 is not None
+            else "UNRESOLVED_COMPETING_TERMINATION"
+        ),
         "time_to_positive_net_p80_seconds": (
-            round(_percentile(winners, 0.80), 6)
-            if len(winners) >= TIME_MIN_WINNERS else None
+            round(p80, 6) if p80 is not None else None
         ),
     }
 
@@ -213,6 +231,9 @@ def estimate(state, snapshot):
             "expected_guardian_net_bps": None,
             "lower_confidence_bound_bps": None,
             "time_to_positive_net_p80_seconds": None,
+            "time_to_positive_net_events": 0,
+            "time_to_positive_net_competing_terminations": 0,
+            "time_to_positive_net_calibration_status": "UNRESOLVED_NO_COHORT",
             "authority": False,
             "exact_key": "|".join(exact_key),
             "parent_key": "|".join(parent_key),

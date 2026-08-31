@@ -16,7 +16,7 @@ from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
 from loi_he_thong import verified_cost_model
 
-VERSION = "IGNITION_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
+VERSION = "IGNITION_ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
 EDGE_BPS = {
     "LOW_EDGE": 0.0, "NORMAL_EDGE": 13.0,
     "HIGH_EDGE": 20.0, "RUNNER_EDGE": 35.0,
@@ -254,7 +254,14 @@ def classify(result, state):
         ),
         "time_to_edge": {
             "p80_seconds": forward_edge.get("time_to_positive_net_p80_seconds"),
-            "winner_samples": forward_edge.get("time_to_positive_net_winners", 0),
+            "event_samples": forward_edge.get("time_to_positive_net_events", 0),
+            "competing_terminations": forward_edge.get(
+                "time_to_positive_net_competing_terminations", 0
+            ),
+            "calibration_status": forward_edge.get(
+                "time_to_positive_net_calibration_status",
+                "UNRESOLVED_NO_COHORT",
+            ),
             "authority": bool(
                 forward_edge.get("authority")
                 and forward_edge.get("time_to_positive_net_p80_seconds") is not None

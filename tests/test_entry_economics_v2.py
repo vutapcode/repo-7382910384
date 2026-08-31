@@ -118,6 +118,52 @@ class EntryEconomicsV2Tests(unittest.TestCase):
         self.assertEqual(report["level"], "EXACT")
         self.assertTrue(report["positive_net"])
         self.assertIsNotNone(report["time_to_positive_net_p80_seconds"])
+        self.assertEqual(report["time_to_positive_net_events"], 30)
+        self.assertEqual(
+            report["time_to_positive_net_calibration_status"], "IDENTIFIED"
+        )
+
+    def test_time_to_edge_is_not_conditioned_on_final_winners(self):
+        state = SimpleNamespace(
+            code_version="code", strategy_config_version="cfg",
+            entry_economics_v6_replay_approved=True,
+        )
+        for index in range(30):
+            event = 1.0 if index < 15 else None
+            entry_economics_v2.record(
+                state, snapshot(),
+                net_bps=4.0 if index % 2 else -4.0,
+                execution_cost_bps=10.0,
+                time_to_positive_net_seconds=event,
+                observation_seconds=2.0,
+            )
+        report = entry_economics_v2.estimate(state, snapshot())
+        self.assertEqual(report["time_to_positive_net_events"], 15)
+        self.assertEqual(
+            report["time_to_positive_net_competing_terminations"], 15
+        )
+        self.assertIsNone(report["time_to_positive_net_p80_seconds"])
+        self.assertEqual(
+            report["time_to_positive_net_calibration_status"],
+            "UNRESOLVED_COMPETING_TERMINATION",
+        )
+
+    def test_time_to_edge_p80_requires_eighty_percent_event_incidence(self):
+        state = SimpleNamespace(
+            code_version="code", strategy_config_version="cfg",
+            entry_economics_v6_replay_approved=True,
+        )
+        for index in range(30):
+            entry_economics_v2.record(
+                state, snapshot(), net_bps=3.0,
+                execution_cost_bps=10.0,
+                time_to_positive_net_seconds=(1.0 + index * 0.01)
+                if index < 24 else None,
+                observation_seconds=3.0,
+            )
+        report = entry_economics_v2.estimate(state, snapshot())
+        self.assertEqual(report["time_to_positive_net_events"], 24)
+        self.assertIsNotNone(report["time_to_positive_net_p80_seconds"])
 
     def test_parent_requires_fifty_and_does_not_claim_exact(self):
         state = SimpleNamespace(code_version="code", strategy_config_version="cfg",

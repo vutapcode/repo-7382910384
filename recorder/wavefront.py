@@ -17,7 +17,9 @@ from types import SimpleNamespace
 
 from loi_he_thong import risk_ratchet_price_quality_hook
 from loi_he_thong import shadow_risk_guard
-from loi_he_thong import ignition_core, ignition_signals, verified_cost_model
+from loi_he_thong import (
+    entry_economics_v2, ignition_core, ignition_signals, verified_cost_model,
+)
 from recorder.residual_edge import ResidualEdgeBook
 
 
@@ -976,7 +978,7 @@ class WavefrontShadowEvaluator:
             "proposer": candidate["proposer"],
             "guardian_version": self.guardian.VERSION,
             "risk_version": self.risk.VERSION,
-            "economic_contract_version": "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
+            "economic_contract_version": entry_economics_v2.CONTRACT_VERSION,
             "hard_sl": pos.hard_sl, "core_snapshot": candidate["core_snapshot"],
         }, now_ms)
         self._persist()
@@ -1083,7 +1085,7 @@ class WavefrontShadowEvaluator:
             "commission_verified": twin["cost_plan"]["commission_verified"],
             "guardian_version": self.guardian.VERSION,
             "risk_version": self.risk.VERSION,
-            "economic_contract_version": "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
+            "economic_contract_version": entry_economics_v2.CONTRACT_VERSION,
         }
         if filled and exit_price is not None:
             entry = twin["entry_price"]

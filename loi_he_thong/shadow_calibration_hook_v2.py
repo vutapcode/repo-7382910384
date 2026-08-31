@@ -82,6 +82,10 @@ def install(hardened):
                         time_to_positive_net_seconds=getattr(
                             pos,"edge_time_to_positive_net_seconds",None
                         ),
+                        observation_seconds=max(
+                            0.0,
+                            float(now)-float(getattr(pos,"opened_at",now) or now),
+                        ),
                         valid=True,
                     )
                 # The close wrapper persists before this outer calibration hook
