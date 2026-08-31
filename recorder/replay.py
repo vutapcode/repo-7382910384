@@ -22,6 +22,7 @@ from recorder.wavefront import WavefrontShadowEvaluator
 from recorder.liquidity_response import (
     LiquidityResponseAnalyzer, SpotLiquidityResponseAnalyzer,
 )
+from recorder.causal_world_model import CausalWorldModel
 
 
 DEFAULT_DATA_ROOT = Path('/home/ubuntu/smc2026_data')
@@ -37,6 +38,8 @@ DEFAULT_STREAMS = {
     'wavefront_candidate', 'wavefront_virtual_entry',
     'wavefront_virtual_exit', 'residual_edge_report', 'liquidity_response',
     'precursor_continuity', 'spot_liquidity_response',
+    'coinbase_spot_l2snapshot', 'coinbase_spot_l2update',
+    'coinbase_liquidity_response', 'causal_world_state',
 }
 
 
@@ -233,6 +236,10 @@ class DeterministicReplay:
         self.spot_liquidity_response = SpotLiquidityResponseAnalyzer(
             self._emit_wavefront
         )
+        self.causal_world_records = []
+        self.causal_world_model = CausalWorldModel(
+            self._emit_causal_world
+        )
 
     def _emit_wavefront(self, stream, payload, event_time_ms=None):
         self.wavefront_records.append({
@@ -244,6 +251,14 @@ class DeterministicReplay:
 
     def _emit_canonical_mirror(self, stream, payload, event_time_ms=None):
         self.canonical_mirror_records.append({
+            'stream': stream,
+            'event_time_ms': int(event_time_ms or self.clock.now_ms),
+            'receive_time_ms': int(self.clock.now_ms),
+            'payload': payload,
+        })
+
+    def _emit_causal_world(self, stream, payload, event_time_ms=None):
+        self.causal_world_records.append({
             'stream': stream,
             'event_time_ms': int(event_time_ms or self.clock.now_ms),
             'receive_time_ms': int(self.clock.now_ms),
@@ -439,6 +454,7 @@ class DeterministicReplay:
             self.canonical_mirror.observe(record)
         self.liquidity_response.observe(record)
         self.spot_liquidity_response.observe(record)
+        self.causal_world_model.observe(record)
 
     def run(self, records):
         for record in records:
@@ -484,6 +500,11 @@ class DeterministicReplay:
             ),
             'liquidity_response': self.liquidity_response.summary(),
             'spot_liquidity_response': self.spot_liquidity_response.summary(),
+            'causal_world_model': self.causal_world_model.summary(),
+            'causal_world_generated_records': len(self.causal_world_records),
+            'causal_world_output_hash': hashlib.sha256(orjson.dumps(
+                self.causal_world_records, option=orjson.OPT_SORT_KEYS
+            )).hexdigest(),
         }
 
 

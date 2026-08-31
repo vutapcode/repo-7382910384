@@ -112,6 +112,11 @@
   only for historical journal/test decoding. It is not a fallback lane.
 - `recorder/liquidity_response.py`: offline executed-depletion/refill research.
   A cancel or disappearing wall is never execution and its output cannot vote.
+- `recorder/causal_world_model.py`: event/state/hypothesis shadow brain. It may
+  explain competing mechanisms and emit `causal_world_state`, but every row is
+  `authority=false` and cannot authorize Bias, Entry, Execution or Guardian.
+- `recorder/coinbase_l2.py`: public Level-2 reconstruction used only by the
+  recorder. Quantity removal is not execution without correlated matches.
 - `recorder/replay.py`: deterministic evidence transport/reconstruction only.
   A replay becomes promotion evidence only when a canonical strategy adapter
   explicitly evaluates the complete active chain.

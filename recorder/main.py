@@ -14,8 +14,10 @@ from recorder.health import HealthState, health_loop
 from recorder.features import FeatureEngine
 from recorder.metadata import code_version, config_version
 from recorder.liquidity_response import (
-    LiquidityResponseAnalyzer, SpotLiquidityResponseAnalyzer,
+    COINBASE_VERSION, LiquidityResponseAnalyzer,
+    SpotLiquidityResponseAnalyzer,
 )
+from recorder.causal_world_model import CausalWorldModel
 from recorder.storage import AppendOnlyStore
 from recorder.wavefront import WavefrontShadowEvaluator
 
@@ -547,6 +549,17 @@ async def run():
     collector.spot_liquidity_response_analyzer = SpotLiquidityResponseAnalyzer(
         research_emit
     )
+    collector.coinbase_liquidity_response_analyzer = (
+        SpotLiquidityResponseAnalyzer(
+            research_emit,
+            venue='coinbase_spot',
+            depth_stream='coinbase_spot_depth20',
+            trade_stream='coinbase_spot_trade_100ms',
+            output_stream='coinbase_liquidity_response',
+            version=COINBASE_VERSION,
+        )
+    )
+    collector.causal_world_model = CausalWorldModel(research_emit)
     if config.wavefront_enabled:
         collector.wavefront_evaluator = WavefrontShadowEvaluator(
             lambda stream, payload, event_time_ms=None: collector.emit(

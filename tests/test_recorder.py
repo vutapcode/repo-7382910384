@@ -131,10 +131,12 @@ class CashRecorderTests(unittest.TestCase):
         self.assertNotIn('@bookTicker', config.spot_stream_url)
         self.assertNotIn('@kline_', config.market_stream_url)
 
-    def test_coinbase_recorder_subscribes_to_matches_and_ticker(self):
+    def test_coinbase_recorder_subscribes_to_matches_ticker_and_level2(self):
         source = Path(__file__).resolve().parents[1] / 'recorder' / 'collector.py'
         text = source.read_text(encoding='utf-8')
-        self.assertIn("'channels': ['matches', 'ticker']", text)
+        self.assertIn(
+            "'channels': ['matches', 'ticker', 'level2_batch']", text
+        )
         self.assertIn("elif message_type == 'ticker'", text)
         self.assertIn("'coinbase_spot_ticker'", text)
 
@@ -231,7 +233,9 @@ class CashRecorderTests(unittest.TestCase):
             with self.assertRaises(asyncio.CancelledError):
                 asyncio.run(recorder.coinbase_spot_loop())
 
-        self.assertEqual(sent[0]['channels'], ['matches', 'ticker'])
+        self.assertEqual(
+            sent[0]['channels'], ['matches', 'ticker', 'level2_batch']
+        )
         by_stream = {record['stream']: record for record in published}
         self.assertIn('coinbase_spot_trade_100ms', by_stream)
         self.assertIn('coinbase_spot_ticker', by_stream)

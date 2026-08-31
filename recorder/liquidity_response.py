@@ -15,6 +15,7 @@ from recorder.depth import DepthGap, LocalOrderBook
 VERSION = "LIQUIDITY_RESPONSE_RESEARCH_V3"
 HORIZONS_MS = (250, 1_000, 3_000)
 SPOT_VERSION = "SPOT_LIQUIDITY_RESPONSE_RESEARCH_V2_CAUSAL_ORDER"
+COINBASE_VERSION = "COINBASE_LIQUIDITY_RESPONSE_RESEARCH_V1_CAUSAL_ORDER"
 SPOT_HORIZONS_MS = (50, 100, 250, 500)
 
 
@@ -240,8 +241,18 @@ class SpotLiquidityResponseAnalyzer:
     microprice and spread response while remaining bounded and non-authoritative.
     """
 
-    def __init__(self, emit, max_pending=64):
+    def __init__(
+        self, emit, max_pending=64, *, venue="binance_spot",
+        depth_stream="binance_spot_depth5",
+        trade_stream="binance_spot_trade_100ms",
+        output_stream="spot_liquidity_response", version=SPOT_VERSION,
+    ):
         self.emit = emit
+        self.venue = str(venue)
+        self.depth_stream = str(depth_stream)
+        self.trade_stream = str(trade_stream)
+        self.output_stream = str(output_stream)
+        self.version = str(version)
         self.pending = deque(maxlen=max(1, int(max_pending)))
         self.book = None
         self.book_history = deque(maxlen=32)
@@ -345,7 +356,8 @@ class SpotLiquidityResponseAnalyzer:
             causal_order = "NONCONVERSION"
         payload = {
             "schema_version": "WSTRADE_RECORDER_RESEARCH_V5_CAUSAL_PROOF_SEMANTICS",
-            "version": SPOT_VERSION,
+            "version": self.version,
+            "venue": self.venue,
             "authority": False,
             "eligible_for_live_gate": False,
             "valid": bool(valid),
@@ -382,7 +394,7 @@ class SpotLiquidityResponseAnalyzer:
             "depth_without_executed_flow_authority": False,
             "mechanism_status": "RESEARCH_HYPOTHESIS_ONLY",
         }
-        self.emit("spot_liquidity_response", payload, event_time_ms=int(now_ms))
+        self.emit(self.output_stream, payload, event_time_ms=int(now_ms))
         if valid:
             self.completed += 1
         else:
@@ -440,13 +452,16 @@ class SpotLiquidityResponseAnalyzer:
 
     def observe(self, record):
         stream = str(record.get("stream") or "")
-        if stream in ("spot_liquidity_response", "liquidity_response"):
+        if stream in (
+            "spot_liquidity_response", "coinbase_liquidity_response",
+            "liquidity_response",
+        ):
             return
         now_ms = int(record.get("receive_time_ms", 0) or 0)
         if now_ms <= 0:
             return
         payload = record.get("payload") or {}
-        if stream == "binance_spot_depth5":
+        if stream == self.depth_stream:
             snapshot = self._snapshot(payload)
             if snapshot is None:
                 self.reset(now_ms, "INVALID_SPOT_DEPTH5")
@@ -456,7 +471,7 @@ class SpotLiquidityResponseAnalyzer:
             self._advance(now_ms, snapshot)
             return
 
-        if stream != "binance_spot_trade_100ms" or self.book is None:
+        if stream != self.trade_stream or self.book is None:
             return
         buy = _f(payload.get("buy_qty"))
         sell = _f(payload.get("sell_qty"))
@@ -473,7 +488,7 @@ class SpotLiquidityResponseAnalyzer:
         last_id = payload.get("last_trade_id")
         self.pending.append({
             "causal_episode_id": (
-                f"spot-depth:{side}:{start_ms}:{first_id}:{last_id}"
+                f"{self.venue}-depth:{side}:{start_ms}:{first_id}:{last_id}"
             ),
             "start_ms": start_ms,
             "event_time_ms": payload.get("last_event_time_ms"),
@@ -492,7 +507,8 @@ class SpotLiquidityResponseAnalyzer:
 
     def summary(self):
         return {
-            "version": SPOT_VERSION,
+            "version": self.version,
+            "venue": self.venue,
             "authority": False,
             "completed": self.completed,
             "invalid": self.invalid,

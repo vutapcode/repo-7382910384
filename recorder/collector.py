@@ -14,6 +14,7 @@ from recorder.cash import (
     is_coinbase_live_match,
 )
 from recorder.depth import DepthGap, LocalOrderBook
+from recorder.coinbase_l2 import CoinbaseL2Book
 
 
 class BinanceRecorder:
@@ -32,6 +33,8 @@ class BinanceRecorder:
         self.wavefront_evaluator = None
         self.liquidity_response_analyzer = None
         self.spot_liquidity_response_analyzer = None
+        self.coinbase_liquidity_response_analyzer = None
+        self.causal_world_model = None
         self._causal_clocks = {}
         self._wavefront_health_at_ms = 0
         self._liquidity_health_at_ms = 0
@@ -113,6 +116,23 @@ class BinanceRecorder:
                 self.spot_liquidity_response_analyzer.observe(record)
             except Exception as exc:
                 self.health.error('spot_liquidity_response', exc)
+        if (
+            published and feed_research
+            and self.coinbase_liquidity_response_analyzer is not None
+        ):
+            try:
+                self.coinbase_liquidity_response_analyzer.observe(record)
+            except Exception as exc:
+                self.health.error('coinbase_liquidity_response', exc)
+        # The world model must see derived liquidity rows emitted with
+        # feed_research=False.  It explicitly ignores its own output stream,
+        # so this cannot recurse and it remains authority-free.
+        if published and self.causal_world_model is not None:
+            try:
+                self.causal_world_model.observe(record)
+                self.health.causal_world_model = self.causal_world_model.summary()
+            except Exception as exc:
+                self.health.error('causal_world_model', exc)
         return published
 
     def _emit_cash_batch(
@@ -472,17 +492,18 @@ class BinanceRecorder:
                 await asyncio.sleep(3)
 
     async def coinbase_spot_loop(self):
-        """Record Coinbase executed matches and contemporaneous BBO ticker."""
+        """Record Coinbase matches, BBO and public L2 research evidence."""
         name = 'coinbase_spot_ws'
         previous_trade_id = None
         subscribe = orjson.dumps({
             'type': 'subscribe',
             'product_ids': [self.config.coinbase_product],
-            'channels': ['matches', 'ticker'],
+            'channels': ['matches', 'ticker', 'level2_batch'],
         })
         while True:
             batcher = CashTradeBatcher(self.config.cash_batch_ms)
             last_ticker_ms = 0
+            l2 = CoinbaseL2Book()
             try:
                 async with websockets.connect(
                     self.config.coinbase_ws_url,
@@ -494,6 +515,10 @@ class BinanceRecorder:
                 ) as ws:
                     await ws.send(subscribe)
                     self.health.connection(name, True)
+                    if self.coinbase_liquidity_response_analyzer is not None:
+                        self.coinbase_liquidity_response_analyzer.reset(
+                            self.now_ms(), 'COINBASE_L2_EPOCH_RESET'
+                        )
                     while True:
                         try:
                             raw = await asyncio.wait_for(
@@ -553,6 +578,51 @@ class BinanceRecorder:
                             last_ticker_ms = receive_ms
                         elif message_type == 'ticker':
                             self.health.sampled_out['coinbase_spot_ticker'] += 1
+                        elif message_type == 'snapshot':
+                            l2.reset(data)
+                            checkpoint = l2.checkpoint(20)
+                            event_ms = receive_ms
+                            self.emit(
+                                'coinbase_spot_l2snapshot', {
+                                    'product_id': data.get('product_id'),
+                                    'epoch': l2.epoch,
+                                    'bids': data.get('bids') or [],
+                                    'asks': data.get('asks') or [],
+                                },
+                                event_time_ms=event_ms,
+                                receive_time_ms=receive_ms,
+                                source='coinbase_spot', feed_features=False,
+                            )
+                            if self.coinbase_liquidity_response_analyzer is not None:
+                                self.coinbase_liquidity_response_analyzer.observe({
+                                    'stream': 'coinbase_spot_depth20',
+                                    'event_time_ms': event_ms,
+                                    'receive_time_ms': receive_ms,
+                                    'payload': checkpoint,
+                                })
+                        elif message_type == 'l2update':
+                            event_ms = coinbase_time_ms(
+                                data.get('time'), receive_ms
+                            )
+                            l2.apply(data)
+                            self.emit(
+                                'coinbase_spot_l2update', {
+                                    'product_id': data.get('product_id'),
+                                    'epoch': l2.epoch,
+                                    'changes': data.get('changes') or [],
+                                    'time': data.get('time'),
+                                },
+                                event_time_ms=event_ms,
+                                receive_time_ms=receive_ms,
+                                source='coinbase_spot', feed_features=False,
+                            )
+                            if self.coinbase_liquidity_response_analyzer is not None:
+                                self.coinbase_liquidity_response_analyzer.observe({
+                                    'stream': 'coinbase_spot_depth20',
+                                    'event_time_ms': event_ms,
+                                    'receive_time_ms': receive_ms,
+                                    'payload': l2.checkpoint(20),
+                                })
             except asyncio.CancelledError:
                 previous_trade_id = self._emit_cash_batch(
                     'coinbase_spot_trade_100ms', 'coinbase_spot',
