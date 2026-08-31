@@ -1,7 +1,9 @@
 import unittest
 
 from recorder.causal_world_model import CausalWorldModel, MarketEventV1
-from recorder.coinbase_l2 import CoinbaseL2Book, CoinbaseL2Error
+from recorder.coinbase_l2 import (
+    CoinbaseL2Book, CoinbaseL2Error, CoinbaseL2UpdateBatcher,
+)
 from recorder.replay import DeterministicReplay
 
 
@@ -58,6 +60,19 @@ class CoinbaseL2Tests(unittest.TestCase):
     def test_update_requires_snapshot(self):
         with self.assertRaises(CoinbaseL2Error):
             CoinbaseL2Book().apply({"changes": [["buy", "99", "1"]]})
+
+    def test_update_batch_preserves_order_and_availability(self):
+        batcher = CoinbaseL2UpdateBatcher(100)
+        self.assertIsNone(batcher.push(1_001, 990, [["buy", "99", "2"]]))
+        self.assertIsNone(batcher.push(1_050, 1_040, [["buy", "99", "0"]]))
+        completed = batcher.push(1_101, 1_090, [["sell", "101", "3"]])
+        self.assertEqual(completed["update_count"], 2)
+        self.assertEqual(completed["change_count"], 2)
+        self.assertEqual(
+            [event["changes"][0][2] for event in completed["events"]],
+            ["2", "0"],
+        )
+        self.assertEqual(batcher.flush()["events"][0]["receive_time_ms"], 1_101)
 
 
 class CausalWorldModelTests(unittest.TestCase):
@@ -131,4 +146,3 @@ class CausalWorldModelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -116,7 +116,8 @@
   explain competing mechanisms and emit `causal_world_state`, but every row is
   `authority=false` and cannot authorize Bias, Entry, Execution or Guardian.
 - `recorder/coinbase_l2.py`: public Level-2 reconstruction used only by the
-  recorder. Quantity removal is not execution without correlated matches.
+  recorder. Ordered updates are transported in lossless 100 ms batches;
+  quantity removal is not execution without correlated matches.
 - `recorder/replay.py`: deterministic evidence transport/reconstruction only.
   A replay becomes promotion evidence only when a canonical strategy adapter
   explicitly evaluates the complete active chain.

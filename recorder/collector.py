@@ -14,7 +14,7 @@ from recorder.cash import (
     is_coinbase_live_match,
 )
 from recorder.depth import DepthGap, LocalOrderBook
-from recorder.coinbase_l2 import CoinbaseL2Book
+from recorder.coinbase_l2 import CoinbaseL2Book, CoinbaseL2UpdateBatcher
 
 
 class BinanceRecorder:
@@ -175,6 +175,33 @@ class BinanceRecorder:
             receive_time_ms=receive_ms,
         )
         return int(last_id) if last_id is not None else previous_sequence
+
+    def _emit_coinbase_l2_batch(self, batch, book, product_id):
+        if not batch:
+            return False
+        receive_ms = int(self.now_ms())
+        payload = dict(batch)
+        payload.update({
+            'product_id': product_id,
+            'epoch': book.epoch,
+            'batch_available_time_ms': receive_ms,
+            'ordered_lossless_changes': True,
+        })
+        event_ms = int(payload.get('last_event_time_ms') or receive_ms)
+        self.emit(
+            'coinbase_spot_l2batch', payload,
+            event_time_ms=event_ms,
+            receive_time_ms=receive_ms,
+            source='coinbase_spot', feed_features=False,
+        )
+        if self.coinbase_liquidity_response_analyzer is not None:
+            self.coinbase_liquidity_response_analyzer.observe({
+                'stream': 'coinbase_spot_depth20',
+                'event_time_ms': event_ms,
+                'receive_time_ms': receive_ms,
+                'payload': book.checkpoint(20),
+            })
+        return True
 
     async def start_session(self):
         timeout = aiohttp.ClientTimeout(total=10)
@@ -502,8 +529,10 @@ class BinanceRecorder:
         })
         while True:
             batcher = CashTradeBatcher(self.config.cash_batch_ms)
+            l2_batcher = CoinbaseL2UpdateBatcher(self.config.cash_batch_ms)
             last_ticker_ms = 0
             l2 = CoinbaseL2Book()
+            product_id = self.config.coinbase_product
             try:
                 async with websockets.connect(
                     self.config.coinbase_ws_url,
@@ -529,6 +558,10 @@ class BinanceRecorder:
                                 'coinbase_spot_trade_100ms', 'coinbase_spot',
                                 batcher.flush(), previous_trade_id,
                             )
+                            self._emit_coinbase_l2_batch(
+                                l2_batcher.flush_due(self.now_ms()), l2,
+                                product_id,
+                            )
                             continue
                         receive_ms = self.now_ms()
                         previous_trade_id = self._emit_cash_batch(
@@ -537,6 +570,7 @@ class BinanceRecorder:
                         )
                         data = orjson.loads(raw)
                         message_type = str(data.get('type', ''))
+                        product_id = data.get('product_id') or product_id
                         if is_coinbase_live_match(message_type):
                             trade_id = int(data.get('trade_id', 0) or 0)
                             event_ms = coinbase_time_ms(data.get('time'), receive_ms)
@@ -579,6 +613,9 @@ class BinanceRecorder:
                         elif message_type == 'ticker':
                             self.health.sampled_out['coinbase_spot_ticker'] += 1
                         elif message_type == 'snapshot':
+                            self._emit_coinbase_l2_batch(
+                                l2_batcher.flush(), l2, product_id,
+                            )
                             l2.reset(data)
                             checkpoint = l2.checkpoint(20)
                             event_ms = receive_ms
@@ -604,35 +641,34 @@ class BinanceRecorder:
                             event_ms = coinbase_time_ms(
                                 data.get('time'), receive_ms
                             )
-                            l2.apply(data)
-                            self.emit(
-                                'coinbase_spot_l2update', {
-                                    'product_id': data.get('product_id'),
-                                    'epoch': l2.epoch,
-                                    'changes': data.get('changes') or [],
-                                    'time': data.get('time'),
-                                },
-                                event_time_ms=event_ms,
-                                receive_time_ms=receive_ms,
-                                source='coinbase_spot', feed_features=False,
+                            completed_l2 = l2_batcher.push(
+                                receive_ms, event_ms,
+                                data.get('changes') or [],
                             )
-                            if self.coinbase_liquidity_response_analyzer is not None:
-                                self.coinbase_liquidity_response_analyzer.observe({
-                                    'stream': 'coinbase_spot_depth20',
-                                    'event_time_ms': event_ms,
-                                    'receive_time_ms': receive_ms,
-                                    'payload': l2.checkpoint(20),
-                                })
+                            # Publish the closed bucket against the book state
+                            # that existed before this new bucket's first
+                            # update.  Applying first would leak one future L2
+                            # event into the previous checkpoint.
+                            self._emit_coinbase_l2_batch(
+                                completed_l2, l2, product_id,
+                            )
+                            l2.apply(data)
             except asyncio.CancelledError:
                 previous_trade_id = self._emit_cash_batch(
                     'coinbase_spot_trade_100ms', 'coinbase_spot',
                     batcher.flush(), previous_trade_id,
+                )
+                self._emit_coinbase_l2_batch(
+                    l2_batcher.flush(), l2, product_id,
                 )
                 raise
             except Exception as exc:
                 previous_trade_id = self._emit_cash_batch(
                     'coinbase_spot_trade_100ms', 'coinbase_spot',
                     batcher.flush(), previous_trade_id,
+                )
+                self._emit_coinbase_l2_batch(
+                    l2_batcher.flush(), l2, product_id,
                 )
                 self.health.connection(name, False)
                 self.health.reconnects[name] += 1

@@ -16,6 +16,7 @@ from recorder.cash import (
     CashTradeBatcher, coinbase_time_ms, is_coinbase_live_match,
 )
 from recorder.depth import DepthGap, LocalOrderBook
+from recorder.coinbase_l2 import CoinbaseL2Book, CoinbaseL2UpdateBatcher
 from recorder.decision_tap import DecisionTap, compact_cycles_delta
 from recorder.features import FeatureEngine
 from recorder.health import HealthState
@@ -139,6 +140,72 @@ class CashRecorderTests(unittest.TestCase):
         )
         self.assertIn("elif message_type == 'ticker'", text)
         self.assertIn("'coinbase_spot_ticker'", text)
+        self.assertIn("'coinbase_spot_l2batch'", text)
+
+    def test_coinbase_l2_batch_is_one_lossless_record(self):
+        rows = []
+
+        class Store:
+            @staticmethod
+            def publish(record):
+                rows.append(record)
+                return True
+
+        config = RecorderConfig()
+        recorder = BinanceRecorder(config, Store(), HealthState(config))
+        book = CoinbaseL2Book()
+        book.reset({
+            'bids': [['99', '2']], 'asks': [['101', '3']],
+        })
+        batch = {
+            'bucket_start_ms': 1_000, 'bucket_end_ms': 1_099,
+            'first_event_time_ms': 1_010, 'last_event_time_ms': 1_080,
+            'events': [
+                {'event_time_ms': 1_010, 'receive_time_ms': 1_020,
+                 'changes': [['buy', '99', '4']]},
+                {'event_time_ms': 1_080, 'receive_time_ms': 1_090,
+                 'changes': [['sell', '101', '2']]},
+            ],
+            'update_count': 2, 'change_count': 2,
+        }
+        with mock.patch.object(recorder, 'now_ms', return_value=1_105):
+            recorder._emit_coinbase_l2_batch(batch, book, 'BTC-USD')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['stream'], 'coinbase_spot_l2batch')
+        self.assertEqual(rows[0]['receive_time_ms'], 1_105)
+        self.assertEqual(rows[0]['payload']['batch_available_time_ms'], 1_105)
+        self.assertTrue(rows[0]['payload']['ordered_lossless_changes'])
+
+    def test_closed_l2_bucket_checkpoint_cannot_see_next_bucket_update(self):
+        observed = []
+
+        class Store:
+            @staticmethod
+            def publish(_record):
+                return True
+
+        class Probe:
+            @staticmethod
+            def observe(record):
+                if record.get('stream') == 'coinbase_spot_depth20':
+                    observed.append(record)
+
+        config = RecorderConfig()
+        recorder = BinanceRecorder(config, Store(), HealthState(config))
+        recorder.coinbase_liquidity_response_analyzer = Probe()
+        book = CoinbaseL2Book()
+        book.reset({'bids': [['99', '2']], 'asks': [['101', '3']]})
+        batcher = CoinbaseL2UpdateBatcher(100)
+        batcher.push(1_010, 1_005, [['buy', '99', '4']])
+        book.apply({'changes': [['buy', '99', '4']]})
+        completed = batcher.push(1_110, 1_105, [['buy', '100', '7']])
+        with mock.patch.object(recorder, 'now_ms', return_value=1_115):
+            recorder._emit_coinbase_l2_batch(
+                completed, book, 'BTC-USD',
+            )
+        # The update at 1_110 belongs to the next bucket and has not been
+        # applied yet, so the previous bucket checkpoint must still top at 99.
+        self.assertEqual(observed[-1]['payload']['bids'][0][0], '99')
 
     def test_derived_research_record_is_not_fed_back_into_analyzers(self):
         published = []

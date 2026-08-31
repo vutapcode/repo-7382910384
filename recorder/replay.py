@@ -38,7 +38,7 @@ DEFAULT_STREAMS = {
     'wavefront_candidate', 'wavefront_virtual_entry',
     'wavefront_virtual_exit', 'residual_edge_report', 'liquidity_response',
     'precursor_continuity', 'spot_liquidity_response',
-    'coinbase_spot_l2snapshot', 'coinbase_spot_l2update',
+    'coinbase_spot_l2snapshot', 'coinbase_spot_l2batch',
     'coinbase_liquidity_response', 'causal_world_state',
 }
 
