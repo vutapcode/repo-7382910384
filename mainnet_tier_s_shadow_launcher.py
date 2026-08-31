@@ -666,6 +666,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
     reference = _execution_mid(state)
     side = str((result or {}).get("side", "ABSTAIN") or "ABSTAIN").upper()
     causal = dict((result or {}).get("causal") or {})
+    ignition_snapshot = dict((result or {}).get("ignition") or {})
     taxonomy = _miss_taxonomy_details(result, edge_report, quorum_ok)
     miss = taxonomy["blocking_reason"]
     failed = taxonomy["blocking_reasons"]
@@ -686,6 +687,24 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         except (AttributeError, TypeError, ValueError):
             hard_sl_bps = None
     oi_max_age = regime_oi_freshness_hook.max_oi_age_seconds(state)
+    decision_time_ms = int(now * 1000)
+    research_origin_ms = int(
+        ignition_snapshot.get("research_origin_receive_time_ms", 0) or 0
+    )
+    research_origin_price = float(
+        ignition_snapshot.get("research_origin_reference_price", 0.0) or 0.0
+    )
+    research_origin_valid = bool(
+        research_origin_ms > 0
+        and research_origin_ms <= decision_time_ms
+        and decision_time_ms - research_origin_ms <= ignition_core.EPISODE_MAX_MS
+        and research_origin_price > 0.0
+        and ignition_snapshot.get("research_origin_continuity")
+        == "SAME_RECEIVE_TIME_EVIDENCE_CHAIN"
+    )
+    counterfactual_reference = (
+        research_origin_price if research_origin_valid else reference
+    )
     cost_snapshot = {
         "cost_ok": (edge_report or {}).get("cost_ok"),
         "budget_bps": (edge_report or {}).get("cost_budget_bps_model"),
@@ -710,7 +729,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
     boundaries = decision_boundary_evidence.build(result, edge_report)
     return {
         "cycle_id": cycle_id,
-        "decision_time_ms": int(now * 1000),
+        "decision_time_ms": decision_time_ms,
         "strategy_authority": "IGNITION_CORE_V1",
         "strategy_code_version": getattr(state, "code_version", None),
         "strategy_config_version": getattr(state, "strategy_config_version", None),
@@ -751,7 +770,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "cash_perp_handoff": causal.get("handoff"),
             "post_chase_retest": causal.get("post_chase_retest"),
             "price_acceptance": causal.get("acceptance"),
-            "ignition": dict((result or {}).get("ignition") or {}),
+            "ignition": ignition_snapshot,
             "persistent_metaorder_shadow": dict(
                 (result or {}).get("persistent_metaorder_shadow") or {}
             ),
@@ -785,8 +804,23 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "diagnostic_reasons": taxonomy["diagnostic_reasons"],
         },
         "counterfactual": {
-            "eligible": bool(miss and reference > 0.0 and side in ("LONG", "SHORT")),
-            "reference_price": reference or None,
+            "eligible": bool(
+                miss and counterfactual_reference > 0.0
+                and side in ("LONG", "SHORT")
+            ),
+            "reference_price": counterfactual_reference or None,
+            "decision_reference_price": reference or None,
+            "origin_receive_time_ms": (
+                research_origin_ms if research_origin_valid else decision_time_ms
+            ),
+            "origin_candidate_id": (
+                ignition_snapshot.get("research_origin_candidate_id")
+                if research_origin_valid else None
+            ),
+            "origin_link_status": (
+                "SAME_RECEIVE_TIME_EVIDENCE_CHAIN"
+                if research_origin_valid else "DECISION_TIME_ORIGIN"
+            ),
             "side": side,
             "hard_sl_bps": round(hard_sl_bps, 4) if hard_sl_bps is not None else None,
             "frozen_economics": {

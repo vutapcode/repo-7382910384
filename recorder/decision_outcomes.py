@@ -10,6 +10,7 @@ from collections import deque, OrderedDict
 
 WINDOWS_MS = (5_000, 15_000, 30_000, 60_000)
 PERSISTENT_WINDOWS_MS = WINDOWS_MS + (180_000, 300_000, 900_000)
+CAUSAL_WINDOWS_MS = PERSISTENT_WINDOWS_MS
 MAX_PENDING = 512
 MAX_CLOSED = 2_048
 DIAGNOSTIC_WAVE_GAP_MS = 5_000
@@ -350,8 +351,9 @@ class DecisionOutcomeTracker:
             classification = "MISS_SCREEN_ONLY"
         return classification, missing, guardian_net
 
-    def _emit_opportunity_dossier(self, tracker, event_ms):
-        if tracker.get("dossier_emitted"):
+    def _emit_opportunity_dossier(self, tracker, event_ms, stage="FINAL"):
+        stages = tracker.setdefault("dossier_stages", set())
+        if stage in stages:
             return
         trace = list(tracker.get("decision_trace") or [])
         outcomes = list(tracker.get("outcome_windows") or [])
@@ -376,6 +378,7 @@ class DecisionOutcomeTracker:
             {
                 "version": DOSSIER_VERSION,
                 "authority": False,
+                "dossier_stage": stage,
                 "cycle_id": tracker.get("cycle_id"),
                 "causal_episode_id": tracker.get("causal_episode_id"),
                 "economic_wave_id": tracker.get("economic_wave_id"),
@@ -387,8 +390,13 @@ class DecisionOutcomeTracker:
                 "sample_scope": tracker.get("sample_scope"),
                 "anchor_role": tracker.get("anchor_role"),
                 "side": tracker.get("side"),
-                "first_seen_ms": first.get("event_time_ms") or tracker.get("start_ms"),
+                "first_seen_ms": tracker.get("start_ms"),
+                "first_decision_ms": (
+                    first.get("event_time_ms") or tracker.get("start_ms")
+                ),
                 "last_decision_ms": last.get("event_time_ms") or tracker.get("start_ms"),
+                "origin_link_status": tracker.get("origin_link_status"),
+                "origin_candidate_id": tracker.get("origin_candidate_id"),
                 "decision_count": len(trace),
                 "decision_trace": trace,
                 "why_no_entry": {
@@ -431,7 +439,7 @@ class DecisionOutcomeTracker:
             },
             event_time_ms=int(event_ms),
         )
-        tracker["dossier_emitted"] = True
+        stages.add(stage)
 
     def _emit_final_adjudication(self, tracker, event_ms):
         if not tracker.get("economic_miss_eligible"):
@@ -477,7 +485,8 @@ class DecisionOutcomeTracker:
                 "strategy_config_version": tracker.get("strategy_config_version"),
                 "distance_to_boundary": tracker.get("distance_to_boundary") or {},
                 "adjudicated_at_seconds": int(
-                    (tracker.get("windows_ms") or WINDOWS_MS)[-1] // 1000
+                    min(60_000, (tracker.get("windows_ms") or WINDOWS_MS)[-1])
+                    // 1000
                 ),
             },
             event_time_ms=int(event_ms),
@@ -562,8 +571,15 @@ class DecisionOutcomeTracker:
             or reference <= 0.0
         ):
             return
-        start_ms = int(record.get("event_time_ms", 0) or 0)
-        if start_ms <= 0:
+        decision_ms = int(record.get("event_time_ms", 0) or 0)
+        origin_ms = int(cf.get("origin_receive_time_ms", 0) or 0)
+        origin_is_bounded = bool(
+            origin_ms > 0
+            and origin_ms <= decision_ms
+            and decision_ms - origin_ms <= DIAGNOSTIC_WAVE_GAP_MS
+        )
+        start_ms = origin_ms if origin_is_bounded else decision_ms
+        if start_ms <= 0 or decision_ms <= 0:
             return
         episode_id = str(candidate.get("causal_episode_id") or "")
         anchor_role = str(candidate.get("anchor_role") or "DECISION_CYCLE")
@@ -640,14 +656,16 @@ class DecisionOutcomeTracker:
             "completed": set(),
             "decision_trace": carried_trace,
             "outcome_windows": [],
-            "dossier_emitted": False,
-            # Long-horizon waves are intentionally limited to the stable
-            # persistent-metaorder cohort. Keeping every 100 ms reject alive
-            # for 15 minutes would waste the host CPU budget and distort the
-            # dataset with repeated decision cycles.
+            "dossier_stages": set(),
+            "origin_link_status": cf.get("origin_link_status"),
+            "origin_candidate_id": cf.get("origin_candidate_id"),
+            # Canonical causal episodes keep the 3/5/15 minute diagnostics;
+            # ordinary decision-cycle noise still closes at 60 seconds.
             "windows_ms": (
                 PERSISTENT_WINDOWS_MS
                 if sample_scope == "PERSISTENT_METAORDER_SHADOW"
+                else CAUSAL_WINDOWS_MS
+                if economic_miss_eligible
                 else WINDOWS_MS
             ),
         }
@@ -720,7 +738,7 @@ class DecisionOutcomeTracker:
             },
             event_time_ms=int(at_ms),
         )
-        self._emit_opportunity_dossier(tracker, at_ms)
+        self._emit_opportunity_dossier(tracker, at_ms, stage="INVALID")
 
     def _invalidate_all(self, reason, at_ms):
         for tracking_key, tracker in list(self.pending.items()):
@@ -876,9 +894,15 @@ class DecisionOutcomeTracker:
                 })
                 tracker["completed"].add(window)
                 if window == 60_000:
-                    self._emit_opportunity_dossier(tracker, event_ms)
-                if window == windows[-1]:
+                    self._emit_opportunity_dossier(
+                        tracker, event_ms, stage="EARLY_60S"
+                    )
                     self._emit_final_adjudication(tracker, event_ms)
+                if window == windows[-1] and window > 60_000:
+                    self._emit_opportunity_dossier(
+                        tracker, event_ms,
+                        stage="FINAL_%dS" % int(window // 1000),
+                    )
             if len(tracker["completed"]) == len(windows):
                 remove.append(tracking_key)
         for tracking_key in remove:

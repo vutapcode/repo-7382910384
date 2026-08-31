@@ -1701,10 +1701,19 @@ def _research_reject_context(state, signal, bias, reason):
     )
     venues = set(previous.get("observed_venues") or ()) if same_wave else set()
     venues.add(str(signal.get("venue") or "unknown"))
+    first_evidence_ms = int(
+        previous.get("first_evidence_ms", receive_ms)
+        if same_wave else receive_ms
+    )
+    origin_price = _f(
+        previous.get("origin_price") if same_wave else signal.get("price")
+    )
     grouped = {
         "research_candidate_id": candidate_id,
         "side": side,
+        "first_evidence_ms": first_evidence_ms,
         "last_evidence_ms": receive_ms,
+        "origin_price": origin_price or None,
         "observed_venues": sorted(venues),
     }
     state._ignition_research_reject = grouped
@@ -1719,6 +1728,8 @@ def _research_reject_context(state, signal, bias, reason):
         "policy": "TELEMETRY_ONLY_NEVER_CREATES_CANONICAL_OPPORTUNITY",
         "bias_snapshot": dict(bias or {}),
         "research_side": side,
+        "research_origin_receive_time_ms": first_evidence_ms,
+        "research_origin_reference_price": origin_price or None,
         "research_receive_time_ms": receive_ms,
         "proposer": signal.get("venue"),
         "leader": "UNKNOWN",
@@ -1789,6 +1800,19 @@ def _start_episode(state, signal, histories=None):
             state, signal, bias, "FROZEN_BIAS_FLOW_PRICE_TRAP"
         )
         return None
+    research = dict(getattr(state, "_ignition_research_reject", {}) or {})
+    research_gap_ms = int(signal.get("receive_time_ms", 0)) - int(
+        research.get("last_evidence_ms", 0) or 0
+    )
+    research_age_ms = int(signal.get("receive_time_ms", 0)) - int(
+        research.get("first_evidence_ms", 0) or 0
+    )
+    same_research_wave = bool(
+        research.get("side") == side
+        and 0 <= research_gap_ms <= EVIDENCE_GAP_MS
+        and 0 <= research_age_ms <= EPISODE_MAX_MS
+        and _f(research.get("origin_price")) > 0.0
+    )
     episode = {
         "causal_episode_id": _episode_id(signal), "side": side,
         "proposer": signal.get("venue"), "leader": signal.get("venue"),
@@ -1801,6 +1825,19 @@ def _start_episode(state, signal, histories=None):
         "precursor_measurement": _precursor_cash_progress(state, signal),
         "oi_before_snapshot": _oi_state_snapshot(state),
     }
+    if same_research_wave:
+        episode.update({
+            "research_origin_candidate_id": research.get(
+                "research_candidate_id"
+            ),
+            "research_origin_receive_time_ms": int(
+                research.get("first_evidence_ms", 0) or 0
+            ),
+            "research_origin_reference_price": _f(
+                research.get("origin_price")
+            ),
+            "research_origin_continuity": "SAME_RECEIVE_TIME_EVIDENCE_CHAIN",
+        })
     state._ignition_episode = episode
     return episode
 
@@ -3626,6 +3663,18 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "pending_reversal_episode_hash": episode.get("episode_hash"),
         "pending_reversal_original_onset": dict(
             episode.get("onset_evidence") or {}
+        ),
+        "research_origin_candidate_id": episode.get(
+            "research_origin_candidate_id"
+        ),
+        "research_origin_receive_time_ms": episode.get(
+            "research_origin_receive_time_ms"
+        ),
+        "research_origin_reference_price": episode.get(
+            "research_origin_reference_price"
+        ),
+        "research_origin_continuity": episode.get(
+            "research_origin_continuity"
         ),
         "pre_impulse_bias_snapshot": dict(
             episode.get("pre_impulse_bias_snapshot") or {}

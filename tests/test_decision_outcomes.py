@@ -215,6 +215,42 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
             for stream, _payload, _ in self.rows
         ))
 
+    def test_causal_episode_keeps_long_horizon_diagnostics(self):
+        self.tracker.observe(decision_event(
+            episode_id="episode-long", start_ms=1_000,
+        ))
+        self.tracker.observe(trade(901_000, 10, 102.0, high=103.0, low=99.0))
+        windows = [
+            payload["window_seconds"]
+            for stream, payload, _ in self.rows
+            if stream == "decision_counterfactual"
+        ]
+        self.assertEqual(windows, [5, 15, 30, 60, 180, 300, 900])
+        stages = [
+            payload["dossier_stage"]
+            for stream, payload, _ in self.rows
+            if stream == "opportunity_dossier"
+        ]
+        self.assertEqual(stages, ["EARLY_60S", "FINAL_900S"])
+
+    def test_bounded_research_origin_becomes_counterfactual_onset(self):
+        event = decision_event(
+            episode_id="episode-onset", start_ms=1_000,
+            reference_price=100.0,
+        )
+        cf = event["payload"]["decision_record"]["counterfactual"]
+        cf.update({
+            "origin_receive_time_ms": 800,
+            "origin_candidate_id": "research-long-1",
+            "origin_link_status": "SAME_RECEIVE_TIME_EVIDENCE_CHAIN",
+            "reference_price": 99.5,
+        })
+        self.tracker.observe(event)
+        tracker = self.tracker.pending["episode-onset"]
+        self.assertEqual(tracker["start_ms"], 800)
+        self.assertEqual(tracker["reference_price"], 99.5)
+        self.assertEqual(tracker["origin_candidate_id"], "research-long-1")
+
     def test_sequence_gap_invalidates_instead_of_bridging(self):
         self.tracker.observe(decision_event())
         self.tracker.observe(trade(2_000, 10, 100.0))
@@ -360,7 +396,9 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
                 event_ms, sequence, 101.0,
                 previous=None if sequence == 10 else sequence - 1,
             ))
-        self.assertIn("tier-s:8", self.tracker.closed)
+        # The 60-second adjudication is complete, while the same bounded
+        # tracker remains alive for 180/300/900-second diagnostics.
+        self.assertIn("tier-s:8", self.tracker.pending)
         before = len(self.rows)
         self.tracker.observe(decision_event(
             "late", start_ms=62_000, episode_id="tier-s:8",

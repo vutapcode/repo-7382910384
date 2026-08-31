@@ -451,6 +451,44 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(payload["authority"])
         self.assertTrue(payload["research_candidate_transition"])
 
+    def test_research_onset_is_attached_only_to_same_bounded_wave(self):
+        s = state(now=3.45)
+        s._ignition_bias_snapshots = __import__("collections").deque([
+            {
+                "direction": "LONG", "confidence": 0.52,
+                "captured_at": 2.0, "updated_at": 2.0,
+                "direction_context": {}, "s_votes": {},
+            }
+        ], maxlen=40)
+        first = evidence_row(3_200, "LONG", 100.01)
+        self.assertIsNone(ignition_core._start_episode(s, first))
+        candidate_id = s._ignition_research_reject["research_candidate_id"]
+
+        s._ignition_bias_snapshots = __import__("collections").deque([
+            {
+                "direction": "LONG", "confidence": 0.80,
+                "captured_at": 2.0, "updated_at": 2.0,
+                "direction_context": {}, "s_votes": {},
+            }
+        ], maxlen=40)
+        episode = ignition_core._start_episode(
+            s, evidence_row(3_450, "LONG", 100.02)
+        )
+        self.assertIsNotNone(episode)
+        self.assertEqual(episode["research_origin_candidate_id"], candidate_id)
+        self.assertEqual(episode["research_origin_receive_time_ms"], 3_200)
+        self.assertEqual(
+            episode["research_origin_continuity"],
+            "SAME_RECEIVE_TIME_EVIDENCE_CHAIN",
+        )
+
+        s._ignition_episode = None
+        disconnected = ignition_core._start_episode(
+            s, evidence_row(3_801, "LONG", 100.03)
+        )
+        self.assertIsNotNone(disconnected)
+        self.assertNotIn("research_origin_candidate_id", disconnected)
+
     def test_counter_bias_impulse_creates_pending_episode_without_trade(self):
         s = state(now=3.2)
         self._freeze_bias_before_wave(s, side="LONG", captured_at=2.0)
