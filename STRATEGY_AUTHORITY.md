@@ -74,6 +74,10 @@
    - Guardian exits only on adverse price with causal deterioration that breaks
      the cash-led thesis recorded at entry. Its old sensitive thresholds are an
      early scout only; they cannot independently authorize an exit.
+   - `MARKET_THESIS_V2` freezes the Entry mechanism, expected sequence and
+     falsifiers. Guardian monitors that contract; PnL, entry price, best-R,
+     holding time and account history cannot change causal thesis status.
+     Capital protection remains a separate Risk authority.
    - A runner with an active one-way profit floor gets a longer confirmation
      window during an ordinary pullback. Extreme cross-venue price plus strong
      adverse flow bypasses that shield through the fast-kill path.

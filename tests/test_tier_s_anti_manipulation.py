@@ -553,6 +553,40 @@ class GuardianDeteriorationTests(unittest.TestCase):
         ), patch.object(guardian, "_s3", return_value=s3):
             return guardian.assess(state, pos, now=now)
 
+    def test_thesis_status_is_invariant_to_pnl_and_runner_fields(self):
+        state = self._state(100.0, 100.0, sell=True)
+        s1, s2, s3 = self._causal_votes()
+        contract = {
+            "version": "ENTRY_CAUSAL_THESIS_V2_MARKET_THESIS_CONTRACT",
+            "primary_cash_anchor": "spot",
+            "cash_anchors": ["spot", "coinbase"],
+            "market_thesis": {
+                "version": "MARKET_THESIS_V2",
+                "mechanism": "CASH_METAORDER",
+                "pnl_independent": True,
+            },
+        }
+        losing = SimpleNamespace(
+            side="LONG", entry_price=110.0, best_r=0.0, floor_r=None,
+            entry_causal_thesis=contract,
+        )
+        runner = SimpleNamespace(
+            side="LONG", entry_price=90.0, best_r=3.0, floor_r=1.0,
+            entry_causal_thesis=contract,
+        )
+        left = guardian._entry_thesis_break(
+            state, losing, 100.0, s1, s2, s3,
+        )
+        right = guardian._entry_thesis_break(
+            state, runner, 100.0, s1, s2, s3,
+        )
+        for field in (
+            "broken", "reason", "thesis_status", "mechanism",
+            "observed_falsifiers", "pnl_fields_used_for_thesis",
+        ):
+            self.assertEqual(left[field], right[field])
+        self.assertFalse(left["pnl_fields_used_for_thesis"])
+
     def test_runner_shield_waits_longer_but_still_exits(self):
         state = self._state(100.0, 100.0, sell=True)
         votes = self._causal_votes()

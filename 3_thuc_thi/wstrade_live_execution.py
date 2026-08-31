@@ -16,6 +16,7 @@ from loi_he_thong import mainnet_safety
 from loi_he_thong import private_user_stream
 from loi_he_thong import verified_cost_model
 from loi_he_thong import execution_causal_revalidation
+from loi_he_thong import market_thesis
 
 
 VERSION = "WSTRADE_LIVE_EXECUTION_V1"
@@ -534,8 +535,12 @@ def _entry_causal_thesis(result):
         elif ignition.get("proposer")=="coinbase_spot": primary="coinbase"
         elif "spot" in cash_aliases: primary="spot"
         elif "coinbase" in cash_aliases: primary="coinbase"
+        thesis_contract = market_thesis.build(
+            result, primary_cash_anchor=primary, cash_anchors=cash_aliases,
+        )
         return {
-            "version":"IGNITION_CAUSAL_THESIS_V1",
+            "version":"ENTRY_CAUSAL_THESIS_V2_MARKET_THESIS_CONTRACT",
+            "market_thesis":thesis_contract,
             "authority_basis":(result or {}).get("authority_basis"),
             "authority_dependencies":dict(
                 (result or {}).get("authority_dependencies") or {}

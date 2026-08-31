@@ -4,7 +4,7 @@ import time
 
 from loi_he_thong import liquidation_context
 
-VERSION="GUARDIAN_S_TIER_V12_NONCONVERSION_SEMANTICS"
+VERSION="GUARDIAN_S_TIER_V13_MARKET_THESIS_CONTRACT"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -344,6 +344,7 @@ def _time_to_edge(pos, now, prices, s1, s2, s3, thesis):
 
 def _entry_thesis_break(state,pos,now,s1,s2,s3):
     thesis=dict(getattr(pos,"entry_causal_thesis",{}) or {})
+    market_contract=dict(thesis.get("market_thesis") or {})
     primary=str(thesis.get("primary_cash_anchor") or "").lower()
     anchors=set(thesis.get("cash_anchors") or ())&{"spot","coinbase"}
     if primary in {"spot","coinbase"}: anchors.add(primary)
@@ -367,10 +368,29 @@ def _entry_thesis_break(state,pos,now,s1,s2,s3):
         cause=bool(selected&flow_adverse or "futures" in flow_adverse or s3.get("status")=="ADVERSE")
         broken=bool(anchor_price and cause)
         reason="ENTRY_CASH_THESIS_BROKEN" if broken else "ENTRY_CASH_THESIS_HOLDS"
+    if reason=="GENERIC_CAUSAL_FALLBACK":
+        thesis_status="UNKNOWN"
+    else:
+        thesis_status="FALSIFIED" if broken else "VALID"
+    observed_falsifiers=[]
+    if broken:
+        observed_falsifiers.append("PRIMARY_CASH_STOPS_OR_REVERSES_CONVERSION")
+        if (
+            {"spot","coinbase"}.issubset(price_adverse)
+            and {"spot","coinbase"}.issubset(flow_adverse)
+        ):
+            observed_falsifiers.append("OPPOSITE_DUAL_CASH_CONTROL")
+        if s3.get("status")=="ADVERSE":
+            observed_falsifiers.append("FRESH_OPPOSITE_POSITION_BUILD")
     return {
         "broken":broken,"reason":reason,"primary_cash_anchor":primary or None,
         "cash_anchors":sorted(anchors),"available_anchors":sorted(active_anchors),
         "price_adverse":sorted(price_adverse),"flow_adverse":sorted(flow_adverse),
+        "thesis_status":thesis_status,
+        "market_thesis_version":market_contract.get("version"),
+        "mechanism":market_contract.get("mechanism"),
+        "observed_falsifiers":observed_falsifiers,
+        "pnl_fields_used_for_thesis":False,
     }
 
 def _trend_context_shield(state,pos):
@@ -985,6 +1005,9 @@ def assess(state,pos,now=None):
 
     conf=sum(votes[k]["confidence"] for k in adverse)/max(1,len(adverse))
     return {"version":VERSION,"decision":decision,"reason":reason,"side":str(pos.side).upper(),
+            "thesis_status":thesis.get("thesis_status","UNKNOWN"),
+            "guardian_action":decision,
+            "thesis_and_capital_policy_separate":True,
             "confidence":round(conf,6),"hold_seconds":round(hold,4),"votes":votes,
             "supportive_count":len(supportive),"adverse_count":len(adverse),
             "exchange_independence":external_guard,
