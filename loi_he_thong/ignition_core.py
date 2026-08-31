@@ -1034,6 +1034,21 @@ def _transition_snapshot(pending, histories, now_ms):
         dual_cash and acceptance_span_ms is not None
         and acceptance_span_ms <= FOLLOW_MAX_MS
     )
+    # Old-side failure is also observable as a receive-time path: a real
+    # material cash attempt existed before onset, then both independent cash
+    # venues reclaimed it with new-side executed flow. Require at least two
+    # old-side material buckets so one print cannot prove both halves.
+    old_attempt_buckets = sum(
+        int((reports.get(venue) or {}).get("opposing_material_buckets", 0))
+        for venue in CASH
+    )
+    old_attempt_venues = sorted(
+        venue for venue in CASH
+        if int((reports.get(venue) or {}).get(
+            "opposing_material_buckets", 0
+        )) > 0
+    )
+    old_side_attempt_confirmed = old_attempt_buckets >= 2
     failure_states = {
         "FADING", "DECAYING", "PERSISTENT_NONCONVERSION", "PROGRESS_DECAY",
         "ABSORBED", "EXHAUSTED",
@@ -1071,6 +1086,17 @@ def _transition_snapshot(pending, histories, now_ms):
                     "observed_at_ms": observed_at_ms,
                     "source": "OBSERVED_AFTER_TRANSITION_ONSET",
                 }
+    path_failure_confirmed = bool(
+        old_side_attempt_confirmed and synchronous
+    )
+    if path_failure_confirmed:
+        path_observed_at_ms = max(first_accept_ms, default=now_ms)
+        for venue in old_attempt_venues:
+            failure_observations.setdefault(venue, {
+                "state": "FAILED_AFTER_DUAL_CASH_RECLAIM",
+                "observed_at_ms": int(path_observed_at_ms),
+                "source": "OLD_SIDE_ATTEMPT_THEN_DUAL_CASH_RECLAIM",
+            })
     stored_failure = dict(
         (pending or {}).get("old_side_failure_node") or {}
     )
@@ -1235,13 +1261,17 @@ def _transition_snapshot(pending, histories, now_ms):
         },
     }
     return {
-        "version": "FAST_TRANSITION_V3_STATEFUL_FAILURE_TIME",
+        "version": "FAST_TRANSITION_V4_CAUSAL_PATH_FAILURE",
         "status": status, "confirmed": confirmed,
         "control_phase": control_phase,
         "side": side, "background_side": background,
         "failed_continuation": failed_continuation,
         "old_failure_state_observed": old_side_failure_confirmed,
         "old_side_failure_confirmed": old_side_failure_confirmed,
+        "old_side_attempt_confirmed": old_side_attempt_confirmed,
+        "old_side_attempt_buckets": old_attempt_buckets,
+        "old_side_attempt_venues": old_attempt_venues,
+        "path_failure_confirmed": path_failure_confirmed,
         "old_failure_venues": old_failure_venues,
         "old_side_failure_node": stored_failure,
         "old_side_continuing_venues": old_side_continuing_venues,
@@ -2154,10 +2184,13 @@ def validate_frozen_entry_contract(
         return False, "IMPULSE_ALREADY_CONSUMED", {}
     if mode == "PERSISTENT_METAORDER" and proposer not in CASH:
         return False, "PERSISTENT_PROPOSER_NOT_CASH", {}
+    transition_basis = str(
+        result.get("authority_basis") or ""
+    ).upper() == "TRANSITION_CONFIRMED"
     if proposer == "futures":
         if not ignition.get("futures_cash_response_ok"):
             return False, "FUTURES_PROPOSER_CASH_RESPONSE_MISSING", {}
-    elif not ignition.get("futures_follow_ok"):
+    elif not ignition.get("futures_follow_ok") and not transition_basis:
         return False, "CASH_PROPOSER_FUTURES_FOLLOW_MISSING", {}
     has_authority = bool(
         result.get("authority_basis")
@@ -3300,7 +3333,35 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
     )
     precursor = dict((episode or {}).get("precursor_measurement") or {})
     precursor_progress = max(0.0, _f(precursor.get("progress_bps"))) if precursor.get("valid") else 0.0
-    progress = max(episode_progress, precursor_progress)
+    recent = dict((precursor.get("horizons") or {}).get("3") or {})
+    recent_moves = dict(recent.get("venue_moves_bps") or {})
+    recent_dual_cash_continuity = bool(
+        recent.get("valid")
+        and int(recent.get("cash_coverage", 0) or 0) == len(CASH)
+        and CASH.issubset(set(recent_moves))
+        and all(_f(recent_moves.get(venue)) >= MATERIAL_PRICE_BPS
+                for venue in CASH)
+    )
+    prior_displacement_disconnected = bool(
+        precursor_progress > MATERIAL_PRICE_BPS
+        and int(_f(precursor.get("horizon_seconds"), 0.0)) > 3
+        and recent.get("valid")
+        and int(recent.get("cash_coverage", 0) or 0) == len(CASH)
+        and not recent_dual_cash_continuity
+        and _f(recent.get("progress_bps")) < MATERIAL_PRICE_BPS
+    )
+    if prior_displacement_disconnected:
+        effective_precursor_progress = 0.0
+        precursor_relation = "PREVIOUS_DISCONNECTED_WAVE"
+    elif recent_dual_cash_continuity:
+        effective_precursor_progress = precursor_progress
+        precursor_relation = "SAME_CAUSAL_WAVE"
+    else:
+        # Unknown continuity stays conservative: old displacement is retained
+        # rather than silently resetting maturity from incomplete cash data.
+        effective_precursor_progress = precursor_progress
+        precursor_relation = "UNKNOWN_KEEP_CONSERVATIVE"
+    progress = max(episode_progress, effective_precursor_progress)
     if (
         atr_bps <= 0.0 or atr_updated_at <= 0.0
         # The latest completed 100ms bucket can precede the ATR assignment by
@@ -3319,16 +3380,24 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
             "cash_displacement_bps": round(progress, 6),
             "episode_cash_displacement_bps": round(episode_progress, 6),
             "precursor_cash_displacement_bps": round(precursor_progress, 6),
+            "effective_precursor_cash_displacement_bps": round(
+                effective_precursor_progress, 6
+            ),
+            "precursor_causal_relation": precursor_relation,
             "precursor_measurement": precursor,
             "phase_scale_bps": None, "consumed_fraction": 1.0,
         }
     consumed = max(0.0, min(1.5, progress / atr_bps))
     return {
         "valid": True,
-        "source": "HYBRID_PRECURSOR_AND_EPISODE_CASH_DISPLACEMENT_OVER_ATR_1M",
+        "source": "CAUSAL_LEG_AWARE_CASH_DISPLACEMENT_OVER_ATR_1M",
         "cash_displacement_bps": round(progress, 6),
         "episode_cash_displacement_bps": round(episode_progress, 6),
         "precursor_cash_displacement_bps": round(precursor_progress, 6),
+        "effective_precursor_cash_displacement_bps": round(
+            effective_precursor_progress, 6
+        ),
+        "precursor_causal_relation": precursor_relation,
         "precursor_measurement": precursor,
         "phase_scale_bps": round(atr_bps, 6),
         "atr_updated_at": atr_updated_at,
@@ -3621,14 +3690,21 @@ def _result_from_episode(state, episode, histories, freshness, now):
             now, side, "WAIT_FUTURES_PROPOSER_OI_UNWIND",
             "INVALID", payload, freshness,
         )
-    if not proposer_is_futures and not futures_follow_ok:
-        return _wait(now, side, "WAIT_CASH_IGNITION_FUTURES_RESPONSE", "PROBE", payload, freshness)
-    synchronous_transition = bool(
-        payload.get("transition_confirmed")
-        and (payload.get("transition_authority") or {}).get(
-            "cash_synchronous_transition"
+    # A strict old-side-failure -> dual-cash reclaim transition owns direction.
+    # Futures remains required as a healthy feed and supplies urgency/context,
+    # but its missing 600 ms echo cannot overrule two independent cash venues.
+    # Ordinary Bias-aligned cash ignition retains the existing Futures follower
+    # contract.
+    synchronous_transition = _strict_transition_side(episode) == side
+    if (
+        not proposer_is_futures
+        and not futures_follow_ok
+        and not synchronous_transition
+    ):
+        return _wait(
+            now, side, "WAIT_CASH_IGNITION_FUTURES_RESPONSE",
+            "PROBE", payload, freshness,
         )
-    )
     synchronous_cash_acceptance = bool(
         current_cash.get("dual_cash_synchronous_acceptance")
     )

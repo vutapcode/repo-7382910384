@@ -595,7 +595,7 @@ class IgnitionCoreTests(unittest.TestCase):
         transition = promoted["transition_authority"]
         self.assertEqual(
             transition["version"],
-            "FAST_TRANSITION_V3_STATEFUL_FAILURE_TIME",
+            "FAST_TRANSITION_V4_CAUSAL_PATH_FAILURE",
         )
         self.assertTrue(transition["control_transfer_memory_valid"])
         self.assertTrue(
@@ -819,6 +819,47 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(transition["confirmed"])
         self.assertEqual(
             transition["old_side_continuing_venues"], ["coinbase_spot"],
+        )
+
+    def test_material_old_attempt_then_dual_cash_reclaim_proves_failure(self):
+        pending = {
+            "side": "LONG", "started_receive_ms": 3_200,
+            "pre_impulse_bias_snapshot": {"direction": "SHORT"},
+            "opposing_flow_efficiency_at_onset": {"venues": {}},
+        }
+        old_a = evidence_row(2_900, "SHORT", 100.10)
+        old_b = evidence_row(3_000, "SHORT", 100.05)
+        new_binance = evidence_row(3_400, "LONG", 100.12)
+        old_coinbase = evidence_row(
+            3_000, "SHORT", 100.06, strong=False, material=False,
+        )
+        old_coinbase["venue"] = "coinbase_spot"
+        new_coinbase = evidence_row(3_500, "LONG", 100.13)
+        new_coinbase["venue"] = "coinbase_spot"
+        histories = {
+            "binance_spot": (old_a, old_b, new_binance),
+            "coinbase_spot": (old_coinbase, new_coinbase),
+            "futures": (),
+        }
+        current_old = {"venues": {
+            "binance_spot": {"state": "UNKNOWN"},
+            "coinbase_spot": {"state": "UNKNOWN"},
+        }}
+        with patch.object(
+            ignition_core, "_flow_efficiency_snapshot",
+            return_value=current_old,
+        ):
+            transition = ignition_core._transition_snapshot(
+                pending, histories, 3_550,
+            )
+        self.assertTrue(transition["old_side_attempt_confirmed"])
+        self.assertEqual(transition["old_side_attempt_buckets"], 2)
+        self.assertTrue(transition["path_failure_confirmed"])
+        self.assertTrue(transition["old_side_failure_confirmed"])
+        self.assertEqual(transition["status"], "REVERSAL_CONFIRMED")
+        self.assertEqual(
+            transition["proof_nodes"]["old_side_failure"]["observed_at_ms"],
+            3_500,
         )
 
     def test_old_side_failure_is_timestamped_when_it_actually_emerges(self):
@@ -1093,20 +1134,17 @@ class IgnitionCoreTests(unittest.TestCase):
         first = evidence_row(9_600, "LONG", 100.01)
         second = evidence_row(9_700, "LONG", 100.02)
         second["venue"] = "coinbase_spot"
-        futures = evidence_row(9_800, "LONG", 100.02)
-        futures["venue"] = "futures"
-        futures["total_qty"] = 0.20
         episode = {
             "causal_episode_id": "ign:binance_spot:LONG:9500",
             "side": "LONG", "proposer": "binance_spot",
-            "started_receive_ms": 9_600, "last_evidence_ms": 9_800,
+            "started_receive_ms": 9_600, "last_evidence_ms": 9_700,
             "bias_snapshot": {
                 "direction": "SHORT", "confidence": 0.80,
                 "direction_context": {"phase": "ESTABLISHED_TREND"},
             },
-            "signals": [first, second, futures],
+            "signals": [first, second],
             "epochs": {
-                "binance_spot": 1, "coinbase_spot": 1, "futures": 1,
+                "binance_spot": 1, "coinbase_spot": 1,
             },
             "precursor_measurement": {"valid": False},
             "oi_before_snapshot": {},
@@ -1124,7 +1162,7 @@ class IgnitionCoreTests(unittest.TestCase):
         }
         histories = {
             "binance_spot": (first,),
-            "coinbase_spot": (second,), "futures": (futures,),
+            "coinbase_spot": (second,), "futures": (),
         }
         freshness = {
             "coinbase_mode": "FRESH", "binance_spot_ready": True,
@@ -1154,8 +1192,11 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(result["decision"], "GO")
         self.assertTrue(result["ignition"]["transition_confirmed"])
         self.assertEqual(result["ignition"]["leader"], "SIMULTANEOUS")
+        self.assertFalse(result["ignition"]["futures_follow_ok"])
         self.assertEqual(result["authority_basis"], "TRANSITION_CONFIRMED")
         self.assertTrue(result["authority_proof_hash"])
+        valid, reason, _ = ignition_core.validate_frozen_entry_contract(result)
+        self.assertTrue(valid, reason)
 
     def test_aligned_dual_cash_control_resolves_leader_without_reversal(self):
         s = state(now=10.0)
@@ -1884,7 +1925,7 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertTrue(measured["valid"])
         self.assertEqual(
             measured["source"],
-            "HYBRID_PRECURSOR_AND_EPISODE_CASH_DISPLACEMENT_OVER_ATR_1M",
+            "CAUSAL_LEG_AWARE_CASH_DISPLACEMENT_OVER_ATR_1M",
         )
         self.assertAlmostEqual(measured["phase_scale_bps"], 10.0, places=3)
         self.assertAlmostEqual(measured["consumed_fraction"], 0.2, places=3)
@@ -1919,6 +1960,31 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertAlmostEqual(measured["episode_cash_displacement_bps"], 2.0)
         self.assertAlmostEqual(measured["precursor_cash_displacement_bps"], 8.0)
         self.assertGreater(measured["consumed_fraction"], ignition_core.MAX_CONSUMED_FRACTION)
+
+    def test_disconnected_old_precursor_does_not_mature_fresh_leg(self):
+        s = state(now=20.0)
+        s.bias_price_buckets = {
+            5: {"ts": 5.0, "spot": 100.0, "coinbase": 100.0},
+            17: {"ts": 17.0, "spot": 100.08, "coinbase": 100.08},
+            20: {"ts": 20.0, "spot": 100.08, "coinbase": 100.08},
+        }
+        precursor = ignition_core._precursor_cash_progress(
+            s, evidence_row(20_000, "LONG", 100.08),
+        )
+        self.assertAlmostEqual(precursor["progress_bps"], 8.0, places=3)
+        measured = ignition_core._phase_measurement(
+            s, "LONG", ["binance_spot"], {"binance_spot": 2.0},
+            {"price_conversion_bps": 0.5, "receive_time_ms": 20_000},
+            {"precursor_measurement": precursor},
+        )
+        self.assertEqual(
+            measured["precursor_causal_relation"],
+            "PREVIOUS_DISCONNECTED_WAVE",
+        )
+        self.assertEqual(
+            measured["effective_precursor_cash_displacement_bps"], 0.0,
+        )
+        self.assertAlmostEqual(measured["consumed_fraction"], 0.2, places=3)
 
     def test_oi_intent_direction_conflict_is_explicit(self):
         s = state(now=3.0)
