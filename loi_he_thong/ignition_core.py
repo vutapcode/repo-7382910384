@@ -24,6 +24,11 @@ EVIDENCE_GAP_MS = 300
 EPISODE_MAX_MS = 5_000
 TRANSITION_LOOKBACK_MS = 2_500
 TRANSITION_EVIDENCE_GAP_MS = FOLLOW_MAX_MS * 2
+REVERSAL_BACKGROUND_CONTEXT_PHASES = frozenset((
+    "ESTABLISHED_TREND",
+    "PULLBACK_AGAINST_CONTEXT",
+    "CONTEXT_WITHOUT_CONFIRMATION",
+))
 PERSISTENT_WAVE_GAP_MS = 3_000
 PERSISTENT_WAVE_MAX_MS = 15_000
 LEAD_FLOOR_MS = 100.0
@@ -846,7 +851,9 @@ def _evidence_provenance(causal_episode_id, rows, proof_type=None):
     }
 
 
-def _pending_reversal_identity(signal, bias):
+def _pending_reversal_identity(
+    signal, bias, background_side=None, background_source=None,
+):
     """Hash only immutable onset identity; later evidence cannot rewrite it."""
     onset = {
         "episode_id": _episode_id(signal),
@@ -866,11 +873,58 @@ def _pending_reversal_identity(signal, bias):
             (bias or {}).get("direction") or "ABSTAIN"
         ).upper(),
         "frozen_bias_updated_at": _f((bias or {}).get("updated_at")),
+        "background_side": str(
+            background_side or (bias or {}).get("direction") or "ABSTAIN"
+        ).upper(),
+        "background_source": str(
+            background_source or "FROZEN_BIAS_DIRECTION"
+        ).upper(),
     }
     encoded = json.dumps(
         onset, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("utf-8")
     return onset, hashlib.sha256(encoded).hexdigest()
+
+
+def _pending_reversal_background(signal, bias):
+    """Resolve only the old thesis that a counter-side impulse must defeat.
+
+    A full frozen Bias remains the canonical source.  When its top-level vote
+    has temporarily decayed, an immutable pre-impulse direction context may
+    seed an authority-free observation episode, but only for phases where the
+    Bias Council itself says an old market context still exists.  This helper
+    never supplies the new Entry direction and never grants trade authority.
+    """
+    side = str((signal or {}).get("side") or "ABSTAIN").upper()
+    frozen_side = str((bias or {}).get("direction") or "ABSTAIN").upper()
+    if (
+        side in ("LONG", "SHORT")
+        and frozen_side in ("LONG", "SHORT")
+        and side != frozen_side
+        and _f((bias or {}).get("confidence")) >= BIAS_MIN_CONF
+    ):
+        return frozen_side, "FROZEN_BIAS_DIRECTION"
+
+    context = dict((bias or {}).get("direction_context") or {})
+    context_side = str(context.get("context_side") or "ABSTAIN").upper()
+    phase = str(context.get("phase") or "UNKNOWN").upper()
+    signal_s = _f((signal or {}).get("receive_time_ms")) / 1000.0
+    captured_at = _f((bias or {}).get("captured_at"))
+    snapshot_age = signal_s - captured_at
+    context_is_pre_impulse = bool(
+        captured_at > 0.0
+        and BIAS_MIN_PRE_IMPULSE_AGE <= snapshot_age <= BIAS_MAX_AGE
+    )
+    if not (
+        side in ("LONG", "SHORT")
+        and context_side in ("LONG", "SHORT")
+        and side != context_side
+        and phase in REVERSAL_BACKGROUND_CONTEXT_PHASES
+        and frozen_side in ("ABSTAIN", context_side)
+        and context_is_pre_impulse
+    ):
+        return None, None
+    return context_side, "LAST_ESTABLISHED_DIRECTION_CONTEXT"
 
 
 def _transition_snapshot(pending, histories, now_ms):
@@ -884,7 +938,10 @@ def _transition_snapshot(pending, histories, now_ms):
     """
     side = str((pending or {}).get("side") or "ABSTAIN").upper()
     frozen = dict((pending or {}).get("pre_impulse_bias_snapshot") or {})
-    background = str(frozen.get("direction") or "ABSTAIN").upper()
+    background = str(
+        (pending or {}).get("background_side")
+        or frozen.get("direction") or "ABSTAIN"
+    ).upper()
     started_ms = int((pending or {}).get("started_receive_ms", 0) or 0)
     if (
         side not in ("LONG", "SHORT")
@@ -1312,17 +1369,20 @@ def _transition_snapshot(pending, histories, now_ms):
 def _start_pending_reversal(state, signal, bias, histories):
     """Remember counter-Bias onset without granting direction or Entry."""
     side = str(signal.get("side") or "ABSTAIN").upper()
-    frozen_side = str((bias or {}).get("direction") or "ABSTAIN").upper()
+    background_side, background_source = _pending_reversal_background(
+        signal, bias,
+    )
     if (
         side not in ("LONG", "SHORT")
-        or frozen_side not in ("LONG", "SHORT")
-        or side == frozen_side
-        or _f((bias or {}).get("confidence")) < BIAS_MIN_CONF
+        or background_side not in ("LONG", "SHORT")
+        or side == background_side
         or not signal.get("strong")
         or not signal.get("clock_valid")
     ):
         return None
-    onset, identity_hash = _pending_reversal_identity(signal, bias)
+    onset, identity_hash = _pending_reversal_identity(
+        signal, bias, background_side, background_source,
+    )
     receive_ms = int(signal.get("receive_time_ms", 0) or 0)
     proposer = str(signal.get("venue") or "UNKNOWN")
     cash = [proposer] if proposer in CASH else []
@@ -1356,13 +1416,19 @@ def _start_pending_reversal(state, signal, bias, histories):
         "epochs": {proposer: int(signal.get("epoch", 0) or 0)},
         "pre_impulse_bias_snapshot": dict(bias or {}),
         "bias_snapshot": dict(bias or {}),
+        "background_side": background_side,
+        "background_source": background_source,
+        "background_context_phase": str(
+            ((bias or {}).get("direction_context") or {}).get("phase")
+            or "UNKNOWN"
+        ).upper(),
         "onset_evidence": onset,
         "executed_flow_evidence": [dict(signal)],
         "flow_efficiency_at_onset": _flow_efficiency_snapshot(
             histories_at_onset, side, cash, now_ms=receive_ms,
         ),
         "opposing_flow_efficiency_at_onset": _flow_efficiency_snapshot(
-            histories_before_onset, frozen_side, CASH, now_ms=receive_ms,
+            histories_before_onset, background_side, CASH, now_ms=receive_ms,
         ),
         "precursor_measurement": precursor,
         "displacement_onset": dict(precursor),

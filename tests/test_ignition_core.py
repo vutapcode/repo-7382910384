@@ -451,6 +451,147 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(payload["authority"])
         self.assertTrue(payload["research_candidate_transition"])
 
+    def test_low_top_level_bias_can_seed_authority_false_reversal_from_context(self):
+        """P0 regression: context identifies only the old thesis.
+
+        This intentionally specifies the desired Fast Transition contract
+        before production is changed.  A low/ABSTAIN top-level Bias must not
+        grant Entry, but it must not prevent Ignition from observing whether a
+        still-valid established LONG context transfers to SHORT.
+        """
+        s = state(now=3.2)
+        frozen = {
+            "direction": "ABSTAIN",
+            "confidence": 0.0,
+            "captured_at": 2.0,
+            "updated_at": 2.0,
+            "direction_context": {
+                "context_side": "LONG",
+                "phase": "ESTABLISHED_TREND",
+                "candidate_side": "SHORT",
+            },
+            "s_votes": {},
+        }
+        signal = evidence_row(3_200, "SHORT", 99.98)
+        histories = {
+            "binance_spot": (signal,),
+            "coinbase_spot": (),
+            "futures": (),
+        }
+
+        pending = ignition_core._start_pending_reversal(
+            s, signal, frozen, histories,
+        )
+
+        self.assertIsNotNone(pending)
+        self.assertFalse(pending["authority"])
+        self.assertEqual(pending["side"], "SHORT")
+        self.assertEqual(
+            pending["pre_impulse_bias_snapshot"]["direction"], "ABSTAIN"
+        )
+        self.assertEqual(
+            pending["pre_impulse_bias_snapshot"]["direction_context"][
+                "context_side"
+            ],
+            "LONG",
+        )
+        self.assertEqual(pending["background_side"], "LONG")
+        self.assertEqual(
+            pending["background_source"],
+            "LAST_ESTABLISHED_DIRECTION_CONTEXT",
+        )
+        self.assertEqual(
+            pending["onset_evidence"]["background_side"], "LONG"
+        )
+
+    def test_context_seed_rejects_phase_without_established_old_thesis(self):
+        s = state(now=3.2)
+        frozen = {
+            "direction": "ABSTAIN", "confidence": 0.0,
+            "captured_at": 2.0, "updated_at": 2.0,
+            "direction_context": {
+                "context_side": "LONG", "phase": "WARMUP_OR_NEUTRAL",
+            },
+        }
+        signal = evidence_row(3_200, "SHORT", 99.98)
+        histories = {
+            "binance_spot": (signal,), "coinbase_spot": (), "futures": (),
+        }
+        self.assertIsNone(ignition_core._start_pending_reversal(
+            s, signal, frozen, histories,
+        ))
+
+    def test_context_seed_rejects_same_side_or_contradictory_frozen_bias(self):
+        signal = evidence_row(3_200, "SHORT", 99.98)
+        histories = {
+            "binance_spot": (signal,), "coinbase_spot": (), "futures": (),
+        }
+        base = {
+            "confidence": 0.40, "captured_at": 2.0, "updated_at": 2.0,
+            "direction_context": {
+                "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+            },
+        }
+        contradictory = dict(base, direction="SHORT")
+        self.assertIsNone(ignition_core._start_pending_reversal(
+            state(now=3.2), signal, contradictory, histories,
+        ))
+
+        same_side_context = dict(base, direction="ABSTAIN")
+        same_side_context["direction_context"] = {
+            "context_side": "SHORT", "phase": "ESTABLISHED_TREND",
+        }
+        self.assertIsNone(ignition_core._start_pending_reversal(
+            state(now=3.2), signal, same_side_context, histories,
+        ))
+
+    def test_context_seed_requires_fresh_pre_impulse_snapshot(self):
+        signal = evidence_row(3_200, "SHORT", 99.98)
+        histories = {
+            "binance_spot": (signal,), "coinbase_spot": (), "futures": (),
+        }
+        for captured_at in (3.0, 0.1):
+            frozen = {
+                "direction": "ABSTAIN", "confidence": 0.0,
+                "captured_at": captured_at, "updated_at": captured_at,
+                "direction_context": {
+                    "context_side": "LONG",
+                    "phase": "ESTABLISHED_TREND",
+                },
+            }
+            self.assertIsNone(ignition_core._start_pending_reversal(
+                state(now=3.2), signal, frozen, histories,
+            ))
+
+    def test_context_seed_single_cash_remains_authority_free(self):
+        s = state(now=3.3)
+        frozen = {
+            "direction": "ABSTAIN", "confidence": 0.0,
+            "captured_at": 2.0, "updated_at": 2.0,
+            "direction_context": {
+                "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+            },
+        }
+        old_cash = evidence_row(3_000, "LONG", 100.02)
+        first = evidence_row(3_200, "SHORT", 99.98)
+        histories = {
+            "binance_spot": (old_cash, first),
+            "coinbase_spot": (), "futures": (),
+        }
+        pending = ignition_core._start_pending_reversal(
+            s, first, frozen, histories,
+        )
+        transition = ignition_core._transition_snapshot(
+            pending, histories, 3_300,
+        )
+        self.assertEqual(transition["background_side"], "LONG")
+        self.assertFalse(transition["confirmed"])
+        self.assertNotEqual(transition["status"], "REVERSAL_CONFIRMED")
+        self.assertIsNone(ignition_core._resolve_pending_reversal(
+            s, histories, 3_300, allow_promotion=True,
+        ))
+        self.assertIsNotNone(s._ignition_pending_reversal_episode)
+
     def test_research_onset_is_attached_only_to_same_bounded_wave(self):
         s = state(now=3.45)
         s._ignition_bias_snapshots = __import__("collections").deque([
