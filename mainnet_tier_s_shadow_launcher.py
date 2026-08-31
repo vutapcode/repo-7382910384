@@ -696,6 +696,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "execution_style": (edge_report or {}).get("execution_style"),
         "commission_verified": (edge_report or {}).get("commission_verified"),
         "commission_source": (edge_report or {}).get("commission_source"),
+        "commission_verification_reason": (edge_report or {}).get(
+            "commission_verification_reason"
+        ),
         "components": (edge_report or {}).get("cost_components"),
         "empirical_alpha": (edge_report or {}).get("empirical_alpha"),
         "economic_contract_version": (edge_report or {}).get(
@@ -791,6 +794,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
                 "cost_budget_bps": cost_snapshot.get("budget_bps"),
                 "minimum_net_edge_bps": cost_snapshot.get("minimum_net_edge_bps"),
                 "commission_verified": cost_snapshot.get("commission_verified"),
+                "commission_verification_reason": cost_snapshot.get(
+                    "commission_verification_reason"
+                ),
             },
             "windows_seconds": [5, 15, 30, 60, 180, 300, 900],
         },

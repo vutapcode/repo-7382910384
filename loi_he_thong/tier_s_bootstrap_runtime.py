@@ -192,6 +192,9 @@ async def vong_lap_runtime_heartbeat():
             "mainnet_commission_source": getattr(
                 state, "mainnet_commission_source", None
             ),
+            "mainnet_commission_verification_reason": getattr(
+                state, "mainnet_commission_verification_reason", None
+            ),
             "mainnet_maker_fee_bps": getattr(state, "mainnet_maker_fee_bps", None),
             "mainnet_taker_fee_bps": getattr(state, "mainnet_taker_fee_bps", None),
             "entry_cost_model": (

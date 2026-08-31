@@ -23,6 +23,12 @@ def fallback_fee_bps_per_side():
     ))
 
 
+def _set_verification_reason(state, reason):
+    reason = str(reason or "COMMISSION_UNVERIFIED")
+    state.mainnet_commission_verification_reason = reason
+    return reason
+
+
 async def refresh_account_commission(api, state, symbol="BTCUSDT",
                                      fallback_per_side=None):
     """Read account-specific Futures commission without mutating the account."""
@@ -34,34 +40,48 @@ async def refresh_account_commission(api, state, symbol="BTCUSDT",
     state.mainnet_worst_roundtrip_fee_bps = 2.0 * fallback
     state.mainnet_commission_verified = False
     state.mainnet_commission_source = "CONSERVATIVE_CONFIG_FALLBACK"
+    _set_verification_reason(state, "COMMISSION_CHECK_NOT_COMPLETED")
 
     if not bool(getattr(api, "has_private_credentials", False)):
+        reason = _set_verification_reason(
+            state, "PRIVATE_CREDENTIALS_UNAVAILABLE"
+        )
         return {
             "verified": False,
             "source": state.mainnet_commission_source,
             "maker_fee_bps": fallback,
             "taker_fee_bps": fallback,
-            "reason": "PRIVATE_CREDENTIALS_UNAVAILABLE",
+            "reason": reason,
         }
 
     try:
         payload, status = await api.get_commission_rate(symbol)
     except Exception as exc:
+        reason = _set_verification_reason(
+            state, f"COMMISSION_READ_FAILED:{type(exc).__name__}"
+        )
         return {
             "verified": False,
             "source": state.mainnet_commission_source,
             "maker_fee_bps": fallback,
             "taker_fee_bps": fallback,
-            "reason": f"COMMISSION_READ_FAILED:{type(exc).__name__}",
+            "reason": reason,
         }
 
     if status != 200 or not isinstance(payload, dict):
+        exchange_code = (
+            payload.get("code") if isinstance(payload, dict) else None
+        )
+        suffix = f"_BINANCE_{exchange_code}" if exchange_code is not None else ""
+        reason = _set_verification_reason(
+            state, f"COMMISSION_HTTP_{status}{suffix}"
+        )
         return {
             "verified": False,
             "source": state.mainnet_commission_source,
             "maker_fee_bps": fallback,
             "taker_fee_bps": fallback,
-            "reason": "COMMISSION_RESPONSE_INVALID",
+            "reason": reason,
         }
     maker = _f(payload.get("makerCommissionRate"), -1.0) * 10000.0
     taker = _f(payload.get("takerCommissionRate"), -1.0) * 10000.0
@@ -70,12 +90,15 @@ async def refresh_account_commission(api, state, symbol="BTCUSDT",
         and 0.0 < taker <= MAX_SANE_FEE_BPS_PER_SIDE
     )
     if not sane:
+        reason = _set_verification_reason(
+            state, "COMMISSION_RESPONSE_INVALID"
+        )
         return {
             "verified": False,
             "source": state.mainnet_commission_source,
             "maker_fee_bps": fallback,
             "taker_fee_bps": fallback,
-            "reason": "COMMISSION_RESPONSE_INVALID",
+            "reason": reason,
         }
 
     state.mainnet_maker_fee_bps = maker
@@ -83,12 +106,13 @@ async def refresh_account_commission(api, state, symbol="BTCUSDT",
     state.mainnet_worst_roundtrip_fee_bps = 2.0 * taker
     state.mainnet_commission_verified = True
     state.mainnet_commission_source = "BINANCE_ACCOUNT_COMMISSION_RATE"
+    reason = _set_verification_reason(state, "VERIFIED")
     return {
         "verified": True,
         "source": state.mainnet_commission_source,
         "maker_fee_bps": maker,
         "taker_fee_bps": taker,
-        "reason": "VERIFIED",
+        "reason": reason,
     }
 
 
@@ -109,6 +133,10 @@ def estimate(result, state):
             getattr(state, "mainnet_commission_source", "")
             or "BINANCE_ACCOUNT_COMMISSION_RATE"
         )
+    verification_reason = str(
+        getattr(state, "mainnet_commission_verification_reason", "")
+        or ("VERIFIED" if verified else "COMMISSION_UNVERIFIED")
+    )
 
     bid = _f(getattr(state, "execution_best_bid", 0.0))
     ask = _f(getattr(state, "execution_best_ask", 0.0))
@@ -134,6 +162,7 @@ def estimate(result, state):
         "execution_style": execution_style,
         "commission_verified": verified,
         "commission_source": source,
+        "commission_verification_reason": verification_reason,
         "entry_fee_bps": round(entry_fee, 6),
         "exit_fee_bps": round(exit_fee, 6),
         "half_spread_bps": round(max(0.0, half_spread), 6),
@@ -159,6 +188,9 @@ def freeze_execution_cost_contract(result, state):
             maker.get("commission_verified") and taker.get("commission_verified")
         ),
         "commission_source": maker.get("commission_source"),
+        "commission_verification_reason": maker.get(
+            "commission_verification_reason"
+        ),
         "budgets_bps": {
             "MAKER": float(maker.get("total_cost_bps", 0.0) or 0.0),
             "TAKER": float(taker.get("total_cost_bps", 0.0) or 0.0),
@@ -259,6 +291,9 @@ def shadow_execution_plan(result, state, execution_style):
         "fill_style": style or "MARKET",
         "commission_verified": bool(modeled["commission_verified"]),
         "commission_source": modeled["commission_source"],
+        "commission_verification_reason": modeled.get(
+            "commission_verification_reason"
+        ),
         "entry_fee_bps": float(modeled["entry_fee_bps"]),
         "exit_fee_bps": float(modeled["exit_fee_bps"]),
         "roundtrip_fee_bps": round(

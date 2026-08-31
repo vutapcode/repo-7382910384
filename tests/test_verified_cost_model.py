@@ -53,7 +53,32 @@ class VerifiedCostModelTests(unittest.IsolatedAsyncioTestCase):
             costs = verified_cost_model.estimate({"phase": "ACCEPTANCE"}, state)
         self.assertFalse(costs["commission_verified"])
         self.assertEqual(costs["commission_source"], "CONSERVATIVE_CONFIG_FALLBACK")
+        self.assertEqual(
+            costs["commission_verification_reason"],
+            "PRIVATE_CREDENTIALS_UNAVAILABLE",
+        )
         self.assertGreaterEqual(costs["total_cost_bps"], 18.0)
+
+    async def test_private_commission_http_failure_is_visible_without_message(self):
+        class RejectedAPI:
+            has_private_credentials = True
+
+            async def get_commission_rate(self, _symbol):
+                return {"code": -2015, "msg": "secret-bearing exchange text"}, 401
+
+        state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)
+        report = await verified_cost_model.refresh_account_commission(
+            RejectedAPI(), state, fallback_per_side=9.0
+        )
+        self.assertFalse(report["verified"])
+        self.assertEqual(
+            report["reason"], "COMMISSION_HTTP_401_BINANCE_-2015"
+        )
+        self.assertEqual(
+            state.mainnet_commission_verification_reason,
+            "COMMISSION_HTTP_401_BINANCE_-2015",
+        )
+        self.assertNotIn("secret-bearing", str(report))
 
     async def test_shadow_fee_plan_matches_actual_maker_fill(self):
         state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)

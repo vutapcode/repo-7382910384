@@ -231,6 +231,9 @@ def classify(result, state):
         "shadow_ledger_type": ledger_type,
         "commission_verified": bool(costs.get("commission_verified")),
         "commission_source": costs.get("commission_source"),
+        "commission_verification_reason": costs.get(
+            "commission_verification_reason"
+        ),
         "current_execution_cost_bps": round(cost_budget, 6),
         "execution_cost_samples": execution_cost_samples,
         "execution_cost_distribution_bps": calibration.get(
