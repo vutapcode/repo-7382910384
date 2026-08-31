@@ -669,6 +669,15 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
     taxonomy = _miss_taxonomy_details(result, edge_report, quorum_ok)
     miss = taxonomy["blocking_reason"]
     failed = taxonomy["blocking_reasons"]
+    authority_decision = str(
+        (result or {}).get("decision", "WAIT") or "WAIT"
+    ).upper()
+    authority_reason = str(
+        (result or {}).get("reason", "UNKNOWN") or "UNKNOWN"
+    )
+    authorized = bool(authority_decision == "GO" and quorum_ok)
+    final_decision = "GO" if authorized else "WAIT"
+    final_reason = authority_reason if authorized else (miss or authority_reason)
     hard_sl_bps = None
     if reference > 0.0 and side in ("LONG", "SHORT"):
         try:
@@ -749,8 +758,16 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "distance_to_boundary": boundaries,
         },
         "output": {
-            "decision": (result or {}).get("decision", "WAIT"),
-            "reason": (result or {}).get("reason", "UNKNOWN"),
+            # `decision` is the final launcher authorization, not the raw
+            # Ignition proposal. Keeping both prevents a Thesis WAIT/cost fail
+            # from being reported as a GO that execution later had to rescue.
+            "decision": final_decision,
+            "reason": final_reason,
+            "entry_authority_decision": authority_decision,
+            "entry_authority_reason": authority_reason,
+            "authorization_status": (
+                "AUTHORIZED" if authorized else "BLOCKED"
+            ),
             "side": side,
             "mode": (result or {}).get("entry_mode", "NONE"),
             "phase": (result or {}).get("phase"),
@@ -1878,11 +1895,18 @@ async def _entry_loop():
                     s, result, edge_report, quorum_ok, decision_cycle_id, now,
                     opportunity=opportunity,
                 )
+                recorder_output = dict(recorder_snapshot.get("output") or {})
                 _append_event("DECISION_EVALUATED", {
                     "schema_version": "TIER_S_DECISION_RECORD_V7_RESPONSE_TIME_SEMANTICS",
                     "cycle_id": decision_cycle_id,
-                    "decision": result.get("decision", "WAIT"),
-                    "reason": result.get("reason", "UNKNOWN"),
+                    "decision": recorder_output.get("decision", "WAIT"),
+                    "reason": recorder_output.get("reason", "UNKNOWN"),
+                    "entry_authority_decision": result.get(
+                        "decision", "WAIT"
+                    ),
+                    "entry_authority_reason": result.get(
+                        "reason", "UNKNOWN"
+                    ),
                     "side": result.get("side", "ABSTAIN"),
                     "phase": result.get("phase"),
                     "entry_mode": result.get("entry_mode", "NONE"),

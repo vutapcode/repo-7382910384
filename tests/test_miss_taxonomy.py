@@ -143,6 +143,30 @@ class MissTaxonomyTests(unittest.TestCase):
         )
         self.assertEqual(details["diagnostic_reasons"], [])
 
+    def test_snapshot_reports_final_wait_when_raw_go_is_not_authorized(self):
+        state = SimpleNamespace(
+            open_interest=0.0, thoi_gian_vi_mo_cuoi=0.0,
+            bias_council={}, bias_state="LONG", bias_confidence=0.8,
+            execution_best_bid=100.0, execution_best_ask=100.1,
+        )
+        result = {
+            "decision": "GO",
+            "reason": "IGNITION_METAORDER_CONTINUATION",
+            "side": "LONG",
+            "s_votes": {},
+        }
+        snapshot = launcher._decision_snapshot(
+            state, result, {"bootstrap_shadow_allowed": True}, False,
+            "cycle-blocked-go", 100.0,
+        )
+        output = snapshot["output"]
+        self.assertEqual(output["decision"], "WAIT")
+        self.assertEqual(
+            output["reason"], "ENTRY_AUTHORITY_CONTRACT_FAIL"
+        )
+        self.assertEqual(output["entry_authority_decision"], "GO")
+        self.assertEqual(output["authorization_status"], "BLOCKED")
+
     def test_current_cash_refresh_has_specific_blocking_reason(self):
         result = {
             "decision": "WAIT", "reason": "WAIT_CURRENT_CASH_CONVERSION",
