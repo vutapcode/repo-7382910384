@@ -4,7 +4,7 @@ import time
 
 from loi_he_thong import liquidation_context
 
-VERSION="GUARDIAN_S_TIER_V11_PATH_AUTHORITY"
+VERSION="GUARDIAN_S_TIER_V12_NONCONVERSION_SEMANTICS"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -543,8 +543,10 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_windo
     elif price_stalled or (
         liquidation_phase=="DECELERATING" and not persistent_cash_acceptance
     ):
-        classification="ABSORBED_PULLBACK"
-        reason="ADVERSE_FLOW_NOT_ACCEPTED_BY_PRIMARY_CASH"
+        # Without live executed-depletion + replenishment evidence Guardian
+        # can prove non-conversion, not the hidden mechanism "absorption".
+        classification="FLOW_NON_CONVERSION_PULLBACK"
+        reason="ADVERSE_FLOW_NOT_CONVERTING_IN_PRIMARY_CASH"
     else:
         classification="UNCERTAIN"
         reason="ADVERSE_EVENT_LACKS_INDEPENDENT_CAUSAL_CONFIRMATION"
@@ -826,14 +828,14 @@ def assess(state,pos,now=None):
     # simply keep converting without relief.  That ordered persistence is a
     # direct thesis break, not a time stop: the timer has no authority unless
     # the same price+executed-flow causal candidate remains present and the
-    # classifier found no flush, absorption, or cross-evidence conflict.
+    # classifier found no flush, non-conversion, or cross-evidence conflict.
     persisted_direct_break=bool(
         causal_candidate
         and recovery_path["guardian_phase"]=="FIRST_PULLBACK"
         and (
             adverse_event["classification"]=="UNCERTAIN"
             or (
-                adverse_event["classification"]=="ABSORBED_PULLBACK"
+                adverse_event["classification"]=="FLOW_NON_CONVERSION_PULLBACK"
                 and not external_guard["coinbase_strict_fresh"]
                 and not thesis.get("primary_cash_anchor")
             )

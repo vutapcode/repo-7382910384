@@ -1054,7 +1054,7 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertEqual(recovered["guardian_phase"], "RECOVERED")
         self.assertEqual(recovered["decision"], "HOLD")
 
-    def test_adverse_flow_without_primary_cash_conversion_is_absorbed_pullback(self):
+    def test_adverse_flow_without_primary_cash_conversion_is_nonconversion(self):
         state = self._state(100.0, 100.0, sell=True)
         pos = SimpleNamespace(side="LONG")
         s1, s2, s3 = self._causal_votes(
@@ -1069,7 +1069,12 @@ class GuardianDeteriorationTests(unittest.TestCase):
             state, pos, 100.0, s1, s2, s3,
             guardian._adverse_profile(s1, s2), thesis,
         )
-        self.assertEqual(classified["classification"], "ABSORBED_PULLBACK")
+        self.assertEqual(
+            classified["classification"], "FLOW_NON_CONVERSION_PULLBACK"
+        )
+        self.assertFalse(
+            classified["liquidity_response"]["depth_authority"]
+        )
         self.assertEqual(
             classified["liquidity_response"]["status"],
             "PRICE_NON_CONVERSION",
