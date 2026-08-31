@@ -20,6 +20,16 @@ class FakeAPI:
 
 
 class VerifiedCostModelTests(unittest.IsolatedAsyncioTestCase):
+    SHADOW_PROFILE_ENV = {
+        "WSTRADE_MODE": "SHADOW",
+        "SMC_ENABLE_TRADING": "false",
+        "SMC_MAINNET_ARMED": "false",
+        "SMC_MAINNET_EXCLUSIVE_ACCOUNT": "false",
+        "SMC_SHADOW_COMMISSION_PROFILE": "BINANCE_USDM_STANDARD",
+        "SMC_SHADOW_MAKER_FEE_BPS": "2.0",
+        "SMC_SHADOW_TAKER_FEE_BPS": "5.0",
+    }
+
     async def test_reads_account_commission_and_estimates_maker_roundtrip(self):
         state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)
         report = await verified_cost_model.refresh_account_commission(
@@ -79,6 +89,72 @@ class VerifiedCostModelTests(unittest.IsolatedAsyncioTestCase):
             "COMMISSION_HTTP_401_BINANCE_-2015",
         )
         self.assertNotIn("secret-bearing", str(report))
+
+    async def test_explicit_shadow_profile_skips_locked_private_api(self):
+        class LockedAPI:
+            has_private_credentials = True
+
+            async def get_commission_rate(self, _symbol):
+                raise AssertionError("shadow profile must not query private API")
+
+        state = SimpleNamespace(
+            execution_best_bid=99.99, execution_best_ask=100.01,
+            wstrade_live_armed=False,
+        )
+        with patch.dict(os.environ, self.SHADOW_PROFILE_ENV, clear=False):
+            report = await verified_cost_model.refresh_account_commission(
+                LockedAPI(), state,
+            )
+            maker = verified_cost_model.estimate(
+                {"phase": "ACCEPTANCE"}, state,
+            )
+            taker = verified_cost_model.estimate(
+                {"phase": "RELEASE"}, state,
+            )
+
+        self.assertFalse(report["verified"])
+        self.assertTrue(report["simulation_cost_usable"])
+        self.assertEqual(report["maker_fee_bps"], 2.0)
+        self.assertEqual(report["taker_fee_bps"], 5.0)
+        self.assertEqual(
+            report["reason"],
+            "SHADOW_PROFILE_ACTIVE_ACCOUNT_QUERY_SKIPPED",
+        )
+        self.assertFalse(maker["commission_verified"])
+        self.assertTrue(maker["simulation_cost_usable"])
+        self.assertAlmostEqual(maker["total_cost_bps"], 9.5)
+        self.assertAlmostEqual(taker["total_cost_bps"], 15.0)
+
+    async def test_shadow_profile_revalidates_cost_but_never_grants_live_truth(self):
+        state = SimpleNamespace(
+            execution_best_bid=99.99, execution_best_ask=100.01,
+            wstrade_live_armed=False,
+        )
+        with patch.dict(os.environ, self.SHADOW_PROFILE_ENV, clear=False):
+            await verified_cost_model.refresh_account_commission(
+                FakeAPI(), state,
+            )
+            result = {"phase": "ACCEPTANCE"}
+            result["execution_cost_contract"] = (
+                verified_cost_model.freeze_execution_cost_contract(
+                    result, state,
+                )
+            )
+            ok, reason, _detail = (
+                verified_cost_model.validate_execution_cost_contract(
+                    result, state, "TAKER",
+                )
+            )
+            state.wstrade_live_armed = True
+            live_ok, _live_reason, _live_detail = (
+                verified_cost_model.validate_execution_cost_contract(
+                    result, state, "TAKER",
+                )
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(reason, "SHADOW_SIMULATED_COST_CONTRACT_PASS")
+        self.assertFalse(live_ok)
 
     async def test_shadow_fee_plan_matches_actual_maker_fill(self):
         state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)

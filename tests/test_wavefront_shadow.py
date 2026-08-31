@@ -1,4 +1,5 @@
 import copy
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -315,6 +316,38 @@ class ResidualEdgeTests(unittest.TestCase):
         entry = next(row[1] for row in h.rows if row[0] == "wavefront_virtual_entry")
         self.assertFalse(entry["cost_plan"]["commission_verified"])
         self.assertFalse(entry["cost_plan"]["promotion_cost_verified"])
+
+    def test_assumed_shadow_profile_prices_twins_without_promotion_truth(self):
+        h = WavefrontHarness(profile="CANONICAL_MIRROR")
+        h.engine.state.execution_best_bid = 99.99
+        h.engine.state.execution_best_ask = 100.01
+        h.engine.commission = {
+            "maker_fee_bps": 2.0,
+            "taker_fee_bps": 5.0,
+            "verified": False,
+            "simulation_cost_usable": True,
+            "profile": "BINANCE_USDM_STANDARD",
+            "source": "SHADOW_ASSUMED_COMMISSION_PROFILE",
+        }
+        env = {
+            "WSTRADE_MODE": "SHADOW",
+            "SMC_ENABLE_TRADING": "false",
+            "SMC_MAINNET_ARMED": "false",
+            "SMC_MAINNET_EXCLUSIVE_ACCOUNT": "false",
+            "SMC_SHADOW_COMMISSION_PROFILE": "BINANCE_USDM_STANDARD",
+            "SMC_SHADOW_MAKER_FEE_BPS": "2.0",
+            "SMC_SHADOW_TAKER_FEE_BPS": "5.0",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            maker = h.engine._cost_plan("MAKER_TWIN")
+            taker = h.engine._cost_plan("TAKER_TWIN")
+
+        self.assertEqual(maker["entry_fee_bps"], 2.0)
+        self.assertEqual(maker["exit_fee_bps"], 5.0)
+        self.assertEqual(taker["entry_fee_bps"], 5.0)
+        self.assertFalse(maker["commission_verified"])
+        self.assertTrue(maker["simulation_cost_usable"])
+        self.assertFalse(maker["promotion_cost_verified"])
 
     def test_parent_statistics_exclude_exact_child_samples(self):
         book = ResidualEdgeBook()

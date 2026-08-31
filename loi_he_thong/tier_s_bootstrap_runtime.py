@@ -192,6 +192,14 @@ async def vong_lap_runtime_heartbeat():
             "mainnet_commission_source": getattr(
                 state, "mainnet_commission_source", None
             ),
+            "mainnet_commission_simulation_usable": bool(
+                getattr(
+                    state, "mainnet_commission_simulation_usable", False
+                )
+            ),
+            "mainnet_commission_profile": getattr(
+                state, "mainnet_commission_profile", None
+            ),
             "mainnet_commission_verification_reason": getattr(
                 state, "mainnet_commission_verification_reason", None
             ),

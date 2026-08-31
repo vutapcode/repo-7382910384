@@ -2,10 +2,10 @@
 import os
 
 
-VERSION = "VERIFIED_COST_MODEL_V2_NO_POST_FILL_DOUBLE_COUNT"
+VERSION = "VERIFIED_COST_MODEL_V3_SHADOW_ASSUMED_PROFILE"
 DEFAULT_FALLBACK_FEE_BPS_PER_SIDE = 9.0
 MAX_SANE_FEE_BPS_PER_SIDE = 20.0
-FROZEN_COST_PLAN_VERSION = "FROZEN_COST_PLAN_V1"
+FROZEN_COST_PLAN_VERSION = "FROZEN_COST_PLAN_V2_SHADOW_PROFILE"
 
 
 def _f(value, default=0.0):
@@ -21,6 +21,56 @@ def fallback_fee_bps_per_side():
         os.getenv("SMC_SHADOW_FEE_BPS_PER_SIDE"),
         DEFAULT_FALLBACK_FEE_BPS_PER_SIDE,
     ))
+
+
+def _truthy(value):
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def shadow_commission_profile(state=None):
+    """Return an explicit simulation-only fee profile in pure SHADOW mode.
+
+    This is not account verification.  The profile exists so a deliberately
+    locked private API does not force maker and taker into the same arbitrary
+    fee or disable realistic shadow fallback execution.  Any live authority
+    request disables it immediately.
+    """
+    profile = str(
+        os.getenv("SMC_SHADOW_COMMISSION_PROFILE", "") or ""
+    ).strip().upper()
+    mode = str(os.getenv("WSTRADE_MODE", "") or "").strip().upper()
+    live_requested = bool(
+        _truthy(os.getenv("SMC_ENABLE_TRADING"))
+        or _truthy(os.getenv("SMC_MAINNET_ARMED"))
+        or _truthy(os.getenv("SMC_MAINNET_EXCLUSIVE_ACCOUNT"))
+        or bool(getattr(state, "wstrade_live_armed", False))
+    )
+    if not profile or mode != "SHADOW" or live_requested:
+        return None
+    maker = _f(os.getenv("SMC_SHADOW_MAKER_FEE_BPS"), 2.0)
+    taker = _f(os.getenv("SMC_SHADOW_TAKER_FEE_BPS"), 5.0)
+    if not (
+        0.0 <= maker <= MAX_SANE_FEE_BPS_PER_SIDE
+        and 0.0 < taker <= MAX_SANE_FEE_BPS_PER_SIDE
+        and maker <= taker
+    ):
+        return None
+    return {
+        "profile": profile,
+        "maker_fee_bps": maker,
+        "taker_fee_bps": taker,
+        "source": "SHADOW_ASSUMED_COMMISSION_PROFILE",
+        "simulation_cost_usable": True,
+        "verified": False,
+    }
+
+
+def shadow_risk_fee_bps_per_side(state=None):
+    profile = shadow_commission_profile(state)
+    return (
+        float(profile["taker_fee_bps"])
+        if profile else fallback_fee_bps_per_side()
+    )
 
 
 def _set_verification_reason(state, reason):
@@ -40,7 +90,32 @@ async def refresh_account_commission(api, state, symbol="BTCUSDT",
     state.mainnet_worst_roundtrip_fee_bps = 2.0 * fallback
     state.mainnet_commission_verified = False
     state.mainnet_commission_source = "CONSERVATIVE_CONFIG_FALLBACK"
+    state.mainnet_commission_simulation_usable = False
+    state.mainnet_commission_profile = None
     _set_verification_reason(state, "COMMISSION_CHECK_NOT_COMPLETED")
+
+    assumed = shadow_commission_profile(state)
+    if assumed:
+        state.mainnet_maker_fee_bps = assumed["maker_fee_bps"]
+        state.mainnet_taker_fee_bps = assumed["taker_fee_bps"]
+        state.mainnet_worst_roundtrip_fee_bps = 2.0 * assumed[
+            "taker_fee_bps"
+        ]
+        state.mainnet_commission_source = assumed["source"]
+        state.mainnet_commission_simulation_usable = True
+        state.mainnet_commission_profile = assumed["profile"]
+        reason = _set_verification_reason(
+            state, "SHADOW_PROFILE_ACTIVE_ACCOUNT_QUERY_SKIPPED"
+        )
+        return {
+            "verified": False,
+            "simulation_cost_usable": True,
+            "profile": assumed["profile"],
+            "source": assumed["source"],
+            "maker_fee_bps": assumed["maker_fee_bps"],
+            "taker_fee_bps": assumed["taker_fee_bps"],
+            "reason": reason,
+        }
 
     if not bool(getattr(api, "has_private_credentials", False)):
         reason = _set_verification_reason(
@@ -106,6 +181,8 @@ async def refresh_account_commission(api, state, symbol="BTCUSDT",
     state.mainnet_worst_roundtrip_fee_bps = 2.0 * taker
     state.mainnet_commission_verified = True
     state.mainnet_commission_source = "BINANCE_ACCOUNT_COMMISSION_RATE"
+    state.mainnet_commission_simulation_usable = False
+    state.mainnet_commission_profile = None
     reason = _set_verification_reason(state, "VERIFIED")
     return {
         "verified": True,
@@ -124,7 +201,17 @@ def estimate(result, state):
     fallback = fallback_fee_bps_per_side()
     maker = _f(getattr(state, "mainnet_maker_fee_bps", fallback), fallback)
     taker = _f(getattr(state, "mainnet_taker_fee_bps", fallback), fallback)
-    if not verified or maker < 0.0 or taker <= 0.0:
+    assumed = bool(
+        not verified
+        and getattr(state, "mainnet_commission_simulation_usable", False)
+        and shadow_commission_profile(state)
+    )
+    if assumed and maker >= 0.0 and taker > 0.0:
+        source = str(
+            getattr(state, "mainnet_commission_source", "")
+            or "SHADOW_ASSUMED_COMMISSION_PROFILE"
+        )
+    elif not verified or maker < 0.0 or taker <= 0.0:
         maker = taker = fallback
         source = "CONSERVATIVE_CONFIG_FALLBACK"
         verified = False
@@ -161,6 +248,10 @@ def estimate(result, state):
         "version": VERSION,
         "execution_style": execution_style,
         "commission_verified": verified,
+        "simulation_cost_usable": assumed,
+        "commission_profile": getattr(
+            state, "mainnet_commission_profile", None
+        ) if assumed else None,
         "commission_source": source,
         "commission_verification_reason": verification_reason,
         "entry_fee_bps": round(entry_fee, 6),
@@ -187,6 +278,11 @@ def freeze_execution_cost_contract(result, state):
         "commission_verified": bool(
             maker.get("commission_verified") and taker.get("commission_verified")
         ),
+        "simulation_cost_usable": bool(
+            maker.get("simulation_cost_usable")
+            and taker.get("simulation_cost_usable")
+        ),
+        "commission_profile": maker.get("commission_profile"),
         "commission_source": maker.get("commission_source"),
         "commission_verification_reason": maker.get(
             "commission_verification_reason"
@@ -236,10 +332,17 @@ def validate_execution_cost_contract(result, state, execution_style):
         return False, "EXECUTION_COST_CONTRACT_MISSING", {
             "execution_style": style, "current": current,
         }
-    if not bool(
+    verified_cost = bool(
         contract.get("commission_verified")
         and current.get("commission_verified")
-    ):
+    )
+    simulated_shadow_cost = bool(
+        contract.get("simulation_cost_usable")
+        and current.get("simulation_cost_usable")
+        and shadow_commission_profile(state)
+        and not bool(getattr(state, "wstrade_live_armed", False))
+    )
+    if not (verified_cost or simulated_shadow_cost):
         return False, "EXECUTION_COMMISSION_UNVERIFIED", {
             "execution_style": style, "budget_bps": budget, "current": current,
         }
@@ -256,7 +359,10 @@ def validate_execution_cost_contract(result, state, execution_style):
             "current_cost_bps": round(current_total, 6),
             "current": current,
         }
-    return True, "EXECUTION_COST_CONTRACT_PASS", {
+    return True, (
+        "EXECUTION_COST_CONTRACT_PASS"
+        if verified_cost else "SHADOW_SIMULATED_COST_CONTRACT_PASS"
+    ), {
         "execution_style": style,
         "budget_bps": round(budget, 6),
         "current_cost_bps": round(current_total, 6),
@@ -290,6 +396,10 @@ def shadow_execution_plan(result, state, execution_style):
         "execution_style": "MAKER" if is_maker else "TAKER",
         "fill_style": style or "MARKET",
         "commission_verified": bool(modeled["commission_verified"]),
+        "simulation_cost_usable": bool(
+            modeled.get("simulation_cost_usable")
+        ),
+        "commission_profile": modeled.get("commission_profile"),
         "commission_source": modeled["commission_source"],
         "commission_verification_reason": modeled.get(
             "commission_verification_reason"

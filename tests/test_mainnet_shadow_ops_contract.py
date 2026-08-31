@@ -21,6 +21,11 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         self.assertIn("SMC_MAINNET_ARMED=false", text)
         self.assertIn("ExecStartPre=+/usr/bin/install -d", text)
         self.assertIn("SMC_SHADOW_FEE_BPS_PER_SIDE=9.0", text)
+        self.assertIn(
+            "SMC_SHADOW_COMMISSION_PROFILE=BINANCE_USDM_STANDARD", text
+        )
+        self.assertIn("SMC_SHADOW_MAKER_FEE_BPS=2.0", text)
+        self.assertIn("SMC_SHADOW_TAKER_FEE_BPS=5.0", text)
         self.assertIn("WorkingDirectory=/home/ubuntu/WStrade", text)
         self.assertIn("SMC_JOURNAL_EVENTS_PATH=", text)
 

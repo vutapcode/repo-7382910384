@@ -47,6 +47,9 @@ Environment=WSTRADE_CPU_HARD_PCT=30
 Environment=WSTRADE_CPU_WINDOWS_SECONDS=900,3600
 Environment=SMC_SHADOW_BALANCE_USDT=5000
 Environment=SMC_SHADOW_FEE_BPS_PER_SIDE=9.0
+Environment=SMC_SHADOW_COMMISSION_PROFILE=BINANCE_USDM_STANDARD
+Environment=SMC_SHADOW_MAKER_FEE_BPS=2.0
+Environment=SMC_SHADOW_TAKER_FEE_BPS=5.0
 Environment=SMC_RUNTIME_DIR=/home/ubuntu/.local/state/smc2026/runtime
 Environment=SMC_JOURNAL_DIR=/home/ubuntu/.local/state/smc2026/mainnet_shadow
 Environment=SMC_SHADOW_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/mainnet_shadow/events.jsonl

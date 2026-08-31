@@ -255,6 +255,7 @@ class WavefrontShadowEvaluator:
         self.commission = {
             "maker_fee_bps": 9.0, "taker_fee_bps": 9.0,
             "verified": False, "source": "CONSERVATIVE_CONFIG_FALLBACK",
+            "simulation_cost_usable": False, "profile": None,
         }
         self.last_runtime_read_ms = 0
         self.last_cpu_read_ms = 0
@@ -375,10 +376,15 @@ class WavefrontShadowEvaluator:
                 maker = _f(data.get("mainnet_maker_fee_bps"), -1.0)
                 taker = _f(data.get("mainnet_taker_fee_bps"), -1.0)
                 verified = bool(data.get("mainnet_commission_verified"))
-                if verified and maker >= 0.0 and taker > 0.0:
+                simulated = bool(
+                    data.get("mainnet_commission_simulation_usable")
+                )
+                if (verified or simulated) and maker >= 0.0 and taker > 0.0:
                     self.commission = {
                         "maker_fee_bps": maker, "taker_fee_bps": taker,
-                        "verified": True,
+                        "verified": verified,
+                        "simulation_cost_usable": simulated,
+                        "profile": data.get("mainnet_commission_profile"),
                         "source": str(data.get("mainnet_commission_source") or "BOT_RUNTIME"),
                     }
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -410,7 +416,10 @@ class WavefrontShadowEvaluator:
             "received_ms": now_ms,
         }
         components = ((output.get("cost") or {}).get("components") or {})
-        if components.get("commission_verified"):
+        if (
+            components.get("commission_verified")
+            or components.get("simulation_cost_usable")
+        ):
             style = str(components.get("execution_style") or "").upper()
             entry_fee = _f(components.get("entry_fee_bps"), -1.0)
             exit_fee = _f(components.get("exit_fee_bps"), -1.0)
@@ -420,7 +429,15 @@ class WavefrontShadowEvaluator:
                 self.commission["maker_fee_bps"] = entry_fee
             elif style == "TAKER" and entry_fee > 0.0:
                 self.commission["taker_fee_bps"] = entry_fee
-            self.commission["verified"] = True
+            self.commission["verified"] = bool(
+                components.get("commission_verified")
+            )
+            self.commission["simulation_cost_usable"] = bool(
+                components.get("simulation_cost_usable")
+            )
+            self.commission["profile"] = components.get(
+                "commission_profile"
+            )
             self.commission["source"] = str(components.get("commission_source") or "BOT_DECISION")
 
     def _sequence_ok(self, record):
@@ -853,7 +870,12 @@ class WavefrontShadowEvaluator:
                 mainnet_commission_verified=bool(
                     self.commission.get("verified")
                 ),
+                mainnet_commission_simulation_usable=bool(
+                    self.commission.get("simulation_cost_usable")
+                ),
+                mainnet_commission_profile=self.commission.get("profile"),
                 mainnet_commission_source=self.commission.get("source"),
+                wstrade_live_armed=False,
             )
             plan = verified_cost_model.shadow_execution_plan(
                 {"phase": "ACCEPTANCE" if is_maker else "RELEASE"},

@@ -180,7 +180,18 @@ def _install_guardian(base):
 
 def install(wrapper):
     base = wrapper.base
-    fee = max(9.0, float(getattr(base, "FEE_BPS_PER_SIDE", 0.0) or 0.0))
+    profile = base.verified_cost_model.shadow_commission_profile(
+        base.app.state
+    )
+    minimum_fee = (
+        float(profile["taker_fee_bps"]) if profile else 9.0
+    )
+    fee = max(
+        minimum_fee,
+        float(getattr(base, "FEE_BPS_PER_SIDE", 0.0) or 0.0),
+    )
+    if profile:
+        fee = float(profile["taker_fee_bps"])
     base.FEE_BPS_PER_SIDE = fee
     base.SHADOW_FEE_BPS_PER_SIDE = fee
     wrapper.risk.FEE_BPS = fee

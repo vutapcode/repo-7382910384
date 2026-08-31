@@ -47,6 +47,11 @@ class RuntimeHardeningV3ContractTests(unittest.TestCase):
         )
         self.assertIn("mainnet_tier_s_lean_launcher.py", text)
         self.assertIn("SMC_SHADOW_FEE_BPS_PER_SIDE=9.0", text)
+        self.assertIn(
+            "SMC_SHADOW_COMMISSION_PROFILE=BINANCE_USDM_STANDARD", text
+        )
+        self.assertIn("SMC_SHADOW_MAKER_FEE_BPS=2.0", text)
+        self.assertIn("SMC_SHADOW_TAKER_FEE_BPS=5.0", text)
 
     def test_hardened_launcher_self_guards_manual_runs(self):
         path = ROOT / "mainnet_tier_s_shadow_hardened_launcher.py"

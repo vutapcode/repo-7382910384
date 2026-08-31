@@ -6,7 +6,7 @@ from loi_he_thong import verified_cost_model
 VERSION = "RISK_FEE_ALIGNMENT_V2"
 
 def _fee_bps_per_side():
-    return verified_cost_model.fallback_fee_bps_per_side()
+    return verified_cost_model.shadow_risk_fee_bps_per_side()
 
 
 def _refresh_fee_r(position, fee_bps):
