@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import deque
 
 from recorder.depth import DepthGap, LocalOrderBook
+from loi_he_thong.market_event_contract import available_time_ms
 
 
 VERSION = "LIQUIDITY_RESPONSE_RESEARCH_V3"
@@ -167,7 +168,7 @@ class LiquidityResponseAnalyzer:
         if stream in ("liquidity_response", "spot_liquidity_response"):
             return
         payload = record.get("payload") or {}
-        now_ms = int(record.get("receive_time_ms", 0) or 0)
+        now_ms = available_time_ms(record)
         if now_ms <= 0:
             return
 
@@ -457,7 +458,7 @@ class SpotLiquidityResponseAnalyzer:
             "liquidity_response",
         ):
             return
-        now_ms = int(record.get("receive_time_ms", 0) or 0)
+        now_ms = available_time_ms(record)
         if now_ms <= 0:
             return
         payload = record.get("payload") or {}

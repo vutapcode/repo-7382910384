@@ -8,6 +8,7 @@ import aiohttp
 import orjson
 import websockets
 
+from loi_he_thong.market_event_contract import build_envelope
 from recorder import SCHEMA_VERSION
 from recorder.cash import (
     CashTradeBatcher, CausalClockEstimator, coinbase_time_ms,
@@ -36,6 +37,7 @@ class BinanceRecorder:
         self.coinbase_liquidity_response_analyzer = None
         self.causal_world_model = None
         self._causal_clocks = {}
+        self._stream_epochs = {}
         self._wavefront_health_at_ms = 0
         self._liquidity_health_at_ms = 0
 
@@ -43,18 +45,73 @@ class BinanceRecorder:
     def now_ms():
         return time.time_ns() // 1_000_000
 
+    def _advance_epoch(self, *streams):
+        for stream in streams:
+            self._stream_epochs[str(stream)] = int(
+                self._stream_epochs.get(str(stream), 0)
+            ) + 1
+
+    def _epoch(self, stream, payload=None):
+        if str(stream) in self._stream_epochs:
+            return int(self._stream_epochs[str(stream)])
+        payload_epoch = (payload or {}).get('epoch')
+        if payload_epoch is not None:
+            return int(payload_epoch or 0)
+        return int(self._stream_epochs.get(str(stream), 0))
+
     def emit(
         self, stream, payload, event_time_ms=None,
         sequence_start=None, sequence_end=None, previous_sequence=None,
         source=None, feed_features=True, feed_research=True,
-        receive_time_ms=None,
+        receive_time_ms=None, available_time_ms=None,
+        receive_time_monotonic_ns=None, available_time_monotonic_ns=None,
+        source_health='FRESH', payload_version=None, epoch=None,
     ):
+        payload = dict(payload or {})
         receive_time_ms = int(receive_time_ms or self.now_ms())
         event_time_ms = int(event_time_ms or receive_time_ms)
         source = source or (
             'smc2026' if stream.startswith('bot_')
             else 'recorder' if stream.startswith('recorder_')
             else 'binance_usdm'
+        )
+        if (
+            source in {'binance_usdm', 'binance_spot', 'coinbase_spot'}
+            and 'clock_uncertainty_ms' not in payload
+        ):
+            clock = self._causal_clocks.setdefault(
+                f'{source}:{stream}', CausalClockEstimator()
+            )
+            payload.update(clock.observe(event_time_ms, receive_time_ms))
+        epoch = self._epoch(stream, payload) if epoch is None else int(epoch)
+        clock_uncertainty = float(
+            (payload or {}).get('clock_uncertainty_ms', 0.0) or 0.0
+        )
+        batch_uncertainty = max(0.0, float(
+            (payload or {}).get('batch_available_time_ms', receive_time_ms)
+            or receive_time_ms
+        ) - float((payload or {}).get('bucket_end_ms', receive_time_ms) or receive_time_ms))
+        envelope = build_envelope(
+            source=source, stream=stream,
+            exchange_event_time_ms=event_time_ms,
+            receive_time_ms=receive_time_ms,
+            available_time_ms=available_time_ms,
+            receive_time_monotonic_ns=receive_time_monotonic_ns,
+            available_time_monotonic_ns=available_time_monotonic_ns,
+            epoch=epoch, sequence_start=sequence_start,
+            sequence_end=sequence_end, previous_sequence=previous_sequence,
+            source_health=source_health,
+            payload_version=(
+                payload_version
+                or (payload or {}).get('signal_schema_version')
+                or f'{stream.upper()}_V1'
+            ),
+            clock_offset_ms=(payload or {}).get('clock_offset_ms', 0.0),
+            clock_jitter_ms=(payload or {}).get('clock_jitter_ms', 0.0),
+            clock_uncertainty_ms=clock_uncertainty,
+            batching_uncertainty_ms=batch_uncertainty,
+            clock_valid=bool((payload or {}).get('clock_valid', True)),
+            payload=payload,
         )
         record = {
             'schema_version': SCHEMA_VERSION,
@@ -63,14 +120,10 @@ class BinanceRecorder:
             'source': source,
             'symbol': self.config.symbol,
             'stream': stream,
-            'event_time_ms': event_time_ms,
-            'receive_time_ms': receive_time_ms,
-            'sequence_start': sequence_start,
-            'sequence_end': sequence_end,
-            'previous_sequence': previous_sequence,
+            **envelope,
             'payload': payload,
         }
-        self.health.saw(stream, event_time_ms)
+        self.health.saw(stream, event_time_ms, envelope['available_time_ms'])
         published = self.store.publish(record)
         if published and feed_features and self.feature_engine is not None:
             if stream == 'depth_diff':
@@ -143,18 +196,22 @@ class BinanceRecorder:
         batch = dict(batch)
         # The batch becomes observable only when this function runs.  Preserve
         # the logical bucket close separately; never backdate freshness to it.
-        receive_ms = int(self.now_ms())
+        available_ms = int(self.now_ms())
+        available_mono_ns = time.monotonic_ns()
         batch['bucket_close_ms'] = batch.get('bucket_end_ms')
-        batch['batch_available_time_ms'] = receive_ms
+        batch['batch_available_time_ms'] = available_ms
+        receive_ms = int(batch.get('last_receive_time_ms') or available_ms)
         event_ms = int(batch.get('last_event_time_ms') or receive_ms)
         clock = self._causal_clocks.setdefault(source, CausalClockEstimator())
         batch.update(clock.observe(event_ms, receive_ms))
         first_id = batch.get('first_trade_id')
         last_id = batch.get('last_trade_id')
+        gap = False
         if (
             previous_sequence is not None and first_id is not None
             and int(first_id) != int(previous_sequence) + 1
         ):
+            gap = True
             self.health.sequence_gaps[stream] += 1
             self.health.last_error = {
                 'component': stream,
@@ -164,34 +221,52 @@ class BinanceRecorder:
                 ),
                 'at_ms': self.now_ms(),
             }
+            self._advance_epoch(stream)
+            batch['sequence_status'] = 'GAP_NEW_EPOCH'
+            batch['expected_first_trade_id'] = int(previous_sequence) + 1
         self.emit(
             stream, batch,
             event_time_ms=batch.get('last_event_time_ms'),
             sequence_start=int(first_id) if first_id is not None else None,
             sequence_end=int(last_id) if last_id is not None else None,
-            previous_sequence=previous_sequence,
+            # A new epoch has no valid predecessor. Preserve the mismatch in
+            # payload rather than falsely bridging the sequence contract.
+            previous_sequence=None if gap else previous_sequence,
             source=source,
             feed_features=feed_features,
             receive_time_ms=receive_ms,
+            available_time_ms=available_ms,
+            receive_time_monotonic_ns=batch.get(
+                'last_receive_monotonic_ns'
+            ),
+            available_time_monotonic_ns=available_mono_ns,
+            source_health='DEGRADED' if gap else 'FRESH',
         )
         return int(last_id) if last_id is not None else previous_sequence
 
     def _emit_coinbase_l2_batch(self, batch, book, product_id):
         if not batch:
             return False
-        receive_ms = int(self.now_ms())
+        available_ms = int(self.now_ms())
+        available_mono_ns = time.monotonic_ns()
         payload = dict(batch)
         payload.update({
             'product_id': product_id,
             'epoch': book.epoch,
-            'batch_available_time_ms': receive_ms,
+            'batch_available_time_ms': available_ms,
             'ordered_lossless_changes': True,
         })
+        receive_ms = int(payload.get('last_receive_time_ms') or available_ms)
         event_ms = int(payload.get('last_event_time_ms') or receive_ms)
         self.emit(
             'coinbase_spot_l2batch', payload,
             event_time_ms=event_ms,
             receive_time_ms=receive_ms,
+            available_time_ms=available_ms,
+            receive_time_monotonic_ns=payload.get(
+                'last_receive_monotonic_ns'
+            ),
+            available_time_monotonic_ns=available_mono_ns,
             source='coinbase_spot', feed_features=False,
         )
         if self.coinbase_liquidity_response_analyzer is not None:
@@ -233,6 +308,7 @@ class BinanceRecorder:
                     max_size=32 * 1024 * 1024,
                     max_queue=4096,
                 ) as ws:
+                    self._advance_epoch('depth_checkpoint', 'book_ticker')
                     self.health.connection(name, True)
                     self.health.depth_synced = False
                     last_book_ticker_ms = 0
@@ -244,6 +320,7 @@ class BinanceRecorder:
                         )
                     async for raw in ws:
                         receive_ms = self.now_ms()
+                        receive_mono_ns = time.monotonic_ns()
                         wrapper = orjson.loads(raw)
                         stream_name = str(wrapper.get('stream', ''))
                         data = wrapper.get('data', {}) or {}
@@ -260,7 +337,8 @@ class BinanceRecorder:
                             self.emit('recorder_health_event', {
                                 'component': 'depth', 'event': 'SEQUENCE_GAP',
                                 'detail': str(exc),
-                            })
+                            }, receive_time_ms=receive_ms,
+                                receive_time_monotonic_ns=receive_mono_ns)
                             if self.liquidity_response_analyzer is not None:
                                 self.liquidity_response_analyzer.reset(
                                     receive_ms, 'DEPTH_SEQUENCE_GAP'
@@ -288,6 +366,8 @@ class BinanceRecorder:
                                 self.emit(
                                     'depth_checkpoint', book.checkpoint(20),
                                     event_time_ms=event_ms,
+                                    receive_time_ms=receive_ms,
+                                    receive_time_monotonic_ns=receive_mono_ns,
                                     sequence_end=book.last_u,
                                     feed_features=False,
                                 )
@@ -304,6 +384,8 @@ class BinanceRecorder:
                                 self.emit(
                                     'book_ticker', ticker,
                                     event_time_ms=event_ms,
+                                    receive_time_ms=receive_ms,
+                                    receive_time_monotonic_ns=receive_mono_ns,
                                     sequence_end=book.last_u,
                                 )
                                 last_book_ticker_ms = event_ms
@@ -318,8 +400,11 @@ class BinanceRecorder:
 
     async def market_loop(self):
         name = 'market_ws'
-        previous_trade_id = None
         while True:
+            # A reconnect is a hard causal boundary.  A trade identifier from
+            # the previous socket may be useful for diagnostics but must not
+            # authorize continuity in the new epoch.
+            previous_trade_id = None
             batcher = CashTradeBatcher(
                 self.config.cash_batch_ms, track_nq=True
             )
@@ -332,6 +417,9 @@ class BinanceRecorder:
                     max_size=8 * 1024 * 1024,
                     max_queue=4096,
                 ) as ws:
+                    self._advance_epoch(
+                        'futures_trade_100ms', 'liquidation', 'mark_price',
+                    )
                     self.health.connection(name, True)
                     while True:
                         try:
@@ -346,6 +434,7 @@ class BinanceRecorder:
                             )
                             continue
                         receive_ms = self.now_ms()
+                        receive_mono_ns = time.monotonic_ns()
                         previous_trade_id = self._emit_cash_batch(
                             'futures_trade_100ms', 'binance_usdm',
                             batcher.flush_due(receive_ms), previous_trade_id,
@@ -367,6 +456,7 @@ class BinanceRecorder:
                                 non_rpi_qty=(
                                     data.get('nq') if 'nq' in data else None
                                 ),
+                                receive_time_monotonic_ns=receive_mono_ns,
                             )
                             previous_trade_id = self._emit_cash_batch(
                                 'futures_trade_100ms', 'binance_usdm',
@@ -374,11 +464,23 @@ class BinanceRecorder:
                                 feed_features=True,
                             )
                         elif '@kline_1m' in stream_name:
-                            self.emit('kline_1m', data, event_time_ms=event_ms)
+                            self.emit(
+                                'kline_1m', data, event_time_ms=event_ms,
+                                receive_time_ms=receive_ms,
+                                receive_time_monotonic_ns=receive_mono_ns,
+                            )
                         elif '@kline_15m' in stream_name:
-                            self.emit('kline_15m', data, event_time_ms=event_ms)
+                            self.emit(
+                                'kline_15m', data, event_time_ms=event_ms,
+                                receive_time_ms=receive_ms,
+                                receive_time_monotonic_ns=receive_mono_ns,
+                            )
                         elif '@markPrice' in stream_name:
-                            self.emit('mark_price', data, event_time_ms=event_ms)
+                            self.emit(
+                                'mark_price', data, event_time_ms=event_ms,
+                                receive_time_ms=receive_ms,
+                                receive_time_monotonic_ns=receive_mono_ns,
+                            )
                         elif stream_name.endswith('@forceOrder'):
                             order = data.get('o', {}) or {}
                             liquidation_ms = int(order.get('T', event_ms) or event_ms)
@@ -387,6 +489,8 @@ class BinanceRecorder:
                                 event_time_ms=liquidation_ms,
                                 sequence_start=int(order.get('T', liquidation_ms) or liquidation_ms),
                                 sequence_end=int(order.get('T', liquidation_ms) or liquidation_ms),
+                                receive_time_ms=receive_ms,
+                                receive_time_monotonic_ns=receive_mono_ns,
                             )
             except asyncio.CancelledError:
                 previous_trade_id = self._emit_cash_batch(
@@ -410,8 +514,8 @@ class BinanceRecorder:
     async def binance_spot_loop(self):
         """Record exact Spot flow in 100-ms batches plus sampled BBO."""
         name = 'binance_spot_ws'
-        previous_trade_id = None
         while True:
+            previous_trade_id = None
             batcher = CashTradeBatcher(self.config.cash_batch_ms)
             last_ticker_ms = 0
             try:
@@ -423,6 +527,9 @@ class BinanceRecorder:
                     max_size=8 * 1024 * 1024,
                     max_queue=4096,
                 ) as ws:
+                    self._advance_epoch(
+                        'binance_spot_trade_100ms', 'binance_spot_ticker',
+                    )
                     self.health.connection(name, True)
                     if self.spot_liquidity_response_analyzer is not None:
                         self.spot_liquidity_response_analyzer.reset(
@@ -440,6 +547,7 @@ class BinanceRecorder:
                             )
                             continue
                         receive_ms = self.now_ms()
+                        receive_mono_ns = time.monotonic_ns()
                         previous_trade_id = self._emit_cash_batch(
                             'binance_spot_trade_100ms', 'binance_spot',
                             batcher.flush_due(receive_ms), previous_trade_id,
@@ -456,6 +564,7 @@ class BinanceRecorder:
                                 price=data.get('p', 0.0),
                                 qty=data.get('q', 0.0),
                                 aggressive_buy=not bool(data.get('m')),
+                                receive_time_monotonic_ns=receive_mono_ns,
                             )
                             previous_trade_id = self._emit_cash_batch(
                                 'binance_spot_trade_100ms', 'binance_spot',
@@ -494,6 +603,7 @@ class BinanceRecorder:
                                         data.get('E', receive_ms) or receive_ms
                                     ),
                                     receive_time_ms=receive_ms,
+                                    receive_time_monotonic_ns=receive_mono_ns,
                                     source='binance_spot', feed_features=True,
                                 )
                                 last_ticker_ms = receive_ms
@@ -521,13 +631,13 @@ class BinanceRecorder:
     async def coinbase_spot_loop(self):
         """Record Coinbase matches, BBO and public L2 research evidence."""
         name = 'coinbase_spot_ws'
-        previous_trade_id = None
         subscribe = orjson.dumps({
             'type': 'subscribe',
             'product_ids': [self.config.coinbase_product],
             'channels': ['matches', 'ticker', 'level2_batch'],
         })
         while True:
+            previous_trade_id = None
             batcher = CashTradeBatcher(self.config.cash_batch_ms)
             l2_batcher = CoinbaseL2UpdateBatcher(self.config.cash_batch_ms)
             last_ticker_ms = 0
@@ -543,6 +653,10 @@ class BinanceRecorder:
                     max_queue=4096,
                 ) as ws:
                     await ws.send(subscribe)
+                    self._advance_epoch(
+                        'coinbase_spot_trade_100ms', 'coinbase_spot_ticker',
+                        'coinbase_spot_l2snapshot', 'coinbase_spot_l2batch',
+                    )
                     self.health.connection(name, True)
                     if self.coinbase_liquidity_response_analyzer is not None:
                         self.coinbase_liquidity_response_analyzer.reset(
@@ -564,6 +678,7 @@ class BinanceRecorder:
                             )
                             continue
                         receive_ms = self.now_ms()
+                        receive_mono_ns = time.monotonic_ns()
                         previous_trade_id = self._emit_cash_batch(
                             'coinbase_spot_trade_100ms', 'coinbase_spot',
                             batcher.flush_due(receive_ms), previous_trade_id,
@@ -583,6 +698,7 @@ class BinanceRecorder:
                                 price=data.get('price', 0.0),
                                 qty=data.get('size', 0.0),
                                 aggressive_buy=aggressive_buy,
+                                receive_time_monotonic_ns=receive_mono_ns,
                             )
                             previous_trade_id = self._emit_cash_batch(
                                 'coinbase_spot_trade_100ms', 'coinbase_spot',
@@ -608,6 +724,8 @@ class BinanceRecorder:
                                 sequence_start=sequence or None,
                                 sequence_end=sequence or None,
                                 source='coinbase_spot', feed_features=True,
+                                receive_time_ms=receive_ms,
+                                receive_time_monotonic_ns=receive_mono_ns,
                             )
                             last_ticker_ms = receive_ms
                         elif message_type == 'ticker':
@@ -628,6 +746,7 @@ class BinanceRecorder:
                                 },
                                 event_time_ms=event_ms,
                                 receive_time_ms=receive_ms,
+                                receive_time_monotonic_ns=receive_mono_ns,
                                 source='coinbase_spot', feed_features=False,
                             )
                             if self.coinbase_liquidity_response_analyzer is not None:
@@ -644,6 +763,7 @@ class BinanceRecorder:
                             completed_l2 = l2_batcher.push(
                                 receive_ms, event_ms,
                                 data.get('changes') or [],
+                                receive_time_monotonic_ns=receive_mono_ns,
                             )
                             # Publish the closed bucket against the book state
                             # that existed before this new bucket's first
@@ -678,6 +798,7 @@ class BinanceRecorder:
 
     async def macro_poll_loop(self):
         name = 'rest_macro'
+        connected = False
         while True:
             started = time.monotonic()
             try:
@@ -690,20 +811,31 @@ class BinanceRecorder:
                     ),
                 )
                 receive_ms = self.now_ms()
+                receive_mono_ns = time.monotonic_ns()
+                if not connected:
+                    self._advance_epoch('open_interest', 'premium_index')
+                oi_event_ms = int(oi.get('time', receive_ms) or receive_ms)
+                premium_event_ms = int(
+                    premium.get('time', receive_ms) or receive_ms
+                )
                 self.emit(
                     'open_interest', oi,
-                    event_time_ms=receive_ms,
+                    event_time_ms=oi_event_ms,
                     receive_time_ms=receive_ms,
+                    receive_time_monotonic_ns=receive_mono_ns,
                 )
                 self.emit(
                     'premium_index', premium,
-                    event_time_ms=receive_ms,
+                    event_time_ms=premium_event_ms,
                     receive_time_ms=receive_ms,
+                    receive_time_monotonic_ns=receive_mono_ns,
                 )
                 self.health.connection(name, True)
+                connected = True
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                connected = False
                 self.health.connection(name, False)
                 self.health.errors[name] += 1
                 self.health.error(name, exc)

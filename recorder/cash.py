@@ -48,6 +48,8 @@ class CausalClockEstimator:
                 "CORRECTED_EVENT_TIME_WITH_UNCERTAINTY"
             ),
             "corrected_event_time_ms": round(self.last_corrected_ms, 4),
+            "clock_offset_ms": round(self.base_delay_ms, 4),
+            "clock_jitter_ms": round(self.jitter_ms, 4),
             "clock_uncertainty_ms": round(uncertainty, 4),
             "clock_valid": valid,
             "receive_minus_event_ms": round(delay, 4),
@@ -84,7 +86,9 @@ class CashTradeBatcher:
         "batch_ms", "bucket_start_ms", "trade_count", "buy_qty", "sell_qty",
         "buy_quote", "sell_quote", "first_price", "last_price", "high", "low",
         "first_trade_id", "last_trade_id", "first_event_time_ms",
-        "last_event_time_ms", "quantity_q", "non_rpi_quantity_nq",
+        "first_receive_time_ms", "last_receive_time_ms",
+        "last_event_time_ms", "first_receive_monotonic_ns",
+        "last_receive_monotonic_ns", "quantity_q", "non_rpi_quantity_nq",
         "nq_observation_count", "track_nq",
     )
 
@@ -108,6 +112,10 @@ class CashTradeBatcher:
         self.last_trade_id = None
         self.first_event_time_ms = None
         self.last_event_time_ms = None
+        self.first_receive_time_ms = None
+        self.last_receive_time_ms = None
+        self.first_receive_monotonic_ns = None
+        self.last_receive_monotonic_ns = None
         self.quantity_q = 0.0
         self.non_rpi_quantity_nq = 0.0
         self.nq_observation_count = 0
@@ -134,6 +142,10 @@ class CashTradeBatcher:
             "last_trade_id": self.last_trade_id,
             "first_event_time_ms": self.first_event_time_ms,
             "last_event_time_ms": self.last_event_time_ms,
+            "first_receive_time_ms": self.first_receive_time_ms,
+            "last_receive_time_ms": self.last_receive_time_ms,
+            "first_receive_monotonic_ns": self.first_receive_monotonic_ns,
+            "last_receive_monotonic_ns": self.last_receive_monotonic_ns,
         }
         if self.track_nq:
             # Binance USD-M currently exposes q and nq on aggTrade.  Other
@@ -171,7 +183,7 @@ class CashTradeBatcher:
 
     def push(
         self, *, receive_time_ms, event_time_ms, trade_id, price, qty,
-        aggressive_buy, non_rpi_qty=None,
+        aggressive_buy, non_rpi_qty=None, receive_time_monotonic_ns=None,
     ):
         receive_ms = int(receive_time_ms)
         event_ms = int(event_time_ms or receive_ms)
@@ -191,6 +203,11 @@ class CashTradeBatcher:
             self.low = price
             self.first_trade_id = trade_id
             self.first_event_time_ms = event_ms
+            self.first_receive_time_ms = receive_ms
+            self.first_receive_monotonic_ns = (
+                int(receive_time_monotonic_ns)
+                if receive_time_monotonic_ns is not None else None
+            )
         quote = price * qty
         if aggressive_buy:
             self.buy_qty += qty
@@ -213,4 +230,9 @@ class CashTradeBatcher:
         self.low = min(self.low, price)
         self.last_trade_id = trade_id
         self.last_event_time_ms = event_ms
+        self.last_receive_time_ms = receive_ms
+        self.last_receive_monotonic_ns = (
+            int(receive_time_monotonic_ns)
+            if receive_time_monotonic_ns is not None else None
+        )
         return completed

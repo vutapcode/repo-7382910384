@@ -207,7 +207,7 @@ Bot có biết chính xác dữ liệu nào đã thực sự available tại th�
 
 ## Công việc
 
-- [ ] Một canonical event contract cho live/recorder/replay:
+- [x] Một canonical event contract cho live/recorder/replay:
 
 ```text
 source
@@ -221,29 +221,40 @@ source_health
 payload_version
 ```
 
-- [ ] `available_time` là temporal authority của replay decision.
-- [ ] Ghi offset, jitter, batching uncertainty theo từng venue/stream.
-- [ ] Chỉ kết luận `A_LEADS_B` khi observed ordering vượt tổng uncertainty bound.
-- [ ] Không đủ bound -> `SIMULTANEOUS_OR_UNRESOLVED`, không bịa leader.
-- [ ] Gap/reset/out-of-order tạo epoch mới; không nối flow/state qua epoch.
-- [ ] OI delta chỉ có nghĩa khi có hai snapshot đúng thứ tự trong causal window.
-- [ ] Depth state chỉ có nghĩa khi snapshot + diff sequence được reconcile; executed depletion cần trade evidence.
-- [ ] Chuẩn hóa một storage-health owner cho bot và recorder.
+- [x] `available_time` là temporal authority của replay decision.
+- [x] Ghi offset, jitter, batching uncertainty theo từng venue/stream.
+- [x] Chỉ kết luận `A_LEADS_B` khi observed ordering vượt tổng uncertainty bound.
+- [x] Không đủ bound -> `SIMULTANEOUS_OR_UNRESOLVED`, không bịa leader.
+- [x] Gap/reset/out-of-order tạo epoch mới; không nối flow/state qua epoch.
+- [x] OI delta chỉ có nghĩa khi có hai snapshot đúng thứ tự trong causal window.
+- [x] Depth state chỉ có nghĩa khi snapshot + diff sequence được reconcile; executed depletion cần trade evidence.
+- [x] Chuẩn hóa một storage-health owner cho bot và recorder.
 
 ## Tests bắt buộc
 
-- [ ] Late arrival không sửa quyết định quá khứ.
-- [ ] Same exchange time nhưng different available time.
-- [ ] Clock uncertainty lớn hơn lead gap.
-- [ ] Sequence gap/reconnect/epoch reset.
-- [ ] Same OI snapshot không được gọi build/unwind.
-- [ ] Static wall/cancel không được gọi absorption/depletion.
+- [x] Late arrival không sửa quyết định quá khứ.
+- [x] Same exchange time nhưng different available time.
+- [x] Clock uncertainty lớn hơn lead gap.
+- [x] Sequence gap/reconnect/epoch reset.
+- [x] Same OI snapshot không được gọi build/unwind.
+- [x] Static wall/cancel không được gọi absorption/depletion.
 
 ## PASS
 
 - [ ] Live/replay cùng event contract và cùng decision hash.
-- [ ] Mọi causal-lead output kèm measurement status/bound.
-- [ ] Source mất dữ liệu -> `UNKNOWN/UNSAFE`, không thành `THESIS_FALSE`.
+- [x] Mọi causal-lead output kèm measurement status/bound.
+- [x] Source mất dữ liệu -> `UNKNOWN/UNSAFE`, không thành `THESIS_FALSE`.
+
+### Kết quả triển khai 2026-09-02
+
+- Recorder schema V7 và Ignition Signals V4 dùng chung temporal contract;
+  Binance `T/E`, trade/update identity và local availability không còn bị gộp.
+- OI dùng exchange transaction time; same snapshot, epoch recovery hoặc mẫu
+  ngoài causal window đều trả `UNKNOWN`, không được giả thành build/unwind.
+- Replay transport chạy theo availability và đọc ngược V6 an toàn. Canonical
+  strategy replay adapter vẫn chưa tồn tại, vì vậy mục PASS "cùng decision
+  hash" ở trên cố ý chưa đánh dấu; deterministic transport hash không được giả
+  làm strategy decision hash.
 
 ---
 

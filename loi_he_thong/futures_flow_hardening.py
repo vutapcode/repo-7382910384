@@ -38,7 +38,7 @@ def _update_bias_flow_bucket(state, recv_ms, is_sell, quantity):
     return rows
 
 
-def _apply_spot_event(state, data, recv_ms):
+def _apply_spot_event(state, data, recv_ms, recv_mono_ns=None):
     """Apply one Binance Spot aggTrade to the canonical CVD input queue."""
     data = dict(data or {})
     try:
@@ -48,6 +48,9 @@ def _apply_spot_event(state, data, recv_ms):
             "ban_chu_dong": bool(data["m"]),
             "thoi_gian_ms": int(recv_ms),
             "exchange_time_ms": int(data.get("E", 0) or 0),
+            "receive_time_monotonic_ns": int(
+                recv_mono_ns or time.monotonic_ns()
+            ),
             "nguon": "SPOT",
         }
     except (KeyError, TypeError, ValueError):
@@ -61,11 +64,13 @@ def _apply_spot_event(state, data, recv_ms):
         event_time_ms=row["exchange_time_ms"] or recv_ms,
         price=row["gia"], qty=row["khoi_luong"],
         aggressive_buy=not row["ban_chu_dong"],
+        receive_time_monotonic_ns=row["receive_time_monotonic_ns"],
+        source_health="FRESH",
     )
     return "TRADE"
 
 
-def _apply_futures_event(state, data, recv_ms):
+def _apply_futures_event(state, data, recv_ms, recv_mono_ns=None):
     """Apply one Binance Futures aggTrade to the bounded canonical flow ring."""
     data = dict(data or {})
     event_type = str(data.get("e", ""))
@@ -77,6 +82,9 @@ def _apply_futures_event(state, data, recv_ms):
         "ban_chu_dong": bool(data["m"]),
         "thoi_gian_ms": int(recv_ms),
         "exchange_time_ms": int(data.get("E", 0) or 0),
+        "receive_time_monotonic_ns": int(
+            recv_mono_ns or time.monotonic_ns()
+        ),
         "nguon": "FUTURES",
     }
     ring = _ensure_ring(state)
@@ -91,6 +99,8 @@ def _apply_futures_event(state, data, recv_ms):
         event_time_ms=row["exchange_time_ms"] or recv_ms,
         price=row["gia"], qty=row["khoi_luong"],
         aggressive_buy=not row["ban_chu_dong"],
+        receive_time_monotonic_ns=row["receive_time_monotonic_ns"],
+        source_health="FRESH",
     )
     return "TRADE"
 
@@ -201,12 +211,27 @@ def install(base):
             try:
                 async with mod.websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
                     reset_spot_epoch(state)
+                    last_agg_id = None
                     logging.info("[SPOT FLOW] hardened local-time collector epoch=%s: %s", state.spot_flow_epoch, symbol.upper())
                     async for raw in ws:
                         try:
                             data = mod.orjson.loads(raw)
                             recv_ms = time.time() * 1000.0
-                            _apply_spot_event(state, data, recv_ms)
+                            recv_mono_ns = time.monotonic_ns()
+                            agg_id = int(data.get("a", 0) or 0)
+                            if (
+                                last_agg_id is not None and agg_id > 0
+                                and agg_id != last_agg_id + 1
+                            ):
+                                logging.warning(
+                                    "[SPOT FLOW] sequence gap expected=%s actual=%s; new epoch",
+                                    last_agg_id + 1, agg_id,
+                                )
+                                reset_spot_epoch(state)
+                            if _apply_spot_event(
+                                state, data, recv_ms, recv_mono_ns
+                            ) == "TRADE" and agg_id > 0:
+                                last_agg_id = agg_id
                         except (TypeError, ValueError):
                             continue
             except asyncio.CancelledError:
@@ -230,12 +255,27 @@ def install(base):
             try:
                 async with mod.websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
                     reset_futures_epoch(state)
+                    last_agg_id = None
                     logging.info("[FUTURES FLOW] hardened Mainnet local-time collector epoch=%s: %s", state.futures_flow_epoch, symbol.upper())
                     async for raw in ws:
                         try:
                             data = _unwrap_combined_stream(mod.orjson.loads(raw))
                             recv_ms = time.time() * 1000.0
-                            _apply_futures_event(state, data, recv_ms)
+                            recv_mono_ns = time.monotonic_ns()
+                            agg_id = int(data.get("a", 0) or 0)
+                            if (
+                                last_agg_id is not None and agg_id > 0
+                                and agg_id != last_agg_id + 1
+                            ):
+                                logging.warning(
+                                    "[FUTURES FLOW] sequence gap expected=%s actual=%s; new epoch",
+                                    last_agg_id + 1, agg_id,
+                                )
+                                reset_futures_epoch(state)
+                            if _apply_futures_event(
+                                state, data, recv_ms, recv_mono_ns
+                            ) == "TRADE" and agg_id > 0:
+                                last_agg_id = agg_id
                         except (KeyError, TypeError, ValueError):
                             continue
             except asyncio.CancelledError:

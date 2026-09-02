@@ -87,7 +87,7 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(row["availability_delay_ms"], 380)
         self.assertEqual(
             row["signal_schema_version"],
-            "IGNITION_SIGNALS_V3_DIRECTIONAL_ACCELERATION",
+            "IGNITION_SIGNALS_V4_CANONICAL_TEMPORAL_CONTRACT",
         )
 
     def test_bucket_rollover_uses_trigger_receive_time_as_availability(self):

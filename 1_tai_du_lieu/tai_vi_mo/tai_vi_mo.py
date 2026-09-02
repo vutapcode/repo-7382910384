@@ -47,6 +47,10 @@ async def tai_du_lieu_vi_mo(symbol: str, bo_nho_ram, chu_ky_giay: float = 15.0):
     next_funding_at = 0.0
     refresh_event = asyncio.Event()
     bo_nho_ram.oi_refresh_event = refresh_event
+    bo_nho_ram.open_interest_epoch = int(
+        getattr(bo_nho_ram, "open_interest_epoch", 0) or 0
+    ) + 1
+    oi_chain_valid = False
     if bool(getattr(bo_nho_ram, "oi_refresh_pending", False)):
         refresh_event.set()
         bo_nho_ram.oi_refresh_pending = False
@@ -61,13 +65,30 @@ async def tai_du_lieu_vi_mo(symbol: str, bo_nho_ram, chu_ky_giay: float = 15.0):
                     oi_now = float(data_oi["openInterest"])
 
                 now = time.time()
+                available_mono_ns = time.monotonic_ns()
+                exchange_time_ms = int(data_oi.get("time", 0) or 0)
                 previous_oi = float(getattr(bo_nho_ram, "open_interest", 0.0) or 0.0)
                 previous_ts = float(
                     getattr(bo_nho_ram, "open_interest_updated_at", 0.0) or 0.0
                 )
-                if previous_oi > 0.0 and previous_ts > 0.0:
+                previous_exchange_ms = int(
+                    getattr(
+                        bo_nho_ram, "open_interest_exchange_time_ms", 0
+                    ) or 0
+                )
+                ordered_exchange_pair = bool(
+                    oi_chain_valid and previous_oi > 0.0 and previous_ts > 0.0
+                    and exchange_time_ms > previous_exchange_ms > 0
+                )
+                if ordered_exchange_pair:
                     bo_nho_ram.prev_open_interest = previous_oi
                     bo_nho_ram.prev_open_interest_updated_at = previous_ts
+                    bo_nho_ram.prev_open_interest_exchange_time_ms = (
+                        previous_exchange_ms
+                    )
+                    bo_nho_ram.prev_open_interest_epoch = int(
+                        bo_nho_ram.open_interest_epoch
+                    )
                     bo_nho_ram.open_interest_change_pct = (
                         (oi_now - previous_oi) / previous_oi * 100.0
                     )
@@ -77,10 +98,19 @@ async def tai_du_lieu_vi_mo(symbol: str, bo_nho_ram, chu_ky_giay: float = 15.0):
                 else:
                     bo_nho_ram.prev_open_interest = 0.0
                     bo_nho_ram.prev_open_interest_updated_at = 0.0
+                    bo_nho_ram.prev_open_interest_exchange_time_ms = 0
+                    bo_nho_ram.prev_open_interest_epoch = 0
                     bo_nho_ram.open_interest_change_pct = 0.0
                     bo_nho_ram.open_interest_change_window_seconds = 0.0
                 bo_nho_ram.open_interest = oi_now
                 bo_nho_ram.open_interest_updated_at = now
+                bo_nho_ram.open_interest_available_time_ms = int(now * 1000.0)
+                bo_nho_ram.open_interest_available_time_monotonic_ns = (
+                    available_mono_ns
+                )
+                bo_nho_ram.open_interest_exchange_time_ms = exchange_time_ms
+                bo_nho_ram.open_interest_source_health = "FRESH"
+                oi_chain_valid = True
                 bo_nho_ram.thoi_gian_vi_mo_cuoi = now
 
                 if now >= next_funding_at:
@@ -115,12 +145,24 @@ async def tai_du_lieu_vi_mo(symbol: str, bo_nho_ram, chu_ky_giay: float = 15.0):
                         await asyncio.sleep(MIN_OI_POLL_SECONDS - since_poll)
 
             except aiohttp.ClientError as exc:
+                if oi_chain_valid:
+                    bo_nho_ram.open_interest_epoch = int(
+                        getattr(bo_nho_ram, "open_interest_epoch", 0) or 0
+                    ) + 1
+                oi_chain_valid = False
+                bo_nho_ram.open_interest_source_health = "DEGRADED"
                 bo_nho_ram.vi_mo_last_error = f"{type(exc).__name__}: {exc}"
                 logging.warning("[VI MO] REST error: %s. Retry in 2s...", exc)
                 await asyncio.sleep(2.0)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if oi_chain_valid:
+                    bo_nho_ram.open_interest_epoch = int(
+                        getattr(bo_nho_ram, "open_interest_epoch", 0) or 0
+                    ) + 1
+                oi_chain_valid = False
+                bo_nho_ram.open_interest_source_health = "DEGRADED"
                 bo_nho_ram.vi_mo_last_error = f"{type(exc).__name__}: {exc}"
                 logging.error("[VI MO] Unexpected error: %s. Retry in 3s...", exc)
                 await asyncio.sleep(3.0)

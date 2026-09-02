@@ -23,8 +23,23 @@ PARQUET_SCHEMA = pa.schema((
     ('source', pa.string()),
     ('symbol', pa.string()),
     ('stream', pa.string()),
+    ('event_contract_version', pa.string()),
+    ('event_id', pa.string()),
+    ('exchange_event_time_ms', pa.int64()),
     ('event_time_ms', pa.int64()),
     ('receive_time_ms', pa.int64()),
+    ('receive_time_monotonic_ns', pa.int64()),
+    ('available_time_ms', pa.int64()),
+    ('available_time_monotonic_ns', pa.int64()),
+    ('epoch', pa.int64()),
+    ('source_health', pa.string()),
+    ('payload_version', pa.string()),
+    ('clock_offset_ms', pa.float64()),
+    ('clock_jitter_ms', pa.float64()),
+    ('clock_uncertainty_ms', pa.float64()),
+    ('batching_uncertainty_ms', pa.float64()),
+    ('temporal_uncertainty_ms', pa.float64()),
+    ('temporal_status', pa.string()),
     ('sequence_start', pa.int64()),
     ('sequence_end', pa.int64()),
     ('previous_sequence', pa.int64()),
@@ -94,8 +109,37 @@ def _parquet_row(record):
         'source': str(record.get('source', '')),
         'symbol': str(record.get('symbol', '')),
         'stream': str(record.get('stream', '')),
+        'event_contract_version': str(record.get('event_contract_version', '')),
+        'event_id': str(record.get('event_id', '')),
+        'exchange_event_time_ms': int(
+            record.get('exchange_event_time_ms', record.get('event_time_ms', 0)) or 0
+        ),
         'event_time_ms': int(record.get('event_time_ms', 0) or 0),
         'receive_time_ms': int(record.get('receive_time_ms', 0) or 0),
+        'receive_time_monotonic_ns': int(
+            record.get('receive_time_monotonic_ns', 0) or 0
+        ),
+        'available_time_ms': int(
+            record.get('available_time_ms', record.get('receive_time_ms', 0)) or 0
+        ),
+        'available_time_monotonic_ns': int(
+            record.get('available_time_monotonic_ns', 0) or 0
+        ),
+        'epoch': int(record.get('epoch', 0) or 0),
+        'source_health': str(record.get('source_health', 'UNKNOWN')),
+        'payload_version': str(record.get('payload_version', 'UNKNOWN')),
+        'clock_offset_ms': float(record.get('clock_offset_ms', 0.0) or 0.0),
+        'clock_jitter_ms': float(record.get('clock_jitter_ms', 0.0) or 0.0),
+        'clock_uncertainty_ms': float(
+            record.get('clock_uncertainty_ms', 0.0) or 0.0
+        ),
+        'batching_uncertainty_ms': float(
+            record.get('batching_uncertainty_ms', 0.0) or 0.0
+        ),
+        'temporal_uncertainty_ms': float(
+            record.get('temporal_uncertainty_ms', 0.0) or 0.0
+        ),
+        'temporal_status': str(record.get('temporal_status', 'UNSAFE_OR_UNKNOWN')),
         'sequence_start': record.get('sequence_start'),
         'sequence_end': record.get('sequence_end'),
         'previous_sequence': record.get('previous_sequence'),

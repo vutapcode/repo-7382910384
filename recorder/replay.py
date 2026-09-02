@@ -23,6 +23,7 @@ from recorder.liquidity_response import (
     LiquidityResponseAnalyzer, SpotLiquidityResponseAnalyzer,
 )
 from recorder.causal_world_model import CausalWorldModel
+from loi_he_thong.market_event_contract import available_time_ms
 
 
 DEFAULT_DATA_ROOT = Path('/home/ubuntu/smc2026_data')
@@ -80,10 +81,10 @@ def _iter_jsonl(path, start_ms=None, end_ms=None):
             if not line.strip():
                 continue
             record = orjson.loads(line)
-            receive_ms = int(record.get('receive_time_ms', 0) or 0)
-            if start_ms is not None and receive_ms < start_ms:
+            available_ms = available_time_ms(record)
+            if start_ms is not None and available_ms < start_ms:
                 continue
-            if end_ms is not None and receive_ms > end_ms:
+            if end_ms is not None and available_ms > end_ms:
                 continue
             yield record
 
@@ -100,20 +101,32 @@ def wal_files(data_root, streams=None):
 def _iter_parquet(path, start_ms=None, end_ms=None):
     """Yield recorder rows from one compacted partition without full-table RAM."""
     parquet = pq.ParquetFile(path)
-    columns = (
+    requested = (
         'schema_version', 'code_version', 'config_version', 'source', 'symbol',
-        'stream', 'event_time_ms', 'receive_time_ms', 'sequence_start',
+        'stream', 'event_contract_version', 'event_id',
+        'exchange_event_time_ms', 'event_time_ms', 'receive_time_ms',
+        'receive_time_monotonic_ns', 'available_time_ms',
+        'available_time_monotonic_ns', 'epoch', 'source_health',
+        'payload_version', 'clock_offset_ms', 'clock_jitter_ms',
+        'clock_uncertainty_ms', 'batching_uncertainty_ms',
+        'temporal_uncertainty_ms', 'temporal_status', 'sequence_start',
         'sequence_end', 'previous_sequence', 'payload_json',
     )
+    available_columns = set(parquet.schema_arrow.names)
+    columns = tuple(name for name in requested if name in available_columns)
     for batch in parquet.iter_batches(batch_size=2_000, columns=columns):
         for row in batch.to_pylist():
-            receive_ms = int(row.get('receive_time_ms', 0) or 0)
-            if start_ms is not None and receive_ms < start_ms:
-                continue
-            if end_ms is not None and receive_ms > end_ms:
-                continue
             payload = row.pop('payload_json', b'{}') or b'{}'
             row['payload'] = orjson.loads(payload)
+            available_ms = available_time_ms(row)
+            row.setdefault('available_time_ms', available_ms)
+            row.setdefault(
+                'exchange_event_time_ms', row.get('event_time_ms', 0)
+            )
+            if start_ms is not None and available_ms < start_ms:
+                continue
+            if end_ms is not None and available_ms > end_ms:
+                continue
             yield row
 
 
@@ -145,7 +158,7 @@ def raw_files(data_root, streams=None):
 
 
 def iter_merged_records(data_root, streams=None, start_ms=None, end_ms=None):
-    """K-way merge Parquet plus WAL in deterministic receive order."""
+    """K-way merge Parquet plus WAL in deterministic availability order."""
     iterators = []
     heap = []
     for index, (kind, path) in enumerate(raw_files(data_root, streams)):
@@ -157,7 +170,7 @@ def iter_merged_records(data_root, streams=None, start_ms=None, end_ms=None):
         except StopIteration:
             continue
         key = (
-            int(record.get('receive_time_ms', 0) or 0),
+            available_time_ms(record),
             int(record.get('event_time_ms', 0) or 0),
             str(record.get('stream', '')),
             index,
@@ -171,7 +184,7 @@ def iter_merged_records(data_root, streams=None, start_ms=None, end_ms=None):
         except StopIteration:
             continue
         key = (
-            int(following.get('receive_time_ms', 0) or 0),
+            available_time_ms(following),
             int(following.get('event_time_ms', 0) or 0),
             str(following.get('stream', '')),
             index,
@@ -275,7 +288,7 @@ class DeterministicReplay:
     def _in_metrics(self, record):
         return (
             self.metrics_start_ms is None
-            or int(record.get('receive_time_ms', 0) or 0) >= self.metrics_start_ms
+            or available_time_ms(record) >= self.metrics_start_ms
         )
 
     def _feature_in_metrics(self, record):
@@ -299,7 +312,9 @@ class DeterministicReplay:
         return self.expected_flow[int(record.get('event_time_ms', 0) or 0) // 1000]
 
     def apply(self, record):
-        self.clock.advance(record.get('receive_time_ms', 0))
+        # Decision/research handlers may inspect only evidence available by
+        # this replay tick. Exchange event time remains market metadata.
+        self.clock.advance(available_time_ms(record))
         stream = str(record.get('stream', ''))
         payload = record.get('payload', {}) or {}
         in_metrics = self._in_metrics(record)

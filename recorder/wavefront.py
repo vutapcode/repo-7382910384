@@ -20,6 +20,7 @@ from loi_he_thong import shadow_risk_guard
 from loi_he_thong import (
     entry_economics_v2, ignition_core, ignition_signals, verified_cost_model,
 )
+from loi_he_thong.market_event_contract import available_time_ms
 from recorder.residual_edge import ResidualEdgeBook
 
 
@@ -396,7 +397,7 @@ class WavefrontShadowEvaluator:
         payload = record.get("payload") or {}
         event = str(payload.get("event") or "").upper()
         body = payload.get("payload") or payload
-        now_ms = int(record.get("receive_time_ms", 0) or 0)
+        now_ms = available_time_ms(record)
         self.residual.observe_core_event(event, body, now_ms)
         if event in ("ENTRY", "EXIT"):
             self._persist()
@@ -446,6 +447,23 @@ class WavefrontShadowEvaluator:
         stream = str(record.get("stream") or "")
         if stream not in TRADE_STREAMS:
             return True
+        venue = TRADE_STREAMS[stream]
+        incoming_epoch = int(record.get("epoch", 0) or 0)
+        known_epoch = int(self.epochs.get(stream, 0) or 0)
+        if incoming_epoch > 0:
+            if known_epoch > 0 and incoming_epoch != known_epoch:
+                self._invalidate_all(
+                    "RECORDED_SOURCE_EPOCH_CHANGED", available_time_ms(record)
+                )
+                self.last_sequence.pop(stream, None)
+                self.clock[venue] = ClockQuality()
+                self.flow[venue] = FlowBaseline()
+            self.epochs[stream] = incoming_epoch
+        if str(record.get("source_health") or "FRESH").upper() != "FRESH":
+            self._invalidate_all(
+                "RECORDED_SOURCE_NOT_FRESH", available_time_ms(record)
+            )
+            return False
         last = self.last_sequence.get(stream)
         previous = record.get("previous_sequence")
         start = record.get("sequence_start")
@@ -457,8 +475,9 @@ class WavefrontShadowEvaluator:
         if end is not None:
             self.last_sequence[stream] = int(end)
         if gap:
-            self.epochs[stream] += 1
-            self._invalidate_all("EXECUTED_FLOW_SEQUENCE_GAP", int(record.get("receive_time_ms", 0) or 0))
+            if incoming_epoch <= 0:
+                self.epochs[stream] += 1
+            self._invalidate_all("EXECUTED_FLOW_SEQUENCE_GAP", available_time_ms(record))
         return not gap
 
     def _invalidate_all(self, reason, now_ms):
@@ -474,7 +493,7 @@ class WavefrontShadowEvaluator:
     def _clock_signal(self, record, venue):
         payload = record.get("payload") or {}
         event_ms = int(payload.get("last_event_time_ms") or record.get("event_time_ms", 0) or 0)
-        receive_ms = int(record.get("receive_time_ms", 0) or 0)
+        receive_ms = available_time_ms(record)
         corrected = self.clock[venue].observe(event_ms, receive_ms)
         signal = self.flow[venue].score(
             payload, venue, self.warmup_samples,
@@ -485,6 +504,16 @@ class WavefrontShadowEvaluator:
             "event_time_ms": event_ms, "receive_time_ms": receive_ms,
             "corrected_event_time_ms": corrected,
             "clock_uncertainty_ms": self.clock[venue].uncertainty_ms,
+            "batching_uncertainty_ms": _f(
+                record.get("batching_uncertainty_ms")
+            ),
+            "temporal_uncertainty_ms": (
+                self.clock[venue].uncertainty_ms
+                + _f(record.get("batching_uncertainty_ms"))
+            ),
+            "source_health": str(
+                record.get("source_health") or "FRESH"
+            ).upper(),
             "sequence_end": record.get("sequence_end"),
             "epoch": self.epochs[str(record.get("stream"))],
             "clock_valid": self.clock[venue].last_valid,
@@ -499,7 +528,7 @@ class WavefrontShadowEvaluator:
     def _update_market_state(self, record, signal=None):
         stream = str(record.get("stream") or "")
         payload = record.get("payload") or {}
-        now_ms = int(record.get("receive_time_ms", 0) or 0)
+        now_ms = available_time_ms(record)
         now = now_ms / 1000.0
         if stream == "binance_spot_ticker":
             self.state.best_bid = _f(payload.get("bid", payload.get("b")))
@@ -683,7 +712,13 @@ class WavefrontShadowEvaluator:
             return
         proposal = episode["proposal"]
         corrected_delta = signal["corrected_event_time_ms"] - proposal["corrected_event_time_ms"]
-        uncertainty = signal["clock_uncertainty_ms"] + proposal["clock_uncertainty_ms"]
+        uncertainty = (
+            _f(signal.get("temporal_uncertainty_ms"), signal["clock_uncertainty_ms"])
+            + _f(
+                proposal.get("temporal_uncertainty_ms"),
+                proposal["clock_uncertainty_ms"],
+            )
+        )
         lead_lower_bound = corrected_delta - uncertainty
         if corrected_delta < 0.0:
             self._expire_episode(signal["receive_time_ms"], "FUTURES_LED")
@@ -694,6 +729,13 @@ class WavefrontShadowEvaluator:
                 "decision": "WAIT", "reason": "CAUSAL_LEAD_UNCERTAIN",
                 "corrected_follow_ms": round(corrected_delta, 4),
                 "lead_lower_bound_ms": round(lead_lower_bound, 4),
+                "lead_measurement": {
+                    "status": "SIMULTANEOUS_OR_UNRESOLVED",
+                    "observed_gap_ms": round(corrected_delta, 4),
+                    "uncertainty_bound_ms": round(uncertainty, 4),
+                    "lead_lower_bound_ms": round(lead_lower_bound, 4),
+                    "minimum_decisive_lead_ms": LEAD_FLOOR_MS,
+                },
             }, signal["receive_time_ms"])
             return
 
@@ -702,16 +744,36 @@ class WavefrontShadowEvaluator:
             confirmation="FUTURES_FOLLOWER",
             corrected_follow_ms=corrected_delta,
             lead_lower_bound_ms=lead_lower_bound,
+            uncertainty_bound_ms=uncertainty,
         )
 
     def _qualify_episode(
         self, signal, *, confirmation, corrected_follow_ms=None,
-        lead_lower_bound_ms=None,
+        lead_lower_bound_ms=None, uncertainty_bound_ms=None,
     ):
         """Finish one mirror episode without granting production authority."""
         if self.episode is None:
             return
         episode = self.episode
+        lead_measurement = {
+            "status": (
+                "MEASURED_LEAD" if lead_lower_bound_ms is not None
+                else "NOT_REQUIRED_DUAL_CASH"
+            ),
+            "observed_gap_ms": (
+                round(corrected_follow_ms, 4)
+                if corrected_follow_ms is not None else None
+            ),
+            "uncertainty_bound_ms": (
+                round(uncertainty_bound_ms, 4)
+                if uncertainty_bound_ms is not None else None
+            ),
+            "lead_lower_bound_ms": (
+                round(lead_lower_bound_ms, 4)
+                if lead_lower_bound_ms is not None else None
+            ),
+            "minimum_decisive_lead_ms": LEAD_FLOOR_MS,
+        }
         if not self._feeds_ready():
             self._publish("wavefront_candidate", {
                 **self._episode_payload(episode),
@@ -754,6 +816,7 @@ class WavefrontShadowEvaluator:
                     round(lead_lower_bound_ms, 4)
                     if lead_lower_bound_ms is not None else None
                 ),
+                "lead_measurement": lead_measurement,
             }, signal["receive_time_ms"])
             self.episode = None
             return
@@ -772,6 +835,7 @@ class WavefrontShadowEvaluator:
                     round(lead_lower_bound_ms, 4)
                     if lead_lower_bound_ms is not None else None
                 ),
+                "lead_measurement": lead_measurement,
             }, signal["receive_time_ms"])
             return
 
@@ -813,6 +877,7 @@ class WavefrontShadowEvaluator:
                 round(lead_lower_bound_ms, 4)
                 if lead_lower_bound_ms is not None else None
             ),
+            "lead_measurement": lead_measurement,
             "exchange_independence": {
                 "cash_group": sorted(episode["cash_hits"]),
                 "derivative_group": ["futures", "open_interest"],
@@ -1143,7 +1208,7 @@ class WavefrontShadowEvaluator:
         stream = str(record.get("stream") or "")
         if stream in GENERATED_STREAMS:
             return
-        now_ms = int(record.get("receive_time_ms", 0) or 0)
+        now_ms = available_time_ms(record)
         if now_ms <= 0:
             return
         self._flush_orphans(now_ms)

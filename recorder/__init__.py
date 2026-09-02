@@ -1,5 +1,6 @@
 """SMC2026 market black-box recorder."""
 
-# V6 adds Coinbase L2 and the authority-free causal world-model research
-# stream. It is a hard cohort boundary: older rows cannot claim L2 coverage.
-SCHEMA_VERSION = 6
+# V7 adds the canonical temporal envelope.  It is a hard cohort boundary:
+# historical V6 rows may be replayed through compatibility fallbacks, but may
+# not claim monotonic availability, source health, or epoch continuity.
+SCHEMA_VERSION = 7

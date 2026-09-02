@@ -5,8 +5,7 @@ from pathlib import Path
 
 _HEALTHY_CHECK_INTERVAL_SEC = 30.0
 _PRESSURE_RECHECK_INTERVAL_SEC = 5.0
-_MIN_FREE_BYTES = int(os.environ.get("SMC_MIN_FREE_DISK_BYTES", str(256 * 1024 * 1024)))
-_MIN_FREE_RATIO = float(os.environ.get("SMC_MIN_FREE_DISK_RATIO", "0.02"))
+from loi_he_thong.storage_health import measure as measure_storage
 
 
 def _journal_root():
@@ -17,12 +16,8 @@ def _journal_root():
 
 
 def _measure(path):
-    stats = os.statvfs(str(path))
-    block = int(stats.f_frsize or stats.f_bsize or 1)
-    free_bytes = int(stats.f_bavail) * block
-    total_bytes = int(stats.f_blocks) * block
-    free_ratio = 0.0 if total_bytes <= 0 else free_bytes / total_bytes
-    return free_bytes, free_ratio
+    status = measure_storage(path)
+    return status["free_bytes"], status["free_ratio"]
 
 
 def _wait_result(base, state, now, side, reason):
@@ -53,8 +48,12 @@ def install(wrapper):
         check_after = float(getattr(state_obj, "shadow_disk_check_after_mono", 0.0) or 0.0)
         if mono >= check_after:
             try:
-                free_bytes, free_ratio = _measure(_journal_root())
-                pressure = free_bytes < _MIN_FREE_BYTES or free_ratio < _MIN_FREE_RATIO
+                storage = measure_storage(_journal_root())
+                free_bytes, free_ratio = (
+                    storage["free_bytes"], storage["free_ratio"]
+                )
+                pressure = bool(storage["pressure"])
+                state_obj.shadow_storage_health = storage
                 state_obj.shadow_disk_free_bytes = free_bytes
                 state_obj.shadow_disk_free_ratio = free_ratio
                 state_obj.shadow_disk_pressure = pressure

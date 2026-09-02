@@ -2,12 +2,13 @@
 
 import asyncio
 import os
-import shutil
 import tempfile
 import time
 from collections import Counter, deque
 
 import orjson
+
+from loi_he_thong.storage_health import measure as measure_storage
 
 
 class HealthState:
@@ -18,6 +19,7 @@ class HealthState:
         self.written = Counter()
         self.sampled_out = Counter()
         self.last_event_ms = {}
+        self.last_available_ms = {}
         self.connections = {}
         self.reconnects = Counter()
         self.errors = Counter()
@@ -48,9 +50,12 @@ class HealthState:
         self.liquidity_response = None
         self.causal_world_model = None
 
-    def saw(self, stream, event_time_ms):
+    def saw(self, stream, event_time_ms, available_time_ms=None):
         self.received[stream] += 1
         self.last_event_ms[stream] = int(event_time_ms or 0)
+        self.last_available_ms[stream] = int(
+            available_time_ms or event_time_ms or 0
+        )
 
     def connection(self, name, connected):
         self.connections[name] = bool(connected)
@@ -119,11 +124,8 @@ class HealthState:
 
     def snapshot(self):
         now_ms = time.time_ns() // 1_000_000
-        usage = shutil.disk_usage(self.config.data_root)
-        disk_free_ratio = usage.free / usage.total if usage.total else 0.0
-        disk_pressure = bool(
-            usage.free < 5 * 1024 * 1024 * 1024 or disk_free_ratio < 0.10
-        )
+        disk = measure_storage(self.config.data_root)
+        disk_pressure = bool(disk["pressure"])
         operational_problem = bool(
             self.dropped or self.writer_errors or self.decision_tap_parse_errors
             or self.depth_gaps
@@ -162,9 +164,10 @@ class HealthState:
             'written': dict(self.written),
             'sampled_out': dict(self.sampled_out),
             'last_event_ms': dict(self.last_event_ms),
+            'last_available_ms': dict(self.last_available_ms),
             'event_age_ms': {
                 name: max(0, now_ms - timestamp)
-                for name, timestamp in self.last_event_ms.items()
+                for name, timestamp in self.last_available_ms.items()
                 if timestamp > 0
             },
             'queue': {
@@ -199,13 +202,7 @@ class HealthState:
                 'count_by_source': dict(self.late_event_count_by_source),
                 'delay_ms': self._late_delay_summary(),
             },
-            'disk': {
-                'total_bytes': usage.total,
-                'used_bytes': usage.used,
-                'free_bytes': usage.free,
-                'free_ratio': disk_free_ratio,
-                'pressure': disk_pressure,
-            },
+            'disk': disk,
         }
 
 

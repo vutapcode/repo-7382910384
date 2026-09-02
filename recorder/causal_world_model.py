@@ -71,19 +71,32 @@ class MarketEventV1:
     sequence_start: int | None
     sequence_end: int | None
     clock_valid: bool
+    source_health: str = "UNKNOWN"
+    temporal_uncertainty_ms: float = 0.0
 
     @classmethod
     def from_record(cls, record):
         payload = dict(record.get("payload") or {})
         receive = int(record.get("receive_time_ms", 0) or 0)
-        event = int(record.get("event_time_ms", receive) or receive)
-        available = int(payload.get("batch_available_time_ms", receive) or receive)
+        event = int(
+            record.get("exchange_event_time_ms")
+            or record.get("event_time_ms")
+            or receive
+        )
+        available = int(
+            record.get("available_time_ms")
+            or payload.get("batch_available_time_ms")
+            or receive
+        )
+        health = str(record.get("source_health") or "UNKNOWN").upper()
         # Availability, never corrected exchange time, is the no-lookahead
-        # boundary.  A malformed future availability is fail-closed.
+        # boundary. Availability may follow socket receipt because parsing and
+        # micro-batch finalization take time; it may never precede receipt.
         valid = bool(
-            receive > 0 and available <= receive
+            receive > 0 and available >= receive
             and event <= receive + 1_000
             and payload.get("clock_valid", True)
+            and health not in {"STALE", "DEAD", "CONTRADICTORY"}
         )
         return cls(
             stream=str(record.get("stream") or ""),
@@ -91,10 +104,14 @@ class MarketEventV1:
             event_time_ms=event,
             receive_time_ms=receive,
             available_time_ms=available,
-            epoch=int(payload.get("epoch", 0) or 0),
+            epoch=int(record.get("epoch", payload.get("epoch", 0)) or 0),
             sequence_start=record.get("sequence_start"),
             sequence_end=record.get("sequence_end"),
             clock_valid=valid,
+            source_health=health,
+            temporal_uncertainty_ms=float(
+                record.get("temporal_uncertainty_ms", 0.0) or 0.0
+            ),
         )
 
 

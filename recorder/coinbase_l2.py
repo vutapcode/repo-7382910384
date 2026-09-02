@@ -157,7 +157,10 @@ class CoinbaseL2UpdateBatcher:
             int(receive_time_ms) // self.interval_ms * self.interval_ms
         )
 
-    def push(self, receive_time_ms, event_time_ms, changes):
+    def push(
+        self, receive_time_ms, event_time_ms, changes,
+        receive_time_monotonic_ns=None,
+    ):
         receive_time_ms = int(receive_time_ms)
         bucket_start = receive_time_ms // self.interval_ms * self.interval_ms
         completed = None
@@ -174,6 +177,10 @@ class CoinbaseL2UpdateBatcher:
         self._events.append({
             "event_time_ms": int(event_time_ms),
             "receive_time_ms": receive_time_ms,
+            "receive_time_monotonic_ns": (
+                int(receive_time_monotonic_ns)
+                if receive_time_monotonic_ns is not None else None
+            ),
             "changes": clean_changes,
         })
         return completed
@@ -198,6 +205,12 @@ class CoinbaseL2UpdateBatcher:
             "last_event_time_ms": events[-1]["event_time_ms"],
             "first_receive_time_ms": events[0]["receive_time_ms"],
             "last_receive_time_ms": events[-1]["receive_time_ms"],
+            "first_receive_monotonic_ns": events[0].get(
+                "receive_time_monotonic_ns"
+            ),
+            "last_receive_monotonic_ns": events[-1].get(
+                "receive_time_monotonic_ns"
+            ),
             "update_count": len(events),
             "change_count": sum(len(row["changes"]) for row in events),
             "events": events,

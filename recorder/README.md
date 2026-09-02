@@ -53,7 +53,12 @@ Futures partial depth top-20 ở 100 ms chỉ dựng BBO và kiểm tra continui
 RAM; wall/depth bands không được ghi. OI recorder được poll theo cấu hình riêng
 và không đọc state chiến thuật của bot.
 
-Mỗi record V2 có `code_version` và `config_version`. Với runtime Tier-S hiện
+Mỗi record schema V7 có `code_version`, `config_version` và canonical temporal
+envelope: exchange event time, socket receive time, decision-availability time,
+monotonic clocks, epoch, source health, payload version và uncertainty. Replay
+chỉ cho event có authority từ `available_time_ms`; `event_time_ms` chỉ mô tả
+thị trường và không được backdate quyết định. V6 cũ vẫn đọc được qua fallback
+nhưng không được nhận nhãn continuity/clock-quality V7. Với runtime Tier-S hiện
 tại, recorder ưu tiên ba lớp bằng chứng:
 
 1. `DECISION_EVALUATED` mang `TIER_S_DECISION_RECORD_V6_CAUSAL_PROOF_SEMANTICS`: cùng một `cycle_id`
@@ -85,7 +90,7 @@ và debug không gắn `cycle_id` không được xem là bằng chứng quyết
 
 ## Replay
 
-Replay dùng `receive_time_ms` làm đồng hồ ảo, merge các stream bằng k-way merge
+Replay dùng `available_time_ms` làm đồng hồ ảo, merge các stream bằng k-way merge
 để RAM không tăng theo kích thước lịch sử. Mặc định warm-up 90 giây để nạp depth
 checkpoint gần nhất:
 

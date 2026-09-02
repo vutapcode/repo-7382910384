@@ -5,6 +5,7 @@ import uuid
 from collections import defaultdict, deque
 
 from recorder import SCHEMA_VERSION
+from loi_he_thong.market_event_contract import available_time_ms
 
 
 def _f(value, default=0.0):
@@ -154,7 +155,7 @@ class FeatureEngine:
         event_ms = int(record.get('event_time_ms', 0) or 0)
         if event_ms <= 0:
             return
-        receive_ms = int(record.get('receive_time_ms', event_ms) or event_ms)
+        receive_ms = available_time_ms(record)
         second = event_ms // 1000
         if self.flushed_through is not None and second <= self.flushed_through:
             self.health.sampled_out['feature_event_too_late'] += 1
@@ -271,7 +272,7 @@ class FeatureEngine:
         event_ms = int(record.get('event_time_ms', 0) or 0)
         if event_ms <= 0:
             return
-        receive_ms = int(record.get('receive_time_ms', event_ms) or event_ms)
+        receive_ms = available_time_ms(record)
         payload = record.get('payload', {}) or {}
         macro_updates = {}
         if stream in ('open_interest', 'premium_index', 'mark_price'):

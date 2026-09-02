@@ -42,6 +42,14 @@ class MarketEventTests(unittest.TestCase):
         row = record("binance_spot_trade_100ms", 1_000, {})
         row["receive_time_ms"] = 1_100
         row["payload"]["batch_available_time_ms"] = 1_101
+        event = MarketEventV1.from_record(row)
+        self.assertTrue(event.clock_valid)
+        self.assertEqual(event.available_time_ms, 1_101)
+
+    def test_availability_before_socket_receipt_fails_closed(self):
+        row = record("binance_spot_trade_100ms", 1_000, {})
+        row["receive_time_ms"] = 1_100
+        row["available_time_ms"] = 1_099
         self.assertFalse(MarketEventV1.from_record(row).clock_valid)
 
 

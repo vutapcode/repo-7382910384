@@ -171,12 +171,15 @@ async def hung_coinbase_spot(product_id: str, bo_nho_ram):
                                 getattr(bo_nho_ram, 'coinbase_cvd_sell_total', 0.0) or 0.0
                             ) + abs(delta)
                         now_ms = time.time() * 1000.0
+                        receive_mono_ns = time.monotonic_ns()
                         ignition_signals.observe_trade(
                             bo_nho_ram, "coinbase_spot",
                             receive_time_ms=now_ms,
                             event_time_ms=_coinbase_event_ms(data.get("time"), now_ms),
                             price=float(data.get("price", 0.0) or 0.0),
                             qty=abs(delta), aggressive_buy=delta > 0.0,
+                            receive_time_monotonic_ns=receive_mono_ns,
+                            source_health="FRESH",
                         )
                         f3.push(now_ms, delta)
                         f1m.push(now_ms, delta)

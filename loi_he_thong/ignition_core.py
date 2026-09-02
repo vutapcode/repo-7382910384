@@ -460,10 +460,30 @@ def _oi_state_snapshot(state):
     updated_at = _f(getattr(state, "open_interest_updated_at", 0.0))
     value = _f(getattr(state, "open_interest", 0.0))
     previous = _f(getattr(state, "prev_open_interest", 0.0))
+    exchange_ms = int(
+        getattr(state, "open_interest_exchange_time_ms", 0) or 0
+    )
+    previous_exchange_ms = int(
+        getattr(state, "prev_open_interest_exchange_time_ms", 0) or 0
+    )
+    epoch = int(getattr(state, "open_interest_epoch", 0) or 0)
+    previous_epoch = int(
+        getattr(state, "prev_open_interest_epoch", 0) or 0
+    )
     return {
         "value": value if value > 0.0 else None,
         "updated_at": updated_at if updated_at > 0.0 else None,
         "previous_value": previous if previous > 0.0 else None,
+        "exchange_time_ms": exchange_ms if exchange_ms > 0 else None,
+        "previous_exchange_time_ms": (
+            previous_exchange_ms if previous_exchange_ms > 0 else None
+        ),
+        "epoch": epoch if epoch > 0 else None,
+        "previous_epoch": previous_epoch if previous_epoch > 0 else None,
+        "source_health": str(
+            getattr(state, "open_interest_source_health", "UNKNOWN")
+            or "UNKNOWN"
+        ).upper(),
         "change_pct": (
             round(_f(getattr(state, "open_interest_change_pct", 0.0)), 6)
             if updated_at > 0.0 and previous > 0.0 else None
@@ -490,6 +510,13 @@ def _oi_verification(
     intent = str(oi.get("intent") or "NEUTRAL").upper()
     before_ts = _f(before.get("updated_at"))
     after_ts = _f(after.get("updated_at"))
+    before_exchange_ms = int(before.get("exchange_time_ms") or 0)
+    after_exchange_ms = int(after.get("exchange_time_ms") or 0)
+    explicit_exchange_clock = bool(before_exchange_ms or after_exchange_ms)
+    same_epoch = bool(
+        not before.get("epoch") or not after.get("epoch")
+        or int(before.get("epoch")) == int(after.get("epoch"))
+    )
     started_s = _f(episode_started_ms) / 1000.0
     decision_s = _f(decision_time)
     available = bool(
@@ -497,7 +524,17 @@ def _oi_verification(
         and before.get("value") is not None and after.get("value") is not None
     )
     no_lookahead = bool(decision_s <= 0.0 or after_ts <= decision_s + 1e-6)
-    refreshed = bool(available and after_ts > before_ts and no_lookahead)
+    exchange_ordered = bool(
+        (not explicit_exchange_clock and after_ts > before_ts)
+        or (
+            explicit_exchange_clock and before_exchange_ms > 0
+            and after_exchange_ms > before_exchange_ms
+        )
+    )
+    refreshed = bool(
+        available and after_ts > before_ts and no_lookahead
+        and same_epoch and exchange_ordered
+    )
     inside_episode = bool(
         refreshed
         and (started_s <= 0.0 or after_ts >= started_s)
@@ -511,7 +548,12 @@ def _oi_verification(
     aligned = bool(oi.get("aligned_with_entry", True))
     if not available or not no_lookahead:
         status = "UNAVAILABLE"
-    elif after_ts == before_ts:
+    elif not same_epoch:
+        status = "STALE_UNKNOWN"
+    elif (
+        after_ts == before_ts
+        or (explicit_exchange_clock and after_exchange_ms == before_exchange_ms)
+    ):
         status = "UNCHANGED_UNKNOWN"
     elif not timely:
         status = "STALE_UNKNOWN"
@@ -525,7 +567,7 @@ def _oi_verification(
         status = "UNCHANGED_UNKNOWN"
     verified = status.startswith("FRESH_")
     return {
-        "version": "OI_EPISODE_VERIFICATION_V2_CAUSAL_REFRESH",
+        "version": "OI_EPISODE_VERIFICATION_V3_EXCHANGE_ORDERED_EPOCH",
         "status": status,
         "fresh": verified,
         "market_snapshot_fresh": bool(oi.get("fresh")),
@@ -542,7 +584,18 @@ def _oi_verification(
         "refresh_observed": refreshed,
         "inside_causal_window": inside_episode,
         "no_lookahead": no_lookahead,
-        "same_snapshot": bool(available and after_ts == before_ts),
+        "same_snapshot": bool(
+            available and (
+                after_ts == before_ts
+                or (
+                    explicit_exchange_clock
+                    and after_exchange_ms == before_exchange_ms
+                )
+            )
+        ),
+        "exchange_time_ordered": exchange_ordered,
+        "same_epoch": same_epoch,
+        "explicit_exchange_clock": explicit_exchange_clock,
         "policy": "EPISODE_REFRESH_REQUIRED_STALE_OR_UNCHANGED_IS_UNKNOWN",
     }
 
@@ -2666,7 +2719,7 @@ def _proof(episode, histories):
     return proof_type, proof_signal, proof_venue
 
 
-def _leader_from_rows(rows):
+def _leader_measurement_from_rows(rows):
     first_by_venue = {}
     for row in rows:
         venue = str(row.get("venue"))
@@ -2674,16 +2727,69 @@ def _leader_from_rows(rows):
         if current is None or _f(row.get("corrected_event_time_ms")) < _f(current.get("corrected_event_time_ms")):
             first_by_venue[venue] = row
     if not first_by_venue:
-        return "UNKNOWN", None
+        return {
+            "leader": "UNKNOWN", "status": "NO_EVIDENCE",
+            "observed_gap_ms": None, "uncertainty_bound_ms": None,
+            "lead_lower_bound_ms": None,
+        }
     ordered = sorted(first_by_venue.values(), key=lambda row: _f(row.get("corrected_event_time_ms")))
     first = ordered[0]
     if len(ordered) < 2:
-        return str(first.get("venue")), None
+        return {
+            "leader": str(first.get("venue")), "status": "ONE_SOURCE_ONLY",
+            "observed_gap_ms": None, "uncertainty_bound_ms": None,
+            "lead_lower_bound_ms": None,
+        }
     second = ordered[1]
     gap = _f(second.get("corrected_event_time_ms")) - _f(first.get("corrected_event_time_ms"))
-    uncertainty = _f(first.get("clock_uncertainty_ms")) + _f(second.get("clock_uncertainty_ms"))
+    def row_uncertainty(row):
+        explicit = row.get("temporal_uncertainty_ms")
+        if explicit is not None:
+            return max(0.0, _f(explicit))
+        return max(0.0, _f(row.get("clock_uncertainty_ms"))) + max(
+            0.0, _f(row.get("batching_uncertainty_ms"))
+        )
+    uncertainty = row_uncertainty(first) + row_uncertainty(second)
     lower = gap - uncertainty
-    return (str(first.get("venue")) if lower >= LEAD_FLOOR_MS else "SIMULTANEOUS"), lower
+    clock_valid = bool(
+        first.get("clock_valid", False) and second.get("clock_valid", False)
+    )
+    same_epochs = all(
+        len({int(row.get("epoch", 0) or 0) for row in rows
+             if str(row.get("venue")) == venue}) <= 1
+        for venue in first_by_venue
+    )
+    healthy = all(
+        str(row.get("source_health", "FRESH")).upper()
+        not in {"STALE", "DEAD", "CONTRADICTORY", "UNKNOWN"}
+        for row in (first, second)
+    )
+    if not same_epochs:
+        status = "EPOCH_MISMATCH"
+        leader = "SIMULTANEOUS"
+    elif not clock_valid or not healthy:
+        status = "CLOCK_OR_SOURCE_UNSAFE"
+        leader = "SIMULTANEOUS"
+    elif lower >= LEAD_FLOOR_MS:
+        status = "MEASURED_LEAD"
+        leader = str(first.get("venue"))
+    else:
+        status = "SIMULTANEOUS_OR_UNRESOLVED"
+        leader = "SIMULTANEOUS"
+    return {
+        "leader": leader, "status": status,
+        "observed_gap_ms": round(gap, 4),
+        "uncertainty_bound_ms": round(uncertainty, 4),
+        "lead_lower_bound_ms": round(lower, 4),
+        "minimum_decisive_lead_ms": LEAD_FLOOR_MS,
+        "first_venue": str(first.get("venue")),
+        "second_venue": str(second.get("venue")),
+    }
+
+
+def _leader_from_rows(rows):
+    measurement = _leader_measurement_from_rows(rows)
+    return measurement["leader"], measurement["lead_lower_bound_ms"]
 
 
 def _leader(episode):
@@ -2705,17 +2811,19 @@ def _cash_discovery(episode):
             "lead_lower_bound_ms": None, "authority": False,
             "confirmation": "INSUFFICIENT_CROSS_SPOT_RESPONSE",
         }
-    leader, lower = _leader_from_rows(cash_rows)
+    measurement = _leader_measurement_from_rows(cash_rows)
+    leader, lower = measurement["leader"], measurement["lead_lower_bound_ms"]
     status = {
         "binance_spot": "BINANCE_SPOT_LED_CANDIDATE",
         "coinbase_spot": "COINBASE_SPOT_LED_CANDIDATE",
-        "SIMULTANEOUS": "SIMULTANEOUS",
+        "SIMULTANEOUS": "SIMULTANEOUS_OR_UNRESOLVED",
     }.get(leader, "UNKNOWN")
     return {
         "status": status, "leader": leader,
         "lead_lower_bound_ms": round(lower, 4) if lower is not None else None,
         "authority": False,
         "confirmation": "TIMING_ONLY_NO_1_3S_ACCEPTANCE",
+        "measurement": measurement,
     }
 
 
@@ -3557,6 +3665,7 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
 def _result_from_episode(state, episode, histories, freshness, now):
     proof_type, proof_signal, proof_venue = _proof(episode, histories)
     leader, lead_lower = _leader(episode)
+    lead_measurement = _leader_measurement_from_rows(episode["signals"])
     cash_discovery = _cash_discovery(episode)
     episode["leader"] = leader
     side = episode["side"]
@@ -3668,6 +3777,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "inference_version": INFERENCE_VERSION, "state": "PROBE",
         "side": side, "proposer": episode["proposer"], "leader": leader,
         "lead_lower_bound_ms": round(lead_lower, 4) if lead_lower is not None else None,
+        "lead_measurement": lead_measurement,
         "spot_price_discovery": cash_discovery,
         "persistent_metaorder_shadow": persistent_shadow,
         "bias_snapshot": dict(episode["bias_snapshot"]), "proof_type": proof_type,
