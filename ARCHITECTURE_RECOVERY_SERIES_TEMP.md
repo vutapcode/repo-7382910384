@@ -1,6 +1,6 @@
 # WStrade Architecture Recovery Series — kế hoạch tạm
 
-> Trạng thái: **ACTIVE CHECKLIST — Đợt 1 đã triển khai, còn authenticated verification**  
+> Trạng thái: **ACTIVE CHECKLIST — Đợt 0 PARTIAL/BLOCKED do thiếu canonical strategy replay; Đợt 1 đã triển khai, còn authenticated verification**
 > Phạm vi của lần tạo file này: chỉ tổng hợp hai báo cáo kiến trúc thành chuỗi fix có điểm dừng.  
 > Khi khởi tạo file chưa sửa code/restart/push; từ Đợt 1 mọi thay đổi phải theo mutation loop và Mainnet vẫn khóa.  
 > Xóa file này sau khi toàn bộ đợt đã PASS và tài liệu nguồn chính thức đã được cập nhật.
@@ -96,23 +96,34 @@ Các nhận định nào thực sự nằm trên active path, module nào đang 
 
 ## Công việc
 
-- [ ] Ghim commit/config/runtime mode hiện tại; xác nhận Mainnet khóa.
-- [ ] Vẽ active call graph: source -> normalize -> state -> truth -> action -> execution -> Guardian -> Hard Risk -> journal.
-- [ ] Lập bảng `QUESTION -> OWNER -> INPUT -> OUTPUT -> CONSUMERS -> WRONG-ANSWER IMPACT`.
-- [ ] Liệt kê mọi behavior-changing hook và research-only subscriber.
-- [ ] Search authority thật của confidence, regime multiplier, lead label, OI label, Entry revalidation, Guardian S1/S2/S3.
-- [ ] Chụp baseline test/replay hash, opportunity count, trades, misses, capture ratio, latency và CPU.
-- [ ] Khóa một WAL version-bounded sạch; không reset/xóa dữ liệu nguồn.
+- [x] Ghim commit/config/runtime mode hiện tại; xác nhận Mainnet khóa.
+- [x] Vẽ active call graph: source -> normalize -> state -> truth -> action -> execution -> Guardian -> Hard Risk -> journal.
+- [x] Lập bảng `QUESTION -> OWNER -> INPUT -> OUTPUT -> CONSUMERS -> WRONG-ANSWER IMPACT`.
+- [x] Liệt kê mọi behavior-changing hook và research-only subscriber.
+- [x] Search authority thật của confidence, regime multiplier, lead label, OI label, Entry revalidation, Guardian S1/S2/S3.
+- [ ] Chụp baseline test/replay hash, opportunity count, trades, misses, capture ratio, latency và CPU. Runtime/WAL transport đã khóa; canonical strategy replay và post-audit CPU cooldown còn thiếu.
+- [x] Khóa một WAL version-bounded sạch; không reset/xóa dữ liệu nguồn. Range và hai transport hash nằm trong Phase 0 artifact.
 
 ## PASS
 
-- [ ] Mỗi câu hỏi quan trọng có đúng một owner được ghi rõ.
-- [ ] Không còn nhận định “active” chỉ dựa vào file tồn tại.
+- [x] Mỗi câu hỏi quan trọng có đúng một owner được ghi rõ trong `artifacts/architecture_recovery/PHASE0_EVIDENCE_FREEZE.md`.
+- [x] Không còn nhận định “active” chỉ dựa vào file tồn tại; map lần từ canonical launcher và wrappers.
 - [ ] Baseline replay deterministic hai lần cùng hash.
 
 ## STOP/FAIL
 
-- [ ] Nếu không tái tạo được baseline deterministic: dừng, sửa replay/data trước; không sang Đợt 1.
+- [x] Không tái tạo được full canonical strategy baseline: giữ stop gate cho mọi strategy mutation tiếp theo và sửa replay adapter trước. Đợt 1 đã hoàn thành out-of-order chỉ vì đó là safety/execution transaction, không phải thay đổi market reasoning.
+
+### Kết quả hồi tố 2026-09-02
+
+- Đợt 1 đã được triển khai trước khi evidence freeze Đợt 0 hoàn tất; baseline
+  trước Đợt 1 được ghim ở commit `90a04c29ae29766df45a14b528119cbf1325cfc8`.
+- Authority map và question-owner contract đã được khóa ở
+  `artifacts/architecture_recovery/PHASE0_EVIDENCE_FREEZE.md`.
+- Full canonical Ignition replay adapter chưa tồn tại. Cho tới khi adapter đó
+  replay đủ Bias/Entry/Edge/fill/Guardian/Hard Risk, Đợt 0 mang trạng thái
+  `BLOCKED_CANONICAL_ADAPTER_MISSING`; deterministic transport hash không được
+  giả thành strategy replay PASS.
 
 ---
 
