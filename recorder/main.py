@@ -605,9 +605,11 @@ async def run():
     try:
         await stop.wait()
     finally:
+        logging.info('[RECORDER] shutdown requested; draining WAL')
         # asyncio cancellation cannot stop a function already running through
         # to_thread. Signal compact_wal first so it exits at its next bounded
         # chunk instead of holding systemd shutdown until SIGKILL.
+        collector.request_shutdown()
         store.request_shutdown()
         for task in tasks:
             task.cancel()

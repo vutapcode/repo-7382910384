@@ -315,6 +315,59 @@ class CashRecorderTests(unittest.TestCase):
             by_stream['coinbase_spot_ticker']['payload']['bid'], '100.4'
         )
 
+    def test_hot_coinbase_queue_yields_for_shutdown_cancellation(self):
+        class Store:
+            @staticmethod
+            def publish(record):
+                return True
+
+        class HotWebSocket:
+            def __init__(self):
+                self.received = 0
+                self.on_first = None
+
+            async def send(self, payload):
+                return None
+
+            async def recv(self):
+                self.received += 1
+                if self.received == 1 and self.on_first is not None:
+                    self.on_first()
+                if self.received >= 1_000:
+                    raise asyncio.CancelledError
+                return orjson.dumps({
+                    'type': 'ticker', 'sequence': self.received,
+                    'product_id': 'BTC-USD', 'price': '100.5',
+                    'best_bid': '100.4', 'best_ask': '100.6',
+                    'last_size': '0.1',
+                    'time': '1970-01-01T00:00:01.600Z',
+                })
+
+        class Connection:
+            def __init__(self, websocket):
+                self.websocket = websocket
+
+            async def __aenter__(self):
+                return self.websocket
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+        async def exercise():
+            task = asyncio.create_task(recorder.coinbase_spot_loop())
+            await task
+
+        config = replace(RecorderConfig(), cash_ticker_interval=0.0)
+        recorder = BinanceRecorder(config, Store(), HealthState(config))
+        websocket = HotWebSocket()
+        websocket.on_first = recorder.request_shutdown
+        with mock.patch(
+            'recorder.collector.websockets.connect',
+            return_value=Connection(websocket),
+        ):
+            asyncio.run(exercise())
+        self.assertLess(websocket.received, 1_000)
+
     def test_oi_polling_is_independent_from_bot_strategy_state(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'bot_runtime.json'

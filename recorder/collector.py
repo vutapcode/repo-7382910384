@@ -40,6 +40,11 @@ class BinanceRecorder:
         self._stream_epochs = {}
         self._wavefront_health_at_ms = 0
         self._liquidity_health_at_ms = 0
+        self._shutdown_requested = False
+
+    def request_shutdown(self):
+        """Let hot receive queues exit even if task cancellation is delayed."""
+        self._shutdown_requested = True
 
     @staticmethod
     def now_ms():
@@ -297,7 +302,7 @@ class BinanceRecorder:
 
     async def public_loop(self):
         name = 'public_ws'
-        while True:
+        while not self._shutdown_requested:
             book = LocalOrderBook()
             try:
                 async with websockets.connect(
@@ -389,6 +394,13 @@ class BinanceRecorder:
                                     sequence_end=book.last_u,
                                 )
                                 last_book_ticker_ms = event_ms
+                        # A socket with a permanently non-empty receive queue
+                        # can make ``recv()`` complete synchronously for many
+                        # iterations. Yield explicitly so SIGTERM, the writer
+                        # and health tasks cannot be starved by depth bursts.
+                        if self._shutdown_requested:
+                            return
+                        await asyncio.sleep(0)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -400,7 +412,7 @@ class BinanceRecorder:
 
     async def market_loop(self):
         name = 'market_ws'
-        while True:
+        while not self._shutdown_requested:
             # A reconnect is a hard causal boundary.  A trade identifier from
             # the previous socket may be useful for diagnostics but must not
             # authorize continuity in the new epoch.
@@ -421,7 +433,7 @@ class BinanceRecorder:
                         'futures_trade_100ms', 'liquidation', 'mark_price',
                     )
                     self.health.connection(name, True)
-                    while True:
+                    while not self._shutdown_requested:
                         try:
                             raw = await asyncio.wait_for(
                                 ws.recv(), timeout=self.config.cash_batch_ms / 1000.0
@@ -492,6 +504,7 @@ class BinanceRecorder:
                                 receive_time_ms=receive_ms,
                                 receive_time_monotonic_ns=receive_mono_ns,
                             )
+                        await asyncio.sleep(0)
             except asyncio.CancelledError:
                 previous_trade_id = self._emit_cash_batch(
                     'futures_trade_100ms', 'binance_usdm',
@@ -514,7 +527,7 @@ class BinanceRecorder:
     async def binance_spot_loop(self):
         """Record exact Spot flow in 100-ms batches plus sampled BBO."""
         name = 'binance_spot_ws'
-        while True:
+        while not self._shutdown_requested:
             previous_trade_id = None
             batcher = CashTradeBatcher(self.config.cash_batch_ms)
             last_ticker_ms = 0
@@ -535,7 +548,7 @@ class BinanceRecorder:
                         self.spot_liquidity_response_analyzer.reset(
                             self.now_ms(), 'SPOT_DEPTH_EPOCH_RESET'
                         )
-                    while True:
+                    while not self._shutdown_requested:
                         try:
                             raw = await asyncio.wait_for(
                                 ws.recv(), timeout=self.config.cash_batch_ms / 1000.0
@@ -611,6 +624,7 @@ class BinanceRecorder:
                                 self.health.sampled_out[
                                     'binance_spot_ticker'
                                 ] += 1
+                        await asyncio.sleep(0)
             except asyncio.CancelledError:
                 previous_trade_id = self._emit_cash_batch(
                     'binance_spot_trade_100ms', 'binance_spot',
@@ -636,7 +650,7 @@ class BinanceRecorder:
             'product_ids': [self.config.coinbase_product],
             'channels': ['matches', 'ticker', 'level2_batch'],
         })
-        while True:
+        while not self._shutdown_requested:
             previous_trade_id = None
             batcher = CashTradeBatcher(self.config.cash_batch_ms)
             l2_batcher = CoinbaseL2UpdateBatcher(self.config.cash_batch_ms)
@@ -662,7 +676,7 @@ class BinanceRecorder:
                         self.coinbase_liquidity_response_analyzer.reset(
                             self.now_ms(), 'COINBASE_L2_EPOCH_RESET'
                         )
-                    while True:
+                    while not self._shutdown_requested:
                         try:
                             raw = await asyncio.wait_for(
                                 ws.recv(), timeout=self.config.cash_batch_ms / 1000.0
@@ -773,6 +787,7 @@ class BinanceRecorder:
                                 completed_l2, l2, product_id,
                             )
                             l2.apply(data)
+                        await asyncio.sleep(0)
             except asyncio.CancelledError:
                 previous_trade_id = self._emit_cash_batch(
                     'coinbase_spot_trade_100ms', 'coinbase_spot',
@@ -799,7 +814,7 @@ class BinanceRecorder:
     async def macro_poll_loop(self):
         name = 'rest_macro'
         connected = False
-        while True:
+        while not self._shutdown_requested:
             started = time.monotonic()
             try:
                 oi, premium = await asyncio.gather(
