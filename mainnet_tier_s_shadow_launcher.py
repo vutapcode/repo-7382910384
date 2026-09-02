@@ -697,7 +697,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
     research_origin_valid = bool(
         research_origin_ms > 0
         and research_origin_ms <= decision_time_ms
-        and decision_time_ms - research_origin_ms <= ignition_core.EPISODE_MAX_MS
+        and decision_time_ms - research_origin_ms <= entry_council.EPISODE_MAX_MS
         and research_origin_price > 0.0
         and ignition_snapshot.get("research_origin_continuity")
         == "SAME_RECEIVE_TIME_EVIDENCE_CHAIN"

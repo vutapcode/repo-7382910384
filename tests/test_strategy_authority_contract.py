@@ -21,6 +21,8 @@ class StrategyAuthorityContractTests(unittest.TestCase):
         shadow = self.text("mainnet_tier_s_shadow_launcher.py")
         self.assertIn('"ignition_core.py"', shadow)
         self.assertNotIn('"entry_council_shadow.py"', shadow)
+        self.assertNotIn("ignition_core.EPISODE_MAX_MS", shadow)
+        self.assertIn("entry_council.EPISODE_MAX_MS", shadow)
         for retired_hook in (
             "entry_s2_snapshot_quorum_hook",
             "entry_exchange_independence_hook",
