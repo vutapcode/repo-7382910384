@@ -34,7 +34,8 @@ class OpsHardeningV5Tests(unittest.TestCase):
         service = {"pid": 123}
         self.assertTrue(ns["_bot_in_startup_grace"](service, {}, 100.0))
         self.assertTrue(ns["_bot_in_startup_grace"](service, {}, 119.0))
-        self.assertFalse(ns["_bot_in_startup_grace"](service, {}, 121.0))
+        self.assertTrue(ns["_bot_in_startup_grace"](service, {}, 159.0))
+        self.assertFalse(ns["_bot_in_startup_grace"](service, {}, 161.0))
         self.assertFalse(ns["_bot_in_startup_grace"](service, {"pid": 123}, 101.0))
 
         payload = {

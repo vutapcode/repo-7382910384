@@ -22,7 +22,11 @@ RESTART_COOLDOWN_SECONDS = float(os.getenv('SMC_OPS_RESTART_COOLDOWN_SECONDS', '
 CRITICAL_LOOP_GRACE_SECONDS = float(os.getenv('SMC_OPS_CRITICAL_LOOP_GRACE_SECONDS', '10'))
 BIAS_ENTRY_STALE_SECONDS = float(os.getenv('SMC_OPS_BIAS_ENTRY_STALE_SECONDS', '5'))
 GUARDIAN_STALE_SECONDS = float(os.getenv('SMC_OPS_GUARDIAN_STALE_SECONDS', '2'))
-BOT_STARTUP_GRACE_SECONDS = float(os.getenv('SMC_OPS_BOT_STARTUP_GRACE_SECONDS', '20'))
+# Canonical launcher import/recovery is intentionally fail-closed and can take
+# over 20 seconds on a cold process.  This grace applies only while systemd has
+# a new PID and no heartbeat from that PID; once the first heartbeat arrives,
+# normal 15-second liveness authority resumes immediately.
+BOT_STARTUP_GRACE_SECONDS = float(os.getenv('SMC_OPS_BOT_STARTUP_GRACE_SECONDS', '60'))
 _BOT_PID_FIRST_SEEN = {}
 
 SERVICE_PREFIX = os.getenv('WSTRADE_SERVICE_PREFIX', 'smc2026').strip() or 'smc2026'
