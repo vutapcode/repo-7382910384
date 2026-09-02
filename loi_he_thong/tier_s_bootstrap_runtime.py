@@ -161,6 +161,21 @@ async def vong_lap_runtime_heartbeat():
             "wstrade_user_stream_last_event_at": getattr(
                 state, "wstrade_user_stream_last_event_at", None
             ),
+            "wstrade_user_stream_transport_lag_ms": getattr(
+                state, "wstrade_user_stream_last_transport_lag_ms", None
+            ),
+            "execution_transaction": dict(
+                getattr(state, "wstrade_execution_transaction", {}) or {}
+            ),
+            "execution_control_plane": dict(
+                getattr(state, "wstrade_execution_control_plane", {}) or {}
+            ),
+            "wstrade_unprotected_exposure": bool(
+                getattr(state, "wstrade_unprotected_exposure", False)
+            ),
+            "wstrade_execution_recovery_required": bool(
+                getattr(state, "wstrade_execution_recovery_required", False)
+            ),
             "futures_flow_ring_size": int(
                 getattr(state, "futures_flow_ring_size", 0) or 0
             ),

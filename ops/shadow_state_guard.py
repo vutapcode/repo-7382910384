@@ -18,7 +18,10 @@ V9 = "SHADOW_RUNTIME_STATE_V9_ENTRY_ECONOMICS_V5"
 V10 = "SHADOW_RUNTIME_STATE_V10_ENTRY_ECONOMICS_V6_AVAILABILITY_TIME"
 V11 = "SHADOW_RUNTIME_STATE_V11_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
 V12 = "SHADOW_RUNTIME_STATE_V12_ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
-VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12}
+V13 = "SHADOW_RUNTIME_STATE_V13_EXECUTION_PROTECTION_TRANSACTION"
+VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13}
+MODERN = {V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13}
+PROMOTION_STATE = {V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13}
 
 
 def fail(msg):
@@ -79,9 +82,9 @@ wins = counter(raw, "wins")
 losses = counter(raw, "losses")
 breakevens = counter(raw, "breakevens", optional=True)
 event_seq = counter(raw, "event_seq", optional=True)
-if version in {V2, V3, V4, V5, V6, V7, V8, V9, V10, V11} and trades != wins + losses + breakevens:
+if version in MODERN and trades != wins + losses + breakevens:
     fail(f"counter_invariant:{trades}!={wins}+{losses}+{breakevens}")
-if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
+if version in PROMOTION_STATE:
     evaluations = counter(raw, "decision_evaluations", optional=True)
     near_misses = counter(raw, "near_misses", optional=True)
     if near_misses > evaluations:
@@ -138,7 +141,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
                 row[8], f"edge_calibration_rows.{index}.execution_cost_bps",
                 nonnegative=True,
             )
-    if version in {V4, V5, V6, V7, V8, V9, V10, V11, V12}:
+    if version in {V4, V5, V6, V7, V8, V9, V10, V11, V12, V13}:
         for name in (
             "edge_calibration_code_version",
             "edge_calibration_config_version",
@@ -146,7 +149,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
             value = raw.get(name)
             if not isinstance(value, str) or not value:
                 fail(f"{name}:missing")
-    if version in {V6, V7, V8, V9, V10, V11, V12}:
+    if version in {V6, V7, V8, V9, V10, V11, V12, V13}:
         economics = raw.get("entry_economics_v2_rows")
         if not isinstance(economics, list) or len(economics) > 1024:
             fail("entry_economics_v2_rows:invalid")
@@ -165,6 +168,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
             V10: "ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
             V11: "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
             V12: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
+            V13: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
         }[version]
         for index, row in enumerate(economics):
             if not isinstance(row, dict) or row.get(
@@ -180,7 +184,7 @@ if version in {V3, V4, V5, V6, V7, V8, V9, V10, V11}:
                 f"entry_economics_v2_rows.{index}.execution_cost_bps",
                 nonnegative=True,
             )
-            if version == V12:
+            if version in {V12, V13}:
                 event = row.get("time_to_positive_net_event")
                 if not isinstance(event, bool):
                     fail(f"entry_economics_v2_rows.{index}.event:invalid")
@@ -221,7 +225,7 @@ if pos is not None:
             fail(f"position.side:{side or 'missing'}")
         num(pos.get("qty"), "position.qty", positive=True)
         entry = num(pos.get("entry_price"), "position.entry_price", positive=True)
-        if version in {V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12}:
+        if version in MODERN:
             r = num(pos.get("r"), "position.r", positive=True)
             hard_sl = num(pos.get("hard_sl"), "position.hard_sl", positive=True)
             best = num(pos.get("best"), "position.best", positive=True)
@@ -257,7 +261,7 @@ if pos is not None:
                     fail("position.floor:below_best_short")
 
             cost_plan = pos.get("shadow_cost_plan")
-            if version in {V5, V6, V7, V8, V9, V10} and cost_plan is not None:
+            if version in {V5, V6, V7, V8, V9, V10, V11, V12, V13} and cost_plan is not None:
                 if not isinstance(cost_plan, dict):
                     fail("position.shadow_cost_plan:not_object")
                 for name in (
@@ -269,5 +273,79 @@ if pos is not None:
                         f"position.shadow_cost_plan.{name}",
                         nonnegative=True,
                     )
+
+transaction = raw.get("execution_transaction")
+if version == V13:
+    if transaction is not None and not isinstance(transaction, dict):
+        fail("execution_transaction:not_object")
+    if isinstance(transaction, dict):
+        if transaction.get("version") != "EXECUTION_PROTECTION_TRANSACTION_V1":
+            fail("execution_transaction:unsupported_version")
+        state_name = str(transaction.get("state") or "")
+        allowed = {
+            "INTENT_CREATED", "ORDER_SENT", "ACK_KNOWN", "EXECUTION_UNKNOWN",
+            "PARTIAL_FILL_CONFIRMED", "FILL_CONFIRMED",
+            "UNPROTECTED_EXPOSURE", "PROTECTION_SENT",
+            "PROTECTION_ACKNOWLEDGED", "PROTECTION_VERIFICATION_FAILED",
+            "PROTECTION_VERIFIED", "POSITION_PROTECTED",
+            "EMERGENCY_FLATTEN_SENT", "RECOVERY_REQUIRED",
+            "INVARIANT_BROKEN", "NO_POSITION", "FLAT_VERIFIED",
+            "POSITION_CLOSED",
+        }
+        if state_name not in allowed:
+            fail(f"execution_transaction.state:{state_name or 'missing'}")
+        transitions = transaction.get("transitions")
+        if not isinstance(transitions, list) or len(transitions) > 32:
+            fail("execution_transaction.transitions:invalid")
+        previous_sequence = 0
+        for index, row in enumerate(transitions):
+            if not isinstance(row, dict):
+                fail(f"execution_transaction.transitions.{index}:not_object")
+            row_state = str(row.get("state") or "")
+            if row_state not in allowed:
+                fail(
+                    f"execution_transaction.transitions.{index}:invalid_state"
+                )
+            sequence = row.get("sequence")
+            if (
+                isinstance(sequence, bool) or not isinstance(sequence, int)
+                or sequence <= previous_sequence
+            ):
+                fail(
+                    f"execution_transaction.transitions.{index}:invalid_sequence"
+                )
+            previous_sequence = sequence
+        if transitions and transitions[-1].get("state") != state_name:
+            fail("execution_transaction.transitions:terminal_mismatch")
+        if not isinstance(transaction.get("invariant_ok"), bool):
+            fail("execution_transaction.invariant_ok:not_bool")
+        for metric in (
+            "decision_to_submit_ms", "submit_to_ack_ms",
+            "fill_to_protection_submit_ms", "fill_to_protection_ack_ms",
+            "fill_to_protection_verified_ms", "execution_unknown_duration_ms",
+        ):
+            if transaction.get(metric) is not None:
+                num(
+                    transaction.get(metric),
+                    f"execution_transaction.{metric}", nonnegative=True,
+                )
+        if state_name == "POSITION_PROTECTED" and not (
+            isinstance(pos, dict) and pos.get("active", True)
+        ):
+            fail("execution_transaction:protected_without_position")
+    control = raw.get("execution_control_plane")
+    if not isinstance(control, dict):
+        fail("execution_control_plane:not_object")
+    if control:
+        if control.get("version") != "EXECUTION_CONTROL_PLANE_V1":
+            fail("execution_control_plane:unsupported_version")
+        health = str(control.get("health") or "")
+        if health not in {
+            "HEALTHY", "DEGRADED", "UNSAFE_FOR_NEW_ENTRY", "EXIT_ONLY",
+            "UNKNOWN",
+        }:
+            fail("execution_control_plane.health:invalid")
+        if not isinstance(control.get("entry_allowed"), bool):
+            fail("execution_control_plane.entry_allowed:not_bool")
 
 print(f"[SHADOW-STATE] OK version={version} trades={trades} w={wins} l={losses} be={breakevens} active={bool(pos and pos.get('active', True))}")

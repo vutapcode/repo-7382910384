@@ -16,6 +16,7 @@ from loi_he_thong import mainnet_safety
 from loi_he_thong import private_user_stream
 from loi_he_thong import verified_cost_model
 from loi_he_thong import execution_causal_revalidation
+from loi_he_thong import execution_transaction
 from loi_he_thong import market_thesis
 
 
@@ -24,6 +25,113 @@ SYMBOL = "BTCUSDT"
 MAKER_TTL_SECONDS = 0.75
 CAUSAL_SUBMIT_MAX_AGE_SECONDS = 1.5
 BBO_SUBMIT_MAX_AGE_SECONDS = 1.0
+
+
+def _execution_lock(state):
+    lock = getattr(state, "_wstrade_live_execution_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        state._wstrade_live_execution_lock = lock
+    return lock
+
+
+def _transaction_event(state, event_callback):
+    transaction = execution_transaction.snapshot(state)
+    if event_callback and transaction:
+        event_callback("LIVE_EXECUTION_TRANSACTION", transaction)
+    return transaction
+
+
+def _transition_transaction(state, target, event_callback=None, **detail):
+    transaction = execution_transaction.transition(
+        state, target, detail=detail,
+    )
+    _transaction_event(state, event_callback)
+    return transaction
+
+
+def _transaction_state(state):
+    return str(
+        (getattr(state, "wstrade_execution_transaction", {}) or {}).get(
+            "state"
+        ) or ""
+    )
+
+
+def _mark_flat_verified(state, event_callback=None, reason="RECONCILED_FLAT"):
+    current = _transaction_state(state)
+    if not current or current in execution_transaction.TERMINAL_STATES:
+        return execution_transaction.snapshot(state)
+    if current != "RECOVERY_REQUIRED":
+        _transition_transaction(
+            state, "RECOVERY_REQUIRED", event_callback,
+            reason="RECONCILIATION_ASSUMED_AUTHORITY",
+        )
+    return _transition_transaction(
+        state, "FLAT_VERIFIED", event_callback, reason=reason
+    )
+
+
+def _control_plane_snapshot(api, state, opportunity_budget_ms=None):
+    getter = getattr(api, "control_plane_snapshot", None)
+    if not callable(getter):
+        # Test/compatibility adapters cannot claim production verification.
+        return {
+            "version": "EXECUTION_CONTROL_PLANE_UNAVAILABLE",
+            "health": "UNKNOWN",
+            "reason": "ADAPTER_HAS_NO_CONTROL_PLANE_MONITOR",
+            "entry_allowed": None,
+            "sample_count": 0,
+        }
+    position = getattr(state, "mainnet_shadow_position", None)
+    snapshot = getter(
+        opportunity_budget_ms=opportunity_budget_ms,
+        has_exposure=bool(position and getattr(position, "active", False)),
+    )
+    snapshot = dict(snapshot or {})
+    snapshot.update({
+        "private_stream_ready": bool(
+            getattr(state, "wstrade_user_stream_ready", False)
+        ),
+        "private_stream_transport_lag_ms": getattr(
+            state, "wstrade_user_stream_last_transport_lag_ms", None
+        ),
+        "private_stream_last_event_at": getattr(
+            state, "wstrade_user_stream_last_event_at", None
+        ),
+    })
+    if snapshot.get("entry_allowed") is True and not snapshot[
+        "private_stream_ready"
+    ]:
+        snapshot.update({
+            "health": "EXIT_ONLY" if bool(
+                getattr(state, "mainnet_shadow_position", None)
+            ) else "UNSAFE_FOR_NEW_ENTRY",
+            "reason": "PRIVATE_STREAM_NOT_READY",
+            "entry_allowed": False,
+        })
+    state.wstrade_execution_control_plane = snapshot
+    state.wstrade_execution_control_health = str(
+        (snapshot or {}).get("health") or "UNKNOWN"
+    )
+    return snapshot
+
+
+def _remaining_submit_budget_ms(result, now):
+    decided_at = float((result or {}).get("ts", 0.0) or 0.0)
+    if decided_at <= 0.0:
+        return CAUSAL_SUBMIT_MAX_AGE_SECONDS * 1000.0
+    return max(
+        0.0,
+        (decided_at + CAUSAL_SUBMIT_MAX_AGE_SECONDS - float(now)) * 1000.0,
+    )
+
+
+def _decision_to_submit_ms(result, now):
+    decided_at = float((result or {}).get("ts", 0.0) or 0.0)
+    if decided_at <= 0.0:
+        return None
+    return max(0.0, (float(now) - decided_at) * 1000.0)
 
 
 def _revalidate_before_submit(state, side, result, now=None):
@@ -235,6 +343,12 @@ async def promote(api, state):
         if not risk_plan.get("eligible") or available + 1e-12 < required:
             state.wstrade_live_arm_reason = "MAINNET_STARTUP_MARGIN_BUFFER_INSUFFICIENT"
             return False
+        control_plane = _control_plane_snapshot(api, state)
+        if control_plane.get("entry_allowed") is False:
+            state.wstrade_live_arm_reason = (
+                "EXECUTION_CONTROL_PLANE_UNSAFE_FOR_NEW_ENTRY"
+            )
+            return False
         state.balance_usdt = balance
         state.account_ready = True
         state.execution_allowed = True
@@ -338,7 +452,7 @@ async def _hybrid_entry(api, state, side, result, qty, now):
     # first evaluated in shadow against the same causal episode and Guardian.
     return final or placed, 409, client_id
 
-async def _place_stop(api, state, position):
+async def _place_stop(api, state, position, event_callback=None):
     client_id = _client_id(state, "stop", position.side, time.time())
     params = {
         "symbol": SYMBOL,
@@ -350,38 +464,187 @@ async def _place_stop(api, state, position):
         "positionSide": position.side,
         "clientAlgoId": client_id,
     }
+    _transition_transaction(
+        state, "PROTECTION_SENT", event_callback,
+        client_algo_id=client_id,
+        trigger_price=str(position.hard_sl),
+    )
+    position.hard_sl_client_algo_id = client_id
+    try:
+        _checkpoint_runtime(state)
+    except Exception as exc:
+        state.wstrade_live_checkpoint_error = f"{type(exc).__name__}: {exc}"
+        state.shadow_persistence_dirty = True
+        _seal_live(state, "PROTECTION_INTENT_CHECKPOINT_FAILED", recovery=True)
+        return False, {
+            "post_status": None,
+            "verification_status": None,
+            "reason": "PROTECTION_INTENT_CHECKPOINT_FAILED",
+        }
     response, status = await api.new_algo_order(**params)
     if status == 200 and (response or {}).get("algoId") is not None:
-        position.hard_sl_algo_id = response.get("algoId")
-        position.hard_sl_client_algo_id = response.get("clientAlgoId", client_id)
-        return True, response
-    open_algos, open_status = await api.get_open_algo_orders(SYMBOL)
-    recovered = next(
-        (row for row in open_algos if row.get("clientAlgoId") == client_id), None
-    ) if open_status == 200 and isinstance(open_algos, list) else None
+        _transition_transaction(
+            state, "PROTECTION_ACKNOWLEDGED", event_callback,
+            client_algo_id=client_id,
+            algo_id=(response or {}).get("algoId"),
+            http_status=status,
+        )
+    # A successful POST is only an acknowledgment.  Protection becomes true
+    # after an independent exchange read proves the stop is currently open.
+    open_status = 599
+    recovered = None
+    for attempt in range(3):
+        open_algos, open_status = await api.get_open_algo_orders(SYMBOL)
+        recovered = next(
+            (
+                row for row in open_algos
+                if str(row.get("clientAlgoId") or "") == client_id
+                or (
+                    (response or {}).get("algoId") is not None
+                    and str(row.get("algoId")) == str(
+                        (response or {}).get("algoId")
+                    )
+                )
+            ),
+            None,
+        ) if open_status == 200 and isinstance(open_algos, list) else None
+        if recovered or attempt == 2:
+            break
+        await asyncio.sleep(0.05)
     if recovered:
         position.hard_sl_algo_id = recovered.get("algoId")
-        position.hard_sl_client_algo_id = client_id
+        position.hard_sl_client_algo_id = recovered.get(
+            "clientAlgoId", client_id
+        )
+        _transition_transaction(
+            state, "PROTECTION_VERIFIED", event_callback,
+            client_algo_id=position.hard_sl_client_algo_id,
+            algo_id=position.hard_sl_algo_id,
+            verification_source="OPEN_ALGO_ORDERS",
+            verification_status=open_status,
+        )
         return True, recovered
-    return False, response
-
-
-async def _emergency_flatten(api, state, side, qty):
-    client_id = _client_id(state, "panic", side, time.time())
-    result, status = await api.new_order(
-        SYMBOL, "SELL" if side == "LONG" else "BUY", "MARKET", qty,
-        positionSide=side, newOrderRespType="RESULT",
-        newClientOrderId=client_id,
+    _transition_transaction(
+        state, "PROTECTION_VERIFICATION_FAILED", event_callback,
+        client_algo_id=client_id,
+        post_status=status,
+        verification_status=open_status,
+        post_response=dict(response or {}),
     )
-    if status == 599:
-        recovered = await _query_fill(api, client_id, state=state)
-        if recovered and str(recovered.get("status", "")) == "FILLED":
+    return False, {
+        "post_response": response,
+        "post_status": status,
+        "verification_status": open_status,
+        "verification_source": "OPEN_ALGO_ORDERS",
+    }
+
+
+async def _emergency_flatten(
+    api, state, side, qty, *, event_callback=None, transaction_reason=None,
+):
+    transaction = execution_transaction.snapshot(state) or {}
+    existing_id = str(
+        transaction.get("emergency_flatten_client_order_id") or ""
+    )
+    if existing_id:
+        recovered = await _query_fill(api, existing_id, state=state)
+        if recovered and str(recovered.get("status", "")).upper() == "FILLED":
             result, status = recovered, 200
+        else:
+            _seal_live(
+                state, "EMERGENCY_FLATTEN_RECONCILIATION_PENDING",
+                recovery=True,
+            )
+            return recovered or {
+                "clientOrderId": existing_id,
+                "status": "UNKNOWN",
+            }, 599
+        client_id = existing_id
+    else:
+        client_id = _client_id(state, "panic", side, time.time())
+        if transaction_reason:
+            _transition_transaction(
+                state, "EMERGENCY_FLATTEN_SENT", event_callback,
+                reason=str(transaction_reason), quantity=float(qty),
+                client_order_id=client_id,
+            )
+            try:
+                _checkpoint_runtime(state)
+            except Exception as exc:
+                state.wstrade_live_checkpoint_error = f"{type(exc).__name__}: {exc}"
+                state.shadow_persistence_dirty = True
+                _seal_live(
+                    state, "EMERGENCY_FLATTEN_INTENT_CHECKPOINT_FAILED",
+                    recovery=True,
+                )
+                # Persistence loss must never suppress the physical risk action.
+                # Continue with the idempotent client id and keep recovery sealed.
+        result, status = await api.new_order(
+            SYMBOL, "SELL" if side == "LONG" else "BUY", "MARKET", qty,
+            positionSide=side, newOrderRespType="RESULT",
+            newClientOrderId=client_id,
+        )
+        if status == 599:
+            recovered = await _query_fill(api, client_id, state=state)
+            if recovered and str(recovered.get("status", "")) == "FILLED":
+                result, status = recovered, 200
     if status != 200 or str((result or {}).get("status", "")) not in (
         "FILLED", "FILLED_RECOVERED_FROM_POSITION"
     ):
         _seal_live(state, "EMERGENCY_FLATTEN_UNVERIFIED", recovery=True)
+        if transaction_reason:
+            _transition_transaction(
+                state, "RECOVERY_REQUIRED", event_callback,
+                reason="EMERGENCY_FLATTEN_UNVERIFIED",
+                client_order_id=client_id,
+                http_status=status,
+            )
         status = 599
+    elif transaction_reason:
+        # A closing fill is not enough: independently verify the account is
+        # flat before clearing exposure or publishing a terminal outcome.
+        positions, position_status = await api.get_positions(SYMBOL)
+        still_active = position_status != 200 or any(
+            abs(float(row.get("positionAmt", 0.0) or 0.0)) > 0.0
+            for row in (positions or [])
+        )
+        if still_active:
+            _seal_live(
+                state, "POST_FILL_ABORT_RECONCILIATION_REQUIRED",
+                recovery=True,
+            )
+            _transition_transaction(
+                state, "RECOVERY_REQUIRED", event_callback,
+                reason="FLATTEN_FILLED_ACCOUNT_RECONCILIATION_PENDING",
+                client_order_id=client_id,
+                http_status=status,
+                position_query_status=position_status,
+            )
+            status = 599
+        else:
+            local = getattr(state, "mainnet_shadow_position", None)
+            if local is not None:
+                local.active = False
+            state.mainnet_shadow_position = None
+            state.mainnet_shadow_position_status = "FLAT"
+            state.wstrade_live_position = None
+            state.wstrade_unprotected_exposure = False
+            state.wstrade_execution_recovery_required = False
+            state.execution_unknown = False
+            _mark_flat_verified(
+                state, event_callback, reason="EMERGENCY_FLATTEN_VERIFIED_FLAT"
+            )
+            _finalize_shadow_state(state)
+            try:
+                _checkpoint_runtime(state)
+            except Exception as exc:
+                state.wstrade_live_checkpoint_error = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+                state.shadow_persistence_dirty = True
+                state.wstrade_execution_recovery_required = True
+                state.execution_unknown = True
+                status = 599
     return result, status
 
 
@@ -613,7 +876,9 @@ def _position(side, qty, fill_price, hard_sl, risk_plan, now, client_id, result)
     )
 
 
-async def open_position(api, state, side, result, now=None, event_callback=None):
+async def _open_position_locked(
+    api, state, side, result, now=None, event_callback=None
+):
     now = time.time() if now is None else float(now)
     result = dict(result or {})
     state.wstrade_live_last_entry_outcome = {
@@ -656,6 +921,27 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
         "ok": gate_ok, "reason": gate_reason, "detail": gate_detail,
     }
     if not gate_ok:
+        return None
+    control_plane = _control_plane_snapshot(
+        api, state,
+        opportunity_budget_ms=_remaining_submit_budget_ms(result, time.time()),
+    )
+    state.wstrade_live_last_control_plane_gate = dict(control_plane)
+    if control_plane.get("entry_allowed") is False:
+        state.wstrade_live_last_entry_gate = {
+            "ok": False,
+            "reason": "EXECUTION_CONTROL_PLANE_UNSAFE_FOR_NEW_ENTRY",
+            "detail": dict(control_plane),
+        }
+        if event_callback:
+            event_callback("LIVE_ENTRY_CONTROL_PLANE_REJECTED", {
+                "causal_episode_id": result.get("causal_episode_id"),
+                "canonical_opportunity_id": result.get(
+                    "canonical_opportunity_id"
+                ),
+                "side": side,
+                "control_plane": dict(control_plane),
+            })
         return None
     if (
         bool(getattr(state, "wstrade_live_armed", False))
@@ -735,7 +1021,61 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
         result["edge_tier"] = dict(
             getattr(state, "entry_edge_tier", {}) or {}
         )
+    intent_id = _client_id(state, "intent", side, now)
+    transaction = execution_transaction.begin(
+        state,
+        intent_id=intent_id,
+        side=side,
+        quantity=qty,
+        metadata={
+            "causal_episode_id": result.get("causal_episode_id"),
+            "canonical_opportunity_id": result.get(
+                "canonical_opportunity_id"
+            ),
+            "decision_cycle_id": result.get("decision_cycle_id"),
+            "execution_policy": result.get("execution_policy"),
+        },
+    )
+    if str(transaction.get("transaction_id")) != intent_id:
+        _seal_live(state, "ACTIVE_EXECUTION_TRANSACTION", recovery=True)
+        _transaction_event(state, event_callback)
+        return None
+    _transaction_event(state, event_callback)
+    try:
+        _checkpoint_runtime(state)
+    except Exception as exc:
+        state.wstrade_live_checkpoint_error = f"{type(exc).__name__}: {exc}"
+        state.shadow_persistence_dirty = True
+        _seal_live(state, "EXECUTION_INTENT_CHECKPOINT_FAILED", recovery=True)
+        _transition_transaction(
+            state, "RECOVERY_REQUIRED", event_callback,
+            reason="EXECUTION_INTENT_CHECKPOINT_FAILED_BEFORE_SUBMIT",
+        )
+        return None
+    _transition_transaction(
+        state, "ORDER_SENT", event_callback,
+        execution_policy=str(result.get("execution_policy") or "MAKER").upper(),
+        decision_to_submit_ms=_decision_to_submit_ms(result, time.time()),
+    )
+    try:
+        _checkpoint_runtime(state)
+    except Exception as exc:
+        state.wstrade_live_checkpoint_error = f"{type(exc).__name__}: {exc}"
+        state.shadow_persistence_dirty = True
+        _seal_live(state, "ORDER_INTENT_CHECKPOINT_FAILED", recovery=True)
+        _transition_transaction(
+            state, "RECOVERY_REQUIRED", event_callback,
+            reason="ORDER_NOT_SUBMITTED_CHECKPOINT_FAILED",
+        )
+        return None
     order, status, client_id = await _hybrid_entry(api, state, side, result, qty, now)
+    if status != 599 and (order or {}).get("orderId") is not None:
+        _transition_transaction(
+            state, "ACK_KNOWN", event_callback,
+            client_order_id=client_id,
+            order_id=(order or {}).get("orderId"),
+            http_status=status,
+        )
     if status != 200 or str((order or {}).get("status", "")) not in (
         "FILLED", "FILLED_RECOVERED_FROM_POSITION"
     ):
@@ -744,9 +1084,54 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
             getattr(state, "wstrade_execution_recovery_required", False)
         )
         flatten_order, flatten_status = None, 599
+        if partial > 0.0:
+            _transition_transaction(
+                state, "PARTIAL_FILL_CONFIRMED", event_callback,
+                client_order_id=client_id,
+                executed_qty=partial,
+                exchange_fill_time_ms=(order or {}).get("updateTime"),
+            )
+            _transition_transaction(
+                state, "UNPROTECTED_EXPOSURE", event_callback,
+                executed_qty=partial,
+            )
+            try:
+                _checkpoint_runtime(state)
+            except Exception as exc:
+                state.wstrade_live_checkpoint_error = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+                state.shadow_persistence_dirty = True
+                _seal_live(
+                    state, "PARTIAL_FILL_CHECKPOINT_FAILED", recovery=True
+                )
+        elif recovery_required:
+            _transition_transaction(
+                state, "EXECUTION_UNKNOWN", event_callback,
+                client_order_id=client_id, http_status=status,
+            )
+            _transition_transaction(
+                state, "RECOVERY_REQUIRED", event_callback,
+                reason="ENTRY_RESULT_UNVERIFIED",
+            )
+            try:
+                _checkpoint_runtime(state)
+            except Exception as exc:
+                state.wstrade_live_checkpoint_error = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+                state.shadow_persistence_dirty = True
+        else:
+            _transition_transaction(
+                state, "NO_POSITION", event_callback,
+                client_order_id=client_id, http_status=status,
+                terminal_status=str((order or {}).get("status") or "UNKNOWN"),
+            )
         if partial > 0.0 and not recovery_required:
             flatten_order, flatten_status = await _emergency_flatten(
-                api, state, side, partial
+                api, state, side, partial,
+                event_callback=event_callback,
+                transaction_reason="PARTIAL_ENTRY_TERMINAL",
             )
         if partial > 0.0:
             state.wstrade_live_last_partial_fill = {
@@ -759,6 +1144,30 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
                 event_callback=event_callback,
             )
         return None
+    _transition_transaction(
+        state, "FILL_CONFIRMED", event_callback,
+        client_order_id=client_id,
+        order_id=(order or {}).get("orderId"),
+        executed_qty=_executed_qty(order) or qty,
+        fill_price=_fill_price(order, price),
+        exchange_fill_time_ms=(order or {}).get("updateTime"),
+    )
+    try:
+        _checkpoint_runtime(state)
+    except Exception as exc:
+        state.wstrade_live_checkpoint_error = f"{type(exc).__name__}: {exc}"
+        state.shadow_persistence_dirty = True
+        _seal_live(state, "FILL_CHECKPOINT_FAILED", recovery=True)
+        flatten_order, flatten_status = await _emergency_flatten(
+            api, state, side, qty,
+            event_callback=event_callback,
+            transaction_reason="FILL_CHECKPOINT_FAILED",
+        )
+        _record_aborted_fill(
+            state, result, side, qty, order, flatten_order, flatten_status,
+            "FILL_CHECKPOINT_FAILED", event_callback=event_callback,
+        )
+        return None
     fill = float((order or {}).get("avgPrice", 0.0) or price)
     hard_sl, risk_plan = _risk_geometry(state, side, fill)
     if not bool(risk_plan.get("eligible", False)):
@@ -769,7 +1178,9 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
             "client_order_id": client_id,
         }
         flatten_order, flatten_status = await _emergency_flatten(
-            api, state, side, qty
+            api, state, side, qty,
+            event_callback=event_callback,
+            transaction_reason="POST_FILL_RISK_REJECTED",
         )
         _record_aborted_fill(
             state, result, side, qty, order, flatten_order, flatten_status,
@@ -784,10 +1195,45 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
     position.execution_cost_plan = verified_cost_model.shadow_execution_plan(
         result, state, fill_style
     )
-    protected, stop_result = await _place_stop(api, state, position)
+    # Publish and durably checkpoint the physical exposure before the first
+    # network await that submits protection.  A crash can now be reconciled as
+    # known unprotected exposure rather than an apparently flat process.
+    state.mainnet_shadow_position = position
+    state.mainnet_shadow_position_status = "UNPROTECTED_EXPOSURE"
+    state.wstrade_live_position = position
+    state.wstrade_unprotected_exposure = True
+    state.wstrade_live_entry_allowed = False
+    _transition_transaction(
+        state, "UNPROTECTED_EXPOSURE", event_callback,
+        position_cycle_id=position.position_cycle_id,
+        hard_sl=position.hard_sl,
+    )
+    try:
+        _checkpoint_runtime(state)
+    except Exception as exc:
+        state.wstrade_live_checkpoint_error = f"{type(exc).__name__}: {exc}"
+        state.shadow_persistence_dirty = True
+        _seal_live(state, "UNPROTECTED_EXPOSURE_CHECKPOINT_FAILED", recovery=True)
+        flatten_order, flatten_status = await _emergency_flatten(
+            api, state, side, qty,
+            event_callback=event_callback,
+            transaction_reason="UNPROTECTED_EXPOSURE_CHECKPOINT_FAILED",
+        )
+        _record_aborted_fill(
+            state, result, side, qty, order, flatten_order, flatten_status,
+            "UNPROTECTED_EXPOSURE_CHECKPOINT_FAILED",
+            event_callback=event_callback,
+        )
+        return None
+
+    protected, stop_result = await _place_stop(
+        api, state, position, event_callback=event_callback
+    )
     if not protected:
         flatten_order, flatten_status = await _emergency_flatten(
-            api, state, side, qty
+            api, state, side, qty,
+            event_callback=event_callback,
+            transaction_reason="HARD_STOP_PLACEMENT_FAILED",
         )
         state.wstrade_live_last_stop_failure = stop_result
         _record_aborted_fill(
@@ -795,9 +1241,13 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
             "HARD_STOP_PLACEMENT_FAILED", event_callback=event_callback,
         )
         return None
-    state.mainnet_shadow_position = position
+    _transition_transaction(
+        state, "POSITION_PROTECTED", event_callback,
+        position_cycle_id=position.position_cycle_id,
+        algo_id=position.hard_sl_algo_id,
+    )
     state.mainnet_shadow_position_status = "OPEN"
-    state.wstrade_live_position = position
+    state.wstrade_unprotected_exposure = False
     try:
         _checkpoint_runtime(state)
     except Exception as exc:
@@ -805,17 +1255,10 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
         state.shadow_persistence_dirty = True
         _seal_live(state, "LIVE_ENTRY_CHECKPOINT_FAILED", recovery=True)
         flatten_order, flatten_status = await _emergency_flatten(
-            api, state, side, qty
+            api, state, side, qty,
+            event_callback=event_callback,
+            transaction_reason="LIVE_ENTRY_CHECKPOINT_FAILED",
         )
-        if flatten_status == 200:
-            if position.hard_sl_algo_id is not None:
-                try:
-                    await api.cancel_algo_order(position.hard_sl_algo_id)
-                except Exception:
-                    pass
-            position.active = False
-            state.mainnet_shadow_position_status = "FLAT"
-            state.wstrade_live_position = None
         _record_aborted_fill(
             state, result, side, qty, order, flatten_order, flatten_status,
             "LIVE_ENTRY_CHECKPOINT_FAILED", event_callback=event_callback,
@@ -849,7 +1292,9 @@ async def open_position(api, state, side, result, now=None, event_callback=None)
     return position
 
 
-async def close_position(api, state, position, reason, now=None, event_callback=None):
+async def _close_position_locked(
+    api, state, position, reason, now=None, event_callback=None
+):
     now = time.time() if now is None else float(now)
     if position is None or not bool(getattr(position, "active", False)):
         return False
@@ -867,6 +1312,11 @@ async def close_position(api, state, position, reason, now=None, event_callback=
         "FILLED", "FILLED_RECOVERED_FROM_POSITION"
     ):
         _seal_live(state, "CLOSE_UNVERIFIED", recovery=True)
+        _transition_transaction(
+            state, "RECOVERY_REQUIRED", event_callback,
+            reason="CLOSE_UNVERIFIED", client_order_id=client_id,
+            http_status=status,
+        )
         return False
     stop_cancel_verified = True
     if position.hard_sl_algo_id is not None:
@@ -877,10 +1327,28 @@ async def close_position(api, state, position, reason, now=None, event_callback=
             stop_cancel_verified = False
     if not stop_cancel_verified:
         _seal_live(state, "ORPHAN_STOP_CANCEL_UNVERIFIED", recovery=True)
+        _transition_transaction(
+            state, "RECOVERY_REQUIRED", event_callback,
+            reason="ORPHAN_STOP_CANCEL_UNVERIFIED",
+            client_order_id=client_id,
+        )
+    else:
+        _transition_transaction(
+            state, "POSITION_CLOSED", event_callback,
+            client_order_id=client_id,
+            exit_order_id=(result or {}).get("orderId"),
+        )
     position.active = False
     state.mainnet_shadow_position_status = "FLAT"
     state.wstrade_live_position = None
+    state.wstrade_unprotected_exposure = False
     _complete_pending_demote(state)
+    if (
+        bool(getattr(state, "wstrade_live_armed", False))
+        and bool(getattr(state, "wstrade_user_stream_ready", False))
+        and not bool(getattr(state, "wstrade_execution_recovery_required", False))
+    ):
+        state.wstrade_live_entry_allowed = True
     try:
         _checkpoint_runtime(state)
     except Exception as exc:
@@ -946,7 +1414,7 @@ async def close_position(api, state, position, reason, now=None, event_callback=
     return True
 
 
-async def reconcile(api, state, event_callback=None, now=None):
+async def _reconcile_locked(api, state, event_callback=None, now=None):
     """Verify the exchange position/stop and enforce daily equity loss."""
     local = getattr(state, "mainnet_shadow_position", None)
     local_active = local is not None and bool(getattr(local, "active", False))
@@ -967,8 +1435,16 @@ async def reconcile(api, state, event_callback=None, now=None):
     positions, position_status = positions_result
     algos, algo_status = algos_result
     orders, order_status = orders_result
+    _control_plane_snapshot(api, state)
     if position_status != 200 or algo_status != 200 or order_status != 200:
         state.wstrade_reconciliation_status = "API_UNVERIFIED"
+        if _transaction_state(state) and _transaction_state(
+            state
+        ) not in execution_transaction.TERMINAL_STATES:
+            _transition_transaction(
+                state, "RECOVERY_REQUIRED", event_callback,
+                reason="RECONCILIATION_API_UNVERIFIED",
+            )
         return "API_UNVERIFIED"
 
     if recovery_required:
@@ -995,7 +1471,12 @@ async def reconcile(api, state, event_callback=None, now=None):
             amount = float(row.get("positionAmt", 0.0) or 0.0)
             side = str(row.get("positionSide") or ("LONG" if amount > 0 else "SHORT"))
             flatten_order, status = await _emergency_flatten(
-                api, state, side, abs(amount)
+                api, state, side, abs(amount),
+                event_callback=event_callback,
+                transaction_reason=(
+                    "UNOWNED_POSITION_RECOVERY"
+                    if _transaction_state(state) else None
+                ),
             )
             last_flatten_order = flatten_order
             flattened = flattened and status == 200
@@ -1012,6 +1493,10 @@ async def reconcile(api, state, event_callback=None, now=None):
             return "UNOWNED_POSITION_UNRESOLVED"
         state.wstrade_execution_recovery_required = False
         state.execution_unknown = False
+        state.wstrade_unprotected_exposure = False
+        _mark_flat_verified(
+            state, event_callback, reason="UNOWNED_POSITION_FLATTENED"
+        )
         _emit_final_aborted_fill(
             state, event_callback, flatten_order=last_flatten_order
         )
@@ -1043,6 +1528,10 @@ async def reconcile(api, state, event_callback=None, now=None):
         if recovery_required:
             state.wstrade_execution_recovery_required = False
             state.execution_unknown = False
+            state.wstrade_unprotected_exposure = False
+            _mark_flat_verified(
+                state, event_callback, reason="RECONCILIATION_VERIFIED_FLAT"
+            )
             if not bool(getattr(state, "wstrade_live_armed", False)):
                 _finalize_shadow_state(state)
         recovered_fill = bool(
@@ -1073,6 +1562,16 @@ async def reconcile(api, state, event_callback=None, now=None):
         local.active = False
         state.mainnet_shadow_position_status = "FLAT"
         state.wstrade_live_position = None
+        state.wstrade_unprotected_exposure = False
+        if _transaction_state(state) == "POSITION_PROTECTED":
+            _transition_transaction(
+                state, "POSITION_CLOSED", event_callback,
+                reason="EXCHANGE_POSITION_CLOSED",
+            )
+        else:
+            _mark_flat_verified(
+                state, event_callback, reason="EXCHANGE_POSITION_CLOSED"
+            )
         _complete_pending_demote(state)
         state.wstrade_reconciliation_status = "EXCHANGE_CLOSED_POSITION"
         if event_callback:
@@ -1085,19 +1584,75 @@ async def reconcile(api, state, event_callback=None, now=None):
     )
     if not protected:
         _, close_status = await _emergency_flatten(
-            api, state, local.side, abs(float(exchange_row.get("positionAmt", 0.0)))
+            api, state, local.side,
+            abs(float(exchange_row.get("positionAmt", 0.0))),
+            event_callback=event_callback,
+            transaction_reason="HARD_STOP_MISSING",
         )
         if close_status == 200:
-            local.active = False
-            state.mainnet_shadow_position_status = "FLAT"
-            state.wstrade_live_position = None
-            _finalize_shadow_state(state)
-            state.wstrade_reconciliation_status = "HARD_STOP_MISSING_FLATTENED"
-            return "HARD_STOP_MISSING_FLATTENED"
-        else:
-            _seal_live(state, "HARD_STOP_MISSING_FLATTEN_UNVERIFIED", recovery=True)
+            verified, verified_status = await api.get_positions(SYMBOL)
+            still_active = verified_status != 200 or any(
+                abs(float(row.get("positionAmt", 0.0) or 0.0)) > 0.0
+                for row in verified
+            )
+            if not still_active:
+                local.active = False
+                state.mainnet_shadow_position_status = "FLAT"
+                state.wstrade_live_position = None
+                state.wstrade_unprotected_exposure = False
+                state.wstrade_execution_recovery_required = False
+                state.execution_unknown = False
+                _mark_flat_verified(
+                    state, event_callback,
+                    reason="HARD_STOP_MISSING_FLATTENED",
+                )
+                _finalize_shadow_state(state)
+                state.wstrade_reconciliation_status = "HARD_STOP_MISSING_FLATTENED"
+                return "HARD_STOP_MISSING_FLATTENED"
+            _seal_live(
+                state, "HARD_STOP_MISSING_FLAT_UNVERIFIED", recovery=True
+            )
             state.wstrade_reconciliation_status = "HARD_STOP_MISSING_UNRESOLVED"
             return "HARD_STOP_MISSING_UNRESOLVED"
+        _seal_live(
+            state, "HARD_STOP_MISSING_FLATTEN_UNVERIFIED", recovery=True
+        )
+        state.wstrade_reconciliation_status = "HARD_STOP_MISSING_UNRESOLVED"
+        return "HARD_STOP_MISSING_UNRESOLVED"
+    if recovery_required:
+        transaction_state = _transaction_state(state)
+        if transaction_state in {"PROTECTION_SENT", "PROTECTION_ACKNOWLEDGED"}:
+            _transition_transaction(
+                state, "PROTECTION_VERIFIED", event_callback,
+                reason="RECONCILIATION_FOUND_OPEN_PROTECTION",
+                algo_id=getattr(local, "hard_sl_algo_id", None),
+                client_algo_id=getattr(local, "hard_sl_client_algo_id", None),
+            )
+            transaction_state = _transaction_state(state)
+        if transaction_state in {"PROTECTION_VERIFIED", "RECOVERY_REQUIRED"}:
+            _transition_transaction(
+                state, "POSITION_PROTECTED", event_callback,
+                reason="RECONCILIATION_VERIFIED_POSITION_AND_STOP",
+                algo_id=getattr(local, "hard_sl_algo_id", None),
+            )
+        elif transaction_state != "POSITION_PROTECTED":
+            _transition_transaction(
+                state, "RECOVERY_REQUIRED", event_callback,
+                reason="POSITION_AND_STOP_FOUND_WITH_UNRESOLVED_TRANSACTION",
+            )
+            state.wstrade_reconciliation_status = "TRANSACTION_UNRESOLVED"
+            return "TRANSACTION_UNRESOLVED"
+        state.wstrade_execution_recovery_required = False
+        state.execution_unknown = False
+        state.wstrade_unprotected_exposure = False
+        try:
+            _checkpoint_runtime(state)
+        except Exception as exc:
+            state.shadow_persistence_dirty = True
+            state.wstrade_live_checkpoint_error = f"{type(exc).__name__}: {exc}"
+            _seal_live(state, "RECOVERY_CHECKPOINT_FAILED", recovery=True)
+            state.wstrade_reconciliation_status = "RECOVERY_CHECKPOINT_FAILED"
+            return "RECOVERY_CHECKPOINT_FAILED"
     last_daily = float(getattr(state, "wstrade_daily_gate_checked_at", 0.0) or 0.0)
     if now - last_daily >= 15.0:
         state.wstrade_daily_gate_checked_at = now
@@ -1108,7 +1663,7 @@ async def reconcile(api, state, event_callback=None, now=None):
         equity_day_pnl = float(daily.get("net_income_usdt", 0.0) or 0.0) + unrealized
         state.wstrade_daily_equity_pnl_usdt = equity_day_pnl
         if not daily_ok or equity_day_pnl <= -mainnet_safety.daily_loss_limit():
-            closed = await close_position(
+            closed = await _close_position_locked(
                 api, state, local,
                 {"decision": "EXIT", "reason": daily_reason if not daily_ok else "DAILY_EQUITY_LOSS_BREAKER"},
                 now=now, event_callback=event_callback,
@@ -1120,3 +1675,25 @@ async def reconcile(api, state, event_callback=None, now=None):
             return status
     state.wstrade_reconciliation_status = "PROTECTED"
     return "PROTECTED"
+
+
+async def open_position(api, state, side, result, now=None, event_callback=None):
+    async with _execution_lock(state):
+        return await _open_position_locked(
+            api, state, side, result, now=now, event_callback=event_callback
+        )
+
+
+async def close_position(api, state, position, reason, now=None, event_callback=None):
+    async with _execution_lock(state):
+        return await _close_position_locked(
+            api, state, position, reason, now=now,
+            event_callback=event_callback,
+        )
+
+
+async def reconcile(api, state, event_callback=None, now=None):
+    async with _execution_lock(state):
+        return await _reconcile_locked(
+            api, state, event_callback=event_callback, now=now
+        )

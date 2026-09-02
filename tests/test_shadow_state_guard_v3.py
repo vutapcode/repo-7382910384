@@ -265,6 +265,40 @@ class ShadowStateGuardV3Tests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("OK version=SHADOW_RUNTIME_STATE_V12", result.stdout)
 
+    def test_v13_execution_transaction_checkpoint_is_accepted(self):
+        payload = {
+            "version": "SHADOW_RUNTIME_STATE_V13_EXECUTION_PROTECTION_TRANSACTION",
+            "balance": 5.4, "realized_pnl": 0.1,
+            "trades": 1, "wins": 1, "losses": 0, "breakevens": 0,
+            "event_seq": 1, "decision_evaluations": 1,
+            "near_misses": 0, "decision_funnel": {"READY": 1},
+            "edge_calibration_rows": [],
+            "edge_calibration_code_version": "code-v13",
+            "edge_calibration_config_version": "config-v13",
+            "entry_economics_v2_rows": [],
+            "entry_economics_code_version": "code-v13",
+            "entry_economics_config_version": "config-v13",
+            "execution_transaction": {
+                "version": "EXECUTION_PROTECTION_TRANSACTION_V1",
+                "transaction_id": "intent-1",
+                "state": "UNPROTECTED_EXPOSURE",
+                "invariant_ok": True,
+                "transitions": [],
+            },
+            "execution_control_plane": {
+                "version": "EXECUTION_CONTROL_PLANE_V1",
+                "health": "HEALTHY",
+                "entry_allowed": True,
+            },
+            "position": None,
+        }
+        accepted = self.run_guard(payload)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        payload["execution_transaction"]["state"] = "POSITION_PROTECTED"
+        rejected = self.run_guard(payload)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("protected_without_position", rejected.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

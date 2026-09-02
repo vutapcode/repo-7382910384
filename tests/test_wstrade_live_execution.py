@@ -25,7 +25,23 @@ class FakeApi:
     async def new_order(self, symbol, side, kind, quantity=None, **kwargs):
         self.orders.append((side, kind, quantity, kwargs))
         if self.partial and len(self.orders) == 1:
+            self.positions = [{
+                'positionSide': kwargs.get('positionSide'),
+                'positionAmt': '0.0004',
+            }]
             return {'status': 'PARTIALLY_FILLED', 'avgPrice': '78000', 'executedQty': '0.0004', 'orderId': 1}, 200
+        position_side = str(kwargs.get('positionSide') or '')
+        opens = (
+            (position_side == 'LONG' and side == 'BUY')
+            or (position_side == 'SHORT' and side == 'SELL')
+        )
+        if kind == 'MARKET' and opens:
+            self.positions = [{
+                'positionSide': position_side,
+                'positionAmt': str(quantity or 0.001),
+            }]
+        elif kind == 'MARKET' and position_side:
+            self.positions = []
         return {'status': 'FILLED', 'avgPrice': '78000', 'orderId': len(self.orders)}, 200
     async def new_algo_order(self, **kwargs):
         if not self.stop_ok:
@@ -73,6 +89,27 @@ class TimeoutMarketApi(FakeApi):
 
     async def query_order(self, symbol, client_id):
         return {'status': 'NEW', 'executedQty': '0', 'orderId': 1}, 200
+
+
+class AckOnlyStopApi(FakeApi):
+    async def new_algo_order(self, **kwargs):
+        return {'algoId': 77, 'clientAlgoId': kwargs['clientAlgoId']}, 200
+
+
+class StopTimeoutApi(FakeApi):
+    async def new_algo_order(self, **kwargs):
+        return {'code': 'NETWORK', 'message': 'timeout'}, 599
+
+
+class UnsafeControlApi(FakeApi):
+    def control_plane_snapshot(self, **kwargs):
+        return {
+            'version': 'EXECUTION_CONTROL_PLANE_V1',
+            'health': 'UNSAFE_FOR_NEW_ENTRY',
+            'reason': 'MEASURED_P95_EXCEEDS_OPPORTUNITY_BUDGET',
+            'entry_allowed': False,
+            'sample_count': 4,
+        }
 
 
 def state():
@@ -298,6 +335,169 @@ class LiveExecutionTests(unittest.TestCase):
             self.assertEqual(pos.execution_cost_plan['execution_style'], 'TAKER')
         asyncio.run(run())
 
+    def test_stop_ack_without_exchange_query_proof_is_not_protected(self):
+        async def run():
+            api, s = AckOnlyStopApi(), state()
+            events = []
+            with patch.object(
+                live.mainnet_safety, 'exchange_entry_gate',
+                new=AsyncMock(return_value=(True, 'PASS', {})),
+            ), patch.object(
+                live.mainnet_safety, 'max_planned_loss_usdt', return_value=0.60
+            ):
+                pos = await live.open_position(
+                    api, s, 'LONG', {
+                        'execution_policy': 'TAKER', 'phase': 'RELEASE'
+                    }, now=1.0,
+                    event_callback=lambda event, payload: events.append(
+                        (event, payload)
+                    ),
+                )
+            self.assertIsNone(pos)
+            self.assertEqual([row[1] for row in api.orders], ['MARKET', 'MARKET'])
+            self.assertEqual(s.mainnet_shadow_position_status, 'FLAT')
+            states = [
+                payload['state'] for event, payload in events
+                if event == 'LIVE_EXECUTION_TRANSACTION'
+            ]
+            self.assertIn('PROTECTION_ACKNOWLEDGED', states)
+            self.assertIn('PROTECTION_VERIFICATION_FAILED', states)
+            self.assertNotIn('POSITION_PROTECTED', states)
+        asyncio.run(run())
+
+    def test_stop_submit_timeout_and_unknown_query_flattens_fail_closed(self):
+        async def run():
+            api, s = StopTimeoutApi(), state()
+            with patch.object(
+                live.mainnet_safety, 'exchange_entry_gate',
+                new=AsyncMock(return_value=(True, 'PASS', {})),
+            ), patch.object(
+                live.mainnet_safety, 'max_planned_loss_usdt', return_value=0.60
+            ):
+                pos = await live.open_position(
+                    api, s, 'SHORT', {
+                        'execution_policy': 'TAKER', 'phase': 'RELEASE'
+                    }, now=1.0,
+                )
+            self.assertIsNone(pos)
+            self.assertEqual(s.mainnet_shadow_position_status, 'FLAT')
+            self.assertEqual(
+                s.wstrade_live_last_stop_failure['post_status'], 599
+            )
+            self.assertFalse(s.wstrade_live_armed)
+        asyncio.run(run())
+
+    def test_unknown_emergency_flatten_is_not_submitted_twice(self):
+        class Api(FakeApi):
+            async def new_order(
+                self, symbol, side, kind, quantity=None, **kwargs
+            ):
+                if len(self.orders) == 0:
+                    return await super().new_order(
+                        symbol, side, kind, quantity, **kwargs
+                    )
+                self.orders.append((side, kind, quantity, kwargs))
+                return {
+                    'status': 'NEW', 'executedQty': '0', 'orderId': 2
+                }, 599
+
+            async def query_order(self, symbol, client_id):
+                return {
+                    'status': 'NEW', 'executedQty': '0', 'orderId': 2
+                }, 200
+
+        async def run():
+            api, s = Api(stop_ok=False), state()
+            with patch.object(
+                live.mainnet_safety, 'exchange_entry_gate',
+                new=AsyncMock(return_value=(True, 'PASS', {})),
+            ), patch.object(
+                live.mainnet_safety, 'max_planned_loss_usdt', return_value=0.60
+            ):
+                pos = await live.open_position(
+                    api, s, 'LONG', {
+                        'execution_policy': 'TAKER', 'phase': 'RELEASE'
+                    }, now=1.0,
+                )
+            self.assertIsNone(pos)
+            self.assertTrue(s.wstrade_execution_recovery_required)
+            self.assertEqual(len(api.orders), 2)
+            result = await live.reconcile(api, s, now=2.0)
+            self.assertEqual(result, 'HARD_STOP_MISSING_UNRESOLVED')
+            self.assertEqual(len(api.orders), 2)
+        asyncio.run(run())
+
+    def test_execution_transaction_is_checkpointed_before_stop_submit(self):
+        async def run():
+            api, s = FakeApi(), state()
+            checkpoints = []
+            s.wstrade_runtime_state_save = lambda: checkpoints.append({
+                'transaction_state': (
+                    getattr(s, 'wstrade_execution_transaction', {}) or {}
+                ).get('state'),
+                'position_status': getattr(
+                    s, 'mainnet_shadow_position_status', None
+                ),
+                'unprotected': bool(
+                    getattr(s, 'wstrade_unprotected_exposure', False)
+                ),
+            })
+            with patch.object(
+                live.mainnet_safety, 'exchange_entry_gate',
+                new=AsyncMock(return_value=(True, 'PASS', {})),
+            ), patch.object(
+                live.mainnet_safety, 'max_planned_loss_usdt', return_value=0.60
+            ):
+                pos = await live.open_position(
+                    api, s, 'LONG', {
+                        'execution_policy': 'TAKER', 'phase': 'RELEASE'
+                    }, now=1.0,
+                )
+            self.assertIsNotNone(pos)
+            self.assertIn({
+                'transaction_state': 'UNPROTECTED_EXPOSURE',
+                'position_status': 'UNPROTECTED_EXPOSURE',
+                'unprotected': True,
+            }, checkpoints)
+            self.assertTrue(any(
+                row['transaction_state'] == 'PROTECTION_SENT'
+                and row['unprotected']
+                for row in checkpoints
+            ))
+            transaction = s.wstrade_execution_transaction
+            states = [row['state'] for row in transaction['transitions']]
+            self.assertLess(states.index('FILL_CONFIRMED'), states.index(
+                'UNPROTECTED_EXPOSURE'
+            ))
+            self.assertLess(states.index('UNPROTECTED_EXPOSURE'), states.index(
+                'PROTECTION_SENT'
+            ))
+            self.assertLess(states.index('PROTECTION_ACKNOWLEDGED'), states.index(
+                'PROTECTION_VERIFIED'
+            ))
+            self.assertEqual(transaction['state'], 'POSITION_PROTECTED')
+        asyncio.run(run())
+
+    def test_unsafe_control_plane_blocks_new_entry_but_sends_no_order(self):
+        async def run():
+            api, s = UnsafeControlApi(), state()
+            with patch.object(
+                live.mainnet_safety, 'exchange_entry_gate',
+                new=AsyncMock(return_value=(True, 'PASS', {})),
+            ):
+                pos = await live.open_position(
+                    api, s, 'LONG', {
+                        'execution_policy': 'TAKER', 'phase': 'RELEASE'
+                    }, now=1.0,
+                )
+            self.assertIsNone(pos)
+            self.assertEqual(api.orders, [])
+            self.assertEqual(
+                s.wstrade_live_last_entry_gate['reason'],
+                'EXECUTION_CONTROL_PLANE_UNSAFE_FOR_NEW_ENTRY',
+            )
+        asyncio.run(run())
+
     def test_stop_failure_immediately_flattens_and_never_publishes_position(self):
         async def run():
             api, s = FakeApi(stop_ok=False), state()
@@ -339,8 +539,9 @@ class LiveExecutionTests(unittest.TestCase):
             )
             self.assertTrue(s.wstrade_live_last_entry_outcome['capture_required'])
             self.assertEqual(
-                [event for event, _ in events],
-                ['ENTRY_FILLED_THEN_FLATTENED'],
+                [event for event, _ in events].count(
+                    'ENTRY_FILLED_THEN_FLATTENED'
+                ), 1,
             )
         asyncio.run(run())
 
@@ -386,7 +587,10 @@ class LiveExecutionTests(unittest.TestCase):
             self.assertIsNone(pos)
             self.assertTrue(s.wstrade_execution_recovery_required)
             self.assertFalse(s.wstrade_live_last_entry_outcome['capture_required'])
-            self.assertEqual(events[0][0], 'ENTRY_FILL_RECOVERY_PENDING')
+            self.assertIn(
+                'ENTRY_FILL_RECOVERY_PENDING',
+                [event for event, _ in events],
+            )
 
             result = await live.reconcile(
                 api, s, now=2.0,
@@ -433,7 +637,7 @@ class LiveExecutionTests(unittest.TestCase):
             self.assertFalse(s.wstrade_live_armed)
         asyncio.run(run())
 
-    def test_live_entry_checkpoint_failure_flattens_and_seals(self):
+    def test_intent_checkpoint_failure_blocks_submit_and_seals(self):
         async def run():
             api, s = FakeApi(), state()
             s.wstrade_runtime_state_save = lambda: (_ for _ in ()).throw(
@@ -450,10 +654,11 @@ class LiveExecutionTests(unittest.TestCase):
                     'phase': 'RELEASE',
                 }, now=1.0)
             self.assertIsNone(pos)
-            self.assertEqual([row[1] for row in api.orders], ['MARKET', 'MARKET'])
-            self.assertFalse(s.mainnet_shadow_position.active)
+            self.assertEqual(api.orders, [])
             self.assertTrue(s.wstrade_execution_recovery_required)
-            self.assertEqual(s.execution_unknown_reason, 'LIVE_ENTRY_CHECKPOINT_FAILED')
+            self.assertEqual(
+                s.execution_unknown_reason, 'EXECUTION_INTENT_CHECKPOINT_FAILED'
+            )
         asyncio.run(run())
 
     def test_close_with_unverified_stop_cancel_enters_recovery(self):

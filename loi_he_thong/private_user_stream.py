@@ -45,6 +45,12 @@ def mark_connected(state, now=None):
         and not bool(getattr(state, "wstrade_execution_recovery_required", False))
         and not bool(getattr(state, "wstrade_live_demote_pending", False))
         and not bool(getattr(state, "execution_unknown", False))
+        and (
+            getattr(state, "wstrade_execution_control_plane", None) is None
+            or (getattr(state, "wstrade_execution_control_plane", {}) or {}).get(
+                "entry_allowed"
+            ) is not False
+        )
     ):
         state.wstrade_live_entry_allowed = True
 
@@ -99,6 +105,7 @@ def apply_event(state, payload, received_at=None):
                 seen.add(fill_key)
                 state.wstrade_user_order_commission_trades[client_id] = seen
         row = {
+            "received_at": now,
             "event_time": event_time,
             "transaction_time": float(payload.get("T", 0.0) or 0.0) / 1000.0,
             "symbol": str(order.get("s", "")),
@@ -120,6 +127,9 @@ def apply_event(state, payload, received_at=None):
             "commissionAsset": commission_asset or None,
             "commissionByAssetCumulative": dict(totals),
         }
+        state.wstrade_user_stream_last_transport_lag_ms = max(
+            0.0, (now - event_time) * 1000.0
+        )
         if client_id:
             state.wstrade_user_orders[client_id] = row
             while len(state.wstrade_user_orders) > MAX_ORDER_EVENTS:

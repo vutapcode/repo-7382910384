@@ -7,6 +7,52 @@ from loi_he_thong import shadow_runtime_state as runtime_state
 
 
 class ShadowRuntimeStateTests(unittest.TestCase):
+    def test_unfinished_execution_transaction_restores_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(
+            'os.environ', {'SMC_JOURNAL_DIR': temp}
+        ):
+            source_state = SimpleNamespace(
+                code_version="code-v13",
+                strategy_config_version="config-v13",
+                mainnet_shadow_position=None,
+                wstrade_execution_transaction={
+                    "version": "EXECUTION_PROTECTION_TRANSACTION_V1",
+                    "transaction_id": "intent-1",
+                    "state": "PROTECTION_SENT",
+                    "invariant_ok": True,
+                    "transitions": [],
+                },
+                wstrade_execution_control_plane={
+                    "version": "EXECUTION_CONTROL_PLANE_V1",
+                    "health": "HEALTHY",
+                    "entry_allowed": True,
+                    "sample_count": 5,
+                },
+            )
+            runtime_state.save(SimpleNamespace(
+                app=SimpleNamespace(state=source_state), QTY_BTC=0.001
+            ))
+            target_state = SimpleNamespace(
+                code_version="code-v13",
+                strategy_config_version="config-v13",
+            )
+            runtime_state.restore(SimpleNamespace(
+                app=SimpleNamespace(state=target_state), QTY_BTC=0.001
+            ))
+        self.assertTrue(target_state.wstrade_execution_recovery_required)
+        self.assertTrue(target_state.execution_unknown)
+        self.assertFalse(target_state.wstrade_live_entry_allowed)
+        self.assertEqual(
+            target_state.wstrade_execution_transaction["state"],
+            "PROTECTION_SENT",
+        )
+        self.assertEqual(
+            target_state.wstrade_execution_control_plane["health"], "UNKNOWN"
+        )
+        self.assertFalse(
+            target_state.wstrade_execution_control_plane["entry_allowed"]
+        )
+
     def test_entry_economics_rows_are_version_bound(self):
         row = {
             "economic_contract_version": "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",

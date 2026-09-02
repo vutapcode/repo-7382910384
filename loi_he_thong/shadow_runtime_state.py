@@ -5,7 +5,9 @@ from pathlib import Path
 import tempfile
 import time
 
-VERSION = "SHADOW_RUNTIME_STATE_V12_ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
+from loi_he_thong import execution_transaction
+
+VERSION = "SHADOW_RUNTIME_STATE_V13_EXECUTION_PROTECTION_TRANSACTION"
 SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V1",
     "SHADOW_RUNTIME_STATE_V2",
@@ -18,6 +20,7 @@ SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V9_ENTRY_ECONOMICS_V5",
     "SHADOW_RUNTIME_STATE_V10_ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
     "SHADOW_RUNTIME_STATE_V11_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
+    "SHADOW_RUNTIME_STATE_V12_ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
     VERSION,
 }
 
@@ -221,6 +224,10 @@ def snapshot(base):
             getattr(state, "strategy_config_version", "") or ""
         ),
         "position": None,
+        "execution_transaction": execution_transaction.snapshot(state),
+        "execution_control_plane": dict(
+            getattr(state, "wstrade_execution_control_plane", {}) or {}
+        ),
     }
     if pos is not None and bool(getattr(pos, "active", False)):
         data["position"] = {
@@ -346,6 +353,34 @@ def restore(base):
                 "reason": "CODE_OR_CONFIG_VERSION_MISMATCH",
                 "excluded_rows": len(economics_rows),
             }
+
+    transaction = raw.get("execution_transaction")
+    if isinstance(transaction, dict):
+        state.wstrade_execution_transaction = dict(transaction)
+        if execution_transaction.requires_reconciliation(transaction):
+            state.wstrade_execution_recovery_required = True
+            state.execution_unknown = True
+            state.wstrade_live_entry_allowed = False
+            state.execution_unknown_reason = (
+                "EXECUTION_TRANSACTION_RESTORED_UNFINISHED"
+            )
+    control_plane = raw.get("execution_control_plane")
+    if (
+        isinstance(control_plane, dict)
+        and control_plane.get("version") == "EXECUTION_CONTROL_PLANE_V1"
+    ):
+        # Historical health is audit context only. A new process must collect
+        # fresh control-plane samples before this can authorize live entry.
+        state.wstrade_execution_control_plane_restored = dict(control_plane)
+        state.wstrade_execution_control_plane = {
+            "version": control_plane.get("version"),
+            "health": "UNKNOWN",
+            "reason": "PROCESS_RESTART_REQUIRES_FRESH_MEASUREMENT",
+            "entry_allowed": False,
+            "sample_count": 0,
+        }
+    else:
+        state.wstrade_execution_control_plane = {}
 
     # A process restart is a causal data gap. Preserve lifetime counters and
     # consumed IDs, but never bridge a short-lived evidence episode across it.

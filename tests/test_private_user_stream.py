@@ -25,6 +25,10 @@ class PrivateUserStreamTests(unittest.TestCase):
         self.assertEqual(row["commissionAmount"], "0.04")
         self.assertEqual(row["commissionAsset"], "USDT")
         self.assertEqual(row["commissionByAssetCumulative"], {"USDT": 0.04})
+        self.assertEqual(row["received_at"], 1.1)
+        self.assertAlmostEqual(
+            state.wstrade_user_stream_last_transport_lag_ms, 100.0
+        )
 
         second = {
             "e": "ORDER_TRADE_UPDATE", "E": 1_001, "T": 1_000,
@@ -69,6 +73,19 @@ class PrivateUserStreamTests(unittest.TestCase):
         state.wstrade_execution_recovery_required = False
         state.wstrade_live_demote_pending = True
         stream.mark_connected(state, now=4.0)
+        self.assertFalse(state.wstrade_live_entry_allowed)
+
+    def test_reconnect_cannot_override_unsafe_control_plane(self):
+        state = SimpleNamespace(
+            wstrade_live_armed=True,
+            wstrade_live_entry_allowed=False,
+            wstrade_execution_recovery_required=False,
+            wstrade_execution_control_plane={
+                "health": "UNSAFE_FOR_NEW_ENTRY",
+                "entry_allowed": False,
+            },
+        )
+        stream.mark_connected(state, now=5.0)
         self.assertFalse(state.wstrade_live_entry_allowed)
 
 
