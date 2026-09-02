@@ -11,9 +11,62 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from loi_he_thong import authority_contracts
+
 
 SYMBOL = "BTCUSDT"
 VN_TZ = timezone(timedelta(hours=7))
+
+
+def safety_contract(state, causal_episode_id=None, *, has_exposure=False):
+    """Snapshot operational safety only; never label a market thesis false."""
+    runtime = dict(getattr(state, "mainnet_shadow_health", {}) or {})
+    operational = list(runtime.get("operational_blockers") or ())
+    if bool(getattr(state, "execution_unknown", False)):
+        operational.append("execution_unknown")
+    if bool(getattr(state, "wstrade_execution_recovery_required", False)):
+        operational.append("execution_recovery_required")
+    if bool(getattr(state, "shadow_integrity_fault", False)):
+        operational.append("journal_integrity_fault")
+    operational = list(dict.fromkeys(str(value) for value in operational))
+
+    required_sources = (
+        "spot_price", "coinbase_price", "futures_price",
+        "spot_flow", "futures_flow",
+    )
+    unknown_sources = [
+        name for name in required_sources if runtime.get(name) is not True
+    ]
+    if operational:
+        safety_state = "SYSTEM_UNSAFE"
+        action = (
+            "PRESERVE_EXIT_AND_RECONCILIATION_ONLY"
+            if has_exposure else "SEAL_NEW_ENTRY"
+        )
+        reason = operational[0]
+    elif unknown_sources:
+        safety_state = "UNKNOWN_SOURCE"
+        action = (
+            "PRESERVE_EXIT_AND_RECONCILIATION_ONLY"
+            if has_exposure else "SEAL_NEW_ENTRY"
+        )
+        reason = "SOURCE_OBSERVATION_INCOMPLETE"
+    else:
+        safety_state = "CLEAR"
+        action = "SAFETY_CLEAR"
+        reason = "NO_OPERATIONAL_SAFETY_BLOCKER"
+    return authority_contracts.seal(
+        "SAFETY", "MAINNET_SAFETY", causal_episode_id,
+        {
+            "safety_action": action,
+            "safety_state": safety_state,
+            "safety_reason": reason,
+            "operational_blockers": operational,
+            "unknown_sources": unknown_sources,
+            "has_exposure": bool(has_exposure),
+            "market_thesis_rewritten": False,
+        },
+    )
 
 
 def _enabled(name, default="false"):

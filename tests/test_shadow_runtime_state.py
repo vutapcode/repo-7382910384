@@ -233,6 +233,10 @@ class ShadowRuntimeStateTests(unittest.TestCase):
                     'primary_cash_anchor': 'spot',
                     'cash_anchors': ['spot', 'coinbase'],
                 },
+                authority_contracts={
+                    'version': 'FOUR_AUTHORITY_CONTRACTS_V1',
+                    'bundle_hash': 'test-only',
+                },
             )
             source_state = SimpleNamespace(
                 mainnet_shadow_position=position,
@@ -257,6 +261,10 @@ class ShadowRuntimeStateTests(unittest.TestCase):
             'spot',
         )
         self.assertEqual(target_state.guardian_latency_samples_total, 321)
+        self.assertEqual(
+            target_state.mainnet_shadow_position.authority_contracts['version'],
+            'FOUR_AUTHORITY_CONTRACTS_V1',
+        )
         self.assertIs(
             target_state.wstrade_live_position,
             target_state.mainnet_shadow_position,

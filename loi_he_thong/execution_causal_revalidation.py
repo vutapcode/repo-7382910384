@@ -8,6 +8,7 @@ candidate is still executable after REST/maker latency.
 import hashlib
 import json
 
+from loi_he_thong import authority_contracts
 from loi_he_thong import ignition_signals
 from loi_he_thong import ignition_core
 from loi_he_thong import verified_cost_model
@@ -19,6 +20,33 @@ BBO_MAX_AGE_SECONDS = 1.0
 BIAS_MAX_AGE_SECONDS = 3.0
 BIAS_MIN_CONFIDENCE = 0.55
 FOLLOW_MAX_MS = 600
+
+
+def execution_contract(ok, reason, causal_episode_id=None, *, pending=False):
+    """Serialize this owner's conclusion without reinterpreting market truth."""
+    reason = str(reason or "UNKNOWN").upper()
+    if pending:
+        action = "EXECUTION_UNKNOWN"
+    elif ok:
+        action = "EXECUTE"
+    elif any(token in reason for token in (
+        "OPPOSING", "REVERSAL", "AUTHORITY_", "EPISODE_CHANGED",
+        "OPPORTUNITY_CHANGED", "ALREADY_CONSUMED", "IMPULSE_ALREADY_CONSUMED",
+    )):
+        action = "CANCEL"
+    else:
+        action = "EXECUTION_UNKNOWN"
+    return authority_contracts.seal(
+        "EXECUTION", "EXECUTION_CAUSAL_REVALIDATION",
+        causal_episode_id,
+        {"execution_action": action, "execution_reason": reason},
+    )
+
+
+def pending_contract(causal_episode_id=None):
+    return execution_contract(
+        False, "NOT_EVALUATED_AT_DECISION", causal_episode_id, pending=True,
+    )
 
 
 def _f(value, default=0.0):
@@ -356,6 +384,9 @@ def validate_submit(state, side, result, now):
         return bool(ok), str(reason), {
             **timing,
             **dict(detail or {}),
+            "execution_contract": execution_contract(
+                ok, reason, (result or {}).get("causal_episode_id")
+            ),
             "post_proof_guard_policy": (
                 "CONTRADICTION_ONLY_NO_STRATEGY_REINTERPRETATION"
             ),
@@ -491,30 +522,39 @@ def _current_consumed_fraction(state, side, result, placed_at, now):
 
 def maker_ttl_release(state, side, result, now, placed_at):
     """Shadow-only maker fallback check for the same reserved causal episode."""
+    episode_id = (result or {}).get("causal_episode_id")
+
+    def verdict(ok, reason, detail=None):
+        detail = dict(detail or {})
+        detail["execution_contract"] = execution_contract(
+            ok, reason, episode_id
+        )
+        return bool(ok), str(reason), detail
+
     ok, reason, detail = validate_submit(state, side, result, now)
     if not ok:
         return ok, reason, detail
     ok, reason, detail = _current_release(state, side, result, placed_at)
     if not ok:
-        return ok, reason, detail
+        return verdict(ok, reason, detail)
     consumed, phase_detail = _current_consumed_fraction(
         state, side, result, placed_at, now
     )
     if consumed is None:
-        return False, "CURRENT_PHASE_SCALE_UNAVAILABLE", phase_detail
+        return verdict(False, "CURRENT_PHASE_SCALE_UNAVAILABLE", phase_detail)
     if consumed > 0.35:
-        return False, "CURRENT_IMPULSE_ALREADY_CONSUMED", phase_detail
+        return verdict(False, "CURRENT_IMPULSE_ALREADY_CONSUMED", phase_detail)
     cost_ok, cost_reason, cost_detail = (
         verified_cost_model.validate_execution_cost_contract(
             result, state, "TAKER"
         )
     )
     if not cost_ok:
-        return False, cost_reason, cost_detail
-    return True, "CURRENT_RELEASE_PASS", {
+        return verdict(False, cost_reason, cost_detail)
+    return verdict(True, "CURRENT_RELEASE_PASS", {
         **detail,
         "current_phase": phase_detail,
         "current_execution_cost_bps": cost_detail["current_cost_bps"],
         "cost_budget_bps": cost_detail["budget_bps"],
         "cost_components": cost_detail["current"],
-    }
+    })

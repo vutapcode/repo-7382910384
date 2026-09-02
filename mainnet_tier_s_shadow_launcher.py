@@ -15,11 +15,14 @@ import signal
 from types import SimpleNamespace
 import time
 
+from loi_he_thong import authority_contracts
 from loi_he_thong import canonical_opportunity
 from loi_he_thong import causal_threshold_registry
 from loi_he_thong import decision_boundary_evidence
 from loi_he_thong import execution_causal_revalidation
 from loi_he_thong import host_cpu_governor
+from loi_he_thong import mainnet_safety
+from loi_he_thong import market_thesis
 from loi_he_thong import microstructure_regime
 from loi_he_thong import opportunity_research_matrix
 from loi_he_thong import regime_oi_freshness_hook
@@ -485,6 +488,47 @@ def _append_event(event, payload):
         handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def _action_contract(result, quorum_ok, causal_episode_id=None):
+    """Serialize the final Action owner output without redoing market truth."""
+    result = dict(result or {})
+    authorized = bool(result.get("decision") == "GO" and quorum_ok)
+    policy = str(result.get("execution_policy") or "").upper()
+    if authorized and policy == "TAKER":
+        action = "ACT_TAKER_NOW"
+    elif authorized and policy == "MAKER":
+        action = "POST_MAKER"
+    else:
+        # Existing authority has no explicit ABANDON output. Contract-only
+        # migration must not invent one from a WAIT reason.
+        action = "WAIT_INFORMATION"
+    return authority_contracts.seal(
+        "ACTION", "TIER_S_ENTRY_ACTION", causal_episode_id,
+        {"action": action},
+    )
+
+
+def _authority_contract_bundle(
+    state, result, quorum_ok, causal_episode_id=None,
+    execution_contract=None, *, has_exposure=False,
+):
+    """Join snapshots from four existing owners without changing decisions."""
+    episode_id = str(
+        causal_episode_id
+        or (result or {}).get("causal_episode_id") or ""
+    )
+    snapshot = dict(result or {})
+    snapshot["causal_episode_id"] = episode_id
+    truth = market_thesis.build(snapshot)
+    action = _action_contract(snapshot, quorum_ok, episode_id)
+    execution = execution_contract or (
+        execution_causal_revalidation.pending_contract(episode_id)
+    )
+    safety = mainnet_safety.safety_contract(
+        state, episode_id, has_exposure=has_exposure,
+    )
+    return authority_contracts.bundle(truth, action, execution, safety)
+
+
 def _record_post_go_rejection(
     result, reject_stage, blocking_reason, failed_dependency=None,
 ):
@@ -512,6 +556,9 @@ def _record_post_go_rejection(
         "failed_dependency": failed_dependency,
         "proof_type": ignition.get("proof_type"),
         "execution_policy": result.get("execution_policy"),
+        "authority_contracts": dict(
+            result.get("authority_contracts") or {}
+        ),
     })
     return True
 
@@ -727,6 +774,15 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "time_to_edge": (edge_report or {}).get("time_to_edge"),
     }
     boundaries = decision_boundary_evidence.build(result, edge_report)
+    episode_id = (
+        (opportunity or {}).get("causal_episode_id")
+        or (result or {}).get("causal_episode_id")
+    )
+    four_authority = dict(
+        (result or {}).get("authority_contracts") or {}
+    ) or _authority_contract_bundle(
+        state, result, quorum_ok, episode_id,
+    )
     return {
         "cycle_id": cycle_id,
         "decision_time_ms": decision_time_ms,
@@ -735,7 +791,8 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "strategy_config_version": getattr(state, "strategy_config_version", None),
         "taxonomy_version": "TIER_S_MISS_TAXONOMY_V7_BOUNDARY_EVIDENCE",
         "threshold_registry_version": causal_threshold_registry.VERSION,
-        "causal_episode_id": (opportunity or {}).get("causal_episode_id"),
+        "causal_episode_id": episode_id,
+        "authority_contracts": four_authority,
         "inputs": {
             "bias": {
                 "direction": getattr(state, "bias_state", "ABSTAIN"),
@@ -880,6 +937,9 @@ def _record_position_state(pos, guardian, risk, price, now, force=False):
         "profit_floor": getattr(pos, "floor", None),
         "guardian_state": guardian,
         "risk_state": risk,
+        "authority_contracts": dict(
+            getattr(pos, "authority_contracts", {}) or {}
+        ),
         "regime": regime,
     })
     _POSITION_RECORD_AT = now
@@ -1043,6 +1103,7 @@ def _open_shadow(side, result, now):
             result.get("canonical_opportunity_id", 0) or 0
         ),
         causal_episode_id=result.get("causal_episode_id"),
+        authority_contracts=dict(result.get("authority_contracts") or {}),
         shadow_execution=execution or {
             "style": "MARKET",
             "model": shadow_execution_model.VERSION,
@@ -1081,6 +1142,7 @@ def _open_shadow(side, result, now):
             "entry_causal_thesis": pos.entry_causal_thesis,
             "canonical_opportunity_id": pos.canonical_opportunity_id,
             "causal_episode_id": pos.causal_episode_id,
+            "authority_contracts": dict(pos.authority_contracts or {}),
             "feasibility": feasibility,
             "filter_status": (feasibility.get("execution_filters") or {}).get("mode"),
             "sizing_reason": feasibility.get("sizing_mode"),
@@ -1313,6 +1375,9 @@ def _close_shadow(pos, guardian_result, now):
             "cycle_id": getattr(pos, "position_cycle_id", None),
             "decision_cycle_id": getattr(pos, "decision_cycle_id", None),
             "causal_episode_id": getattr(pos, "causal_episode_id", None),
+            "authority_contracts": dict(
+                getattr(pos, "authority_contracts", {}) or {}
+            ),
             "side": pos.side,
             "entry_price": entry,
             "exit_price": price,
@@ -1386,6 +1451,10 @@ async def _open_position(side, result, now):
             "checked_at": float(now),
             "scope": "SHARED_SHADOW_LIVE_CONTRACT",
         }
+        result["authority_contracts"] = _authority_contract_bundle(
+            app.state, result, True, result.get("causal_episode_id"),
+            execution_contract=causal_detail.get("execution_contract"),
+        )
         _append_event("ENTRY_SUBMIT_REVALIDATED", {
             "schema_version": "GO_SUBMIT_TIMING_V1",
             "causal_episode_id": result.get("causal_episode_id"),
@@ -1423,6 +1492,7 @@ async def _open_position(side, result, now):
                     "current_execution_proof"
                 ) or {}
             ),
+            "authority_contracts": result["authority_contracts"],
             "scope": "SHADOW_DEMO_AND_LIVE_PRE_SUBMIT",
         })
         if not causal_ok:
@@ -1875,6 +1945,11 @@ async def _entry_loop():
             opportunity = canonical_opportunity.observe(
                 s, result, qualified=quorum_ok, now=now
             )
+            result = dict(result)
+            result["authority_contracts"] = _authority_contract_bundle(
+                s, result, quorum_ok, opportunity.get("causal_episode_id"),
+            )
+            s.entry_shadow_council = result
             near_miss = bool(result.get("decision") == "GO" and not quorum_ok)
             s.mainnet_shadow_decision_evaluations = int(
                 getattr(s, "mainnet_shadow_decision_evaluations", 0) or 0
@@ -2009,6 +2084,9 @@ async def _entry_loop():
                     "failed_gates": recorder_snapshot["output"]["failed_gates"],
                     "diagnostic_reasons": recorder_snapshot["output"][
                         "diagnostic_reasons"
+                    ],
+                    "authority_contracts": recorder_snapshot[
+                        "authority_contracts"
                     ],
                     "decision_record": recorder_snapshot,
                 })

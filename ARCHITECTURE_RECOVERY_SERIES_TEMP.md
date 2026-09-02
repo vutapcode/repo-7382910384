@@ -303,18 +303,33 @@ Chỉ trả action safety và lý do operational; không rewrite thesis.
 
 ## Công việc
 
-- [ ] Tạo/chuẩn hóa immutable contracts trước; chưa đổi authority.
-- [ ] Journal cả bốn lớp bằng cùng `causal_episode_id` nhưng field riêng.
-- [ ] Tách `UNKNOWN_SOURCE`, `UNKNOWN_MARKET`, `CONTRADICTED`, `FALSIFIED`, `SYSTEM_UNSAFE`.
-- [ ] Gắn compatibility reader cho journal cũ; không cho field cũ có authority mới.
-- [ ] Viết invariant tests cấm Safety/Execution sửa MarketThesis.
-- [ ] Xác định canonical owner hiện hữu; không tạo wrapper/module trùng chức năng.
+- [x] Tạo/chuẩn hóa immutable contracts trước; chưa đổi authority.
+- [x] Journal cả bốn lớp bằng cùng `causal_episode_id` nhưng field riêng.
+- [x] Tách `UNKNOWN_SOURCE`, `UNKNOWN_MARKET`, `CONTRADICTED`, `FALSIFIED`, `SYSTEM_UNSAFE`.
+- [x] Gắn compatibility reader cho journal cũ; không cho field cũ có authority mới.
+- [x] Viết invariant tests cấm Safety/Execution sửa MarketThesis.
+- [x] Xác định canonical owner hiện hữu; không tạo wrapper/module trùng chức năng.
 
 ## PASS
 
-- [ ] Một câu hỏi chỉ có một owner.
-- [ ] Post-mortem nói được “thesis còn đúng nhưng buộc thoát vì mất quan sát”.
-- [ ] Không thay đổi decision count ở bước contract-only.
+- [x] Một câu hỏi chỉ có một owner.
+- [x] Post-mortem nói được “thesis còn đúng nhưng buộc thoát vì mất quan sát”.
+- [x] Không thay đổi decision count ở bước contract-only.
+
+### Kết quả triển khai 2026-09-02
+
+- `FOUR_AUTHORITY_CONTRACTS_V1` chỉ đóng dấu snapshot của bốn owner hiện hữu;
+  module contract không có quyền tạo Market Truth, Action, Execution hay Safety.
+- `guardian_s_tier.thesis_status` cũ vẫn là observation tương thích phục vụ
+  exit hiện tại, không phải sealed Market Truth authority. Việc thay Guardian
+  brain bằng shared thesis thuộc riêng Đợt 4 và chưa được làm ở đây.
+- Market Truth, Action, Execution và Safety cùng dùng một `causal_episode_id`;
+  sửa nội dung sau handoff làm hash invalid thay vì âm thầm đổi kết luận.
+- Journal/replay cũ chỉ tạo compatibility view
+  `authority_eligible=false`; không suy ngược field cũ thành authority mới.
+- Contract-only path giữ nguyên các quyết định GO/WAIT hiện hữu. Toàn bộ `691`
+  tests PASS (`2` intentional skips); repository integrity PASS cho `255` file.
+- Không đổi threshold, Entry/Guardian/Hard Risk semantics hoặc Mainnet lock.
 
 ---
 
@@ -919,15 +934,15 @@ Known unknowns:
 
 ### Đợt 2 -> Đợt 3
 
-- [ ] Canonical available-time live/replay.
-- [ ] Gap/epoch/clock tests PASS.
-- [ ] OI/depth không overclaim.
+- [x] Canonical available-time live/replay.
+- [x] Gap/epoch/clock tests PASS.
+- [x] OI/depth không overclaim.
 
 ### Đợt 3 -> Đợt 4
 
-- [ ] Four-authority contracts ổn định.
-- [ ] UNKNOWN/FALSIFIED/SYSTEM_UNSAFE tách rõ.
-- [ ] Contract-only diff không đổi decisions.
+- [x] Four-authority contracts ổn định.
+- [x] UNKNOWN/FALSIFIED/SYSTEM_UNSAFE tách rõ.
+- [x] Contract-only diff không đổi decisions.
 
 ### Đợt 4 -> Đợt 5
 

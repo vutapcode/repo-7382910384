@@ -23,6 +23,7 @@ from recorder.liquidity_response import (
     LiquidityResponseAnalyzer, SpotLiquidityResponseAnalyzer,
 )
 from recorder.causal_world_model import CausalWorldModel
+from loi_he_thong import authority_contracts
 from loi_he_thong.market_event_contract import available_time_ms
 
 
@@ -207,6 +208,9 @@ class DeterministicReplay:
         self.counterfactual_windows = Counter()
         self.counterfactual_invalid = Counter()
         self.bot_events = Counter()
+        self.authority_contract_rows = 0
+        self.authority_contract_invalid = 0
+        self.legacy_authority_rows = 0
         self.records = 0
         self.depth_gaps = 0
         self.depth_synced = False
@@ -407,6 +411,20 @@ class DeterministicReplay:
             # a nested `payload`; support both without silently returning UNKNOWN.
             event_payload = payload.get('payload') or payload
             self.bot_events[event] += 1
+            if event in {
+                'DECISION_EVALUATED', 'ENTRY_SUBMIT_REVALIDATED',
+                'ENTRY_POST_GO_REJECTED', 'ENTRY', 'EXIT', 'POSITION_STATE',
+                'LIVE_ENTRY_SUBMIT_REVALIDATED', 'LIVE_ENTRY', 'LIVE_EXIT',
+            }:
+                authority_view = authority_contracts.read_journal_bundle(
+                    event_payload
+                )
+                if authority_view.get('compatibility_only'):
+                    self.legacy_authority_rows += 1
+                else:
+                    self.authority_contract_rows += 1
+                    if not authority_view.get('valid'):
+                        self.authority_contract_invalid += 1
             if event == 'DECISION_EVALUATED':
                 decision_record = event_payload.get('decision_record') or {}
                 output = decision_record.get('output') or {}
@@ -498,6 +516,9 @@ class DeterministicReplay:
                 venue: dict(values) for venue, values in self.cash_flow.items()
             },
             'bot_events': dict(self.bot_events),
+            'authority_contract_rows': self.authority_contract_rows,
+            'authority_contract_invalid': self.authority_contract_invalid,
+            'legacy_authority_rows': self.legacy_authority_rows,
             'decision_results': dict(self.decision_results),
             'miss_taxonomy': dict(self.miss_taxonomy),
             'counterfactual_windows': dict(self.counterfactual_windows),

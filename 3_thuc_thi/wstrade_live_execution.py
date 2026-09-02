@@ -12,6 +12,7 @@ import os
 from types import SimpleNamespace
 import time
 
+from loi_he_thong import authority_contracts
 from loi_he_thong import mainnet_safety
 from loi_he_thong import private_user_stream
 from loi_he_thong import verified_cost_model
@@ -142,6 +143,25 @@ def _revalidate_before_submit(state, side, result, now=None):
     )
     state.wstrade_live_causal_revalidation_detail = dict(detail or {})
     return ok, reason
+
+
+def _replace_execution_contract(result, execution_contract):
+    """Refresh only Execution's snapshot; other owner contracts stay frozen."""
+    current = dict((result or {}).get("authority_contracts") or {})
+    contracts = dict(current.get("contracts") or {})
+    if not authority_contracts.verify(execution_contract):
+        return current
+    if not all(
+        authority_contracts.verify(contracts.get(layer))
+        for layer in ("MARKET_TRUTH", "ACTION", "SAFETY")
+    ):
+        return current
+    updated = authority_contracts.bundle(
+        contracts["MARKET_TRUTH"], contracts["ACTION"],
+        execution_contract, contracts["SAFETY"],
+    )
+    result["authority_contracts"] = updated
+    return updated
 
 
 def _finalize_shadow_state(state):
@@ -870,6 +890,7 @@ def _position(side, qty, fill_price, hard_sl, risk_plan, now, client_id, result)
         decision_cycle_id=result.get("decision_cycle_id"),
         canonical_opportunity_id=int(result.get("canonical_opportunity_id", 0) or 0),
         causal_episode_id=result.get("causal_episode_id"),
+        authority_contracts=dict(result.get("authority_contracts") or {}),
         entry_causal_thesis=_entry_causal_thesis(result),
         edge_first_positive_net_at=None,
         edge_time_to_positive_net_seconds=None,
@@ -960,12 +981,15 @@ async def _open_position_locked(
             ),
             "checked_at": time.time(),
         }
+        timing = dict(
+            getattr(
+                state, "wstrade_live_causal_revalidation_detail", {}
+            ) or {}
+        )
+        _replace_execution_contract(
+            result, timing.get("execution_contract") or {},
+        )
         if event_callback:
-            timing = dict(
-                getattr(
-                    state, "wstrade_live_causal_revalidation_detail", {}
-                ) or {}
-            )
             event_callback(
                 "LIVE_ENTRY_SUBMIT_REVALIDATED",
                 {
@@ -996,6 +1020,9 @@ async def _open_position_locked(
                         (result.get("authority_dependencies") or {}).get(
                             "current_execution_proof"
                         ) or {}
+                    ),
+                    "authority_contracts": dict(
+                        result.get("authority_contracts") or {}
                     ),
                 },
             )
@@ -1288,6 +1315,9 @@ async def _open_position_locked(
             "execution_cost_plan": dict(position.execution_cost_plan or {}),
             "order_commission": _commission_snapshot(state, client_id),
             "entry_causal_thesis": dict(position.entry_causal_thesis or {}),
+            "authority_contracts": dict(
+                getattr(position, "authority_contracts", {}) or {}
+            ),
         })
     return position
 
@@ -1403,6 +1433,9 @@ async def _close_position_locked(
             "execution_cost_plan": cost_plan,
             "entry_causal_thesis": dict(
                 getattr(position, "entry_causal_thesis", {}) or {}
+            ),
+            "authority_contracts": dict(
+                getattr(position, "authority_contracts", {}) or {}
             ),
             "time_to_positive_net_seconds": getattr(
                 position, "edge_time_to_positive_net_seconds", None

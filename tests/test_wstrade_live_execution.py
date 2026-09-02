@@ -261,7 +261,10 @@ class LiveExecutionTests(unittest.TestCase):
         self.assertEqual(thesis['bias_thesis']['flow_vote'], 'LONG')
         self.assertEqual(thesis['bias_thesis']['direction'], 'LONG')
         self.assertEqual(thesis['bias_thesis']['hysteresis'], 'STABLE')
-        self.assertEqual(thesis['market_thesis']['version'], 'MARKET_THESIS_V2')
+        self.assertEqual(
+            thesis['market_thesis']['version'],
+            'MARKET_THESIS_V3_AUTHORITY_SEPARATED',
+        )
         self.assertEqual(thesis['market_thesis']['side'], 'LONG')
         self.assertTrue(thesis['market_thesis']['pnl_independent'])
         self.assertNotIn('best_r', thesis['market_thesis'])

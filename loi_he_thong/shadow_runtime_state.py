@@ -7,7 +7,7 @@ import time
 
 from loi_he_thong import execution_transaction
 
-VERSION = "SHADOW_RUNTIME_STATE_V13_EXECUTION_PROTECTION_TRANSACTION"
+VERSION = "SHADOW_RUNTIME_STATE_V14_AUTHORITY_CONTRACTS"
 SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V1",
     "SHADOW_RUNTIME_STATE_V2",
@@ -21,6 +21,7 @@ SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V10_ENTRY_ECONOMICS_V6_AVAILABILITY_TIME",
     "SHADOW_RUNTIME_STATE_V11_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
     "SHADOW_RUNTIME_STATE_V12_ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
+    "SHADOW_RUNTIME_STATE_V13_EXECUTION_PROTECTION_TRANSACTION",
     VERSION,
 }
 
@@ -47,7 +48,7 @@ PERSIST_FIELDS = (
     "canonical_opportunity_id",
     "causal_episode_id",
     "decision_cycle_id", "entry_regime", "entry_edge_class",
-    "entry_causal_thesis",
+    "entry_causal_thesis", "authority_contracts",
     "shadow_cost_plan", "execution_cost_plan",
     "shadow_ledger_type", "would_live_authorize",
     "edge_first_positive_net_at", "edge_time_to_positive_net_seconds",

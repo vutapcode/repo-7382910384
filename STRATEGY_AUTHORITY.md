@@ -6,6 +6,33 @@
 
 ## Active production path
 
+### Four-authority contract boundary
+
+Every decision journal row may carry one content-addressed
+`FOUR_AUTHORITY_CONTRACTS_V1` bundle. The bundle is observational in this
+migration and does not change GO/WAIT behavior.
+
+- Market Truth owner: `loi_he_thong/market_thesis.py`. It alone records the
+  mechanism, support, competing explanations, falsifiers and source health.
+- Action owner: the final decision integration in
+  `mainnet_tier_s_shadow_launcher.py`. It emits only `ACT_TAKER_NOW`,
+  `POST_MAKER`, `WAIT_INFORMATION` or an explicitly supported future
+  `ABANDON`; it does not reinterpret market truth.
+- Execution owner: `loi_he_thong/execution_causal_revalidation.py`. It emits
+  only `EXECUTE`, `CANCEL` or `EXECUTION_UNKNOWN` after submit-time facts.
+- Safety owner: `loi_he_thong/mainnet_safety.py`. It reports operational action
+  and distinguishes `SYSTEM_UNSAFE` from `UNKNOWN_SOURCE`; neither label means
+  the market thesis was falsified.
+
+Old journal fields remain readable through a compatibility view, but that view
+is always `authority_eligible=false`. A downstream mutation invalidates the
+contract hash instead of silently changing another owner's conclusion.
+
+Guardian's historical `thesis_status` remains an unsealed compatibility
+observation until the Phase 4 shared-thesis migration. It is not a second
+`MARKET_TRUTH` contract owner, and this contract-only phase does not change its
+exit semantics.
+
 1. Market data authority
    - Binance Spot BBO and `aggTrade` executed flow.
    - Coinbase Spot ticker and executed matches.
@@ -74,7 +101,8 @@
    - Guardian exits only on adverse price with causal deterioration that breaks
      the cash-led thesis recorded at entry. Its old sensitive thresholds are an
      early scout only; they cannot independently authorize an exit.
-   - `MARKET_THESIS_V2` freezes the Entry mechanism, expected sequence and
+   - `MARKET_THESIS_V3_AUTHORITY_SEPARATED` freezes the Entry mechanism,
+     expected sequence and
      falsifiers. Guardian monitors that contract; PnL, entry price, best-R,
      holding time and account history cannot change causal thesis status.
      Capital protection remains a separate Risk authority.
