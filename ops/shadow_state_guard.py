@@ -19,9 +19,10 @@ V10 = "SHADOW_RUNTIME_STATE_V10_ENTRY_ECONOMICS_V6_AVAILABILITY_TIME"
 V11 = "SHADOW_RUNTIME_STATE_V11_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS"
 V12 = "SHADOW_RUNTIME_STATE_V12_ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
 V13 = "SHADOW_RUNTIME_STATE_V13_EXECUTION_PROTECTION_TRANSACTION"
-VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13}
-MODERN = {V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13}
-PROMOTION_STATE = {V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13}
+V14 = "SHADOW_RUNTIME_STATE_V14_AUTHORITY_CONTRACTS"
+VERSIONS = {V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14}
+MODERN = {V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14}
+PROMOTION_STATE = {V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14}
 
 
 def fail(msg):
@@ -141,7 +142,7 @@ if version in PROMOTION_STATE:
                 row[8], f"edge_calibration_rows.{index}.execution_cost_bps",
                 nonnegative=True,
             )
-    if version in {V4, V5, V6, V7, V8, V9, V10, V11, V12, V13}:
+    if version in {V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14}:
         for name in (
             "edge_calibration_code_version",
             "edge_calibration_config_version",
@@ -149,7 +150,7 @@ if version in PROMOTION_STATE:
             value = raw.get(name)
             if not isinstance(value, str) or not value:
                 fail(f"{name}:missing")
-    if version in {V6, V7, V8, V9, V10, V11, V12, V13}:
+    if version in {V6, V7, V8, V9, V10, V11, V12, V13, V14}:
         economics = raw.get("entry_economics_v2_rows")
         if not isinstance(economics, list) or len(economics) > 1024:
             fail("entry_economics_v2_rows:invalid")
@@ -169,6 +170,7 @@ if version in PROMOTION_STATE:
             V11: "ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
             V12: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
             V13: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
+            V14: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
         }[version]
         for index, row in enumerate(economics):
             if not isinstance(row, dict) or row.get(
@@ -184,7 +186,7 @@ if version in PROMOTION_STATE:
                 f"entry_economics_v2_rows.{index}.execution_cost_bps",
                 nonnegative=True,
             )
-            if version in {V12, V13}:
+            if version in {V12, V13, V14}:
                 event = row.get("time_to_positive_net_event")
                 if not isinstance(event, bool):
                     fail(f"entry_economics_v2_rows.{index}.event:invalid")
@@ -261,7 +263,7 @@ if pos is not None:
                     fail("position.floor:below_best_short")
 
             cost_plan = pos.get("shadow_cost_plan")
-            if version in {V5, V6, V7, V8, V9, V10, V11, V12, V13} and cost_plan is not None:
+            if version in {V5, V6, V7, V8, V9, V10, V11, V12, V13, V14} and cost_plan is not None:
                 if not isinstance(cost_plan, dict):
                     fail("position.shadow_cost_plan:not_object")
                 for name in (
@@ -275,7 +277,7 @@ if pos is not None:
                     )
 
 transaction = raw.get("execution_transaction")
-if version == V13:
+if version in {V13, V14}:
     if transaction is not None and not isinstance(transaction, dict):
         fail("execution_transaction:not_object")
     if isinstance(transaction, dict):

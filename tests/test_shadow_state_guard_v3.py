@@ -299,6 +299,29 @@ class ShadowStateGuardV3Tests(unittest.TestCase):
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("protected_without_position", rejected.stderr)
 
+    def test_v14_authority_contract_checkpoint_is_accepted(self):
+        payload = {
+            "version": "SHADOW_RUNTIME_STATE_V14_AUTHORITY_CONTRACTS",
+            "balance": 5000.0, "realized_pnl": 0.0,
+            "trades": 0, "wins": 0, "losses": 0, "breakevens": 0,
+            "event_seq": 1, "decision_evaluations": 1,
+            "near_misses": 0, "decision_funnel": {"COUNCIL": 1},
+            "canonical_opportunities": 1, "canonical_qualified": 0,
+            "canonical_captured": 0,
+            "canonical_last_consumed_opportunity_id": 0,
+            "edge_calibration_rows": [],
+            "edge_calibration_code_version": "code-v14",
+            "edge_calibration_config_version": "config-v14",
+            "entry_economics_v2_rows": [],
+            "entry_economics_code_version": "code-v14",
+            "entry_economics_config_version": "config-v14",
+            "execution_transaction": None,
+            "execution_control_plane": {},
+            "position": None,
+        }
+        accepted = self.run_guard(payload)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
