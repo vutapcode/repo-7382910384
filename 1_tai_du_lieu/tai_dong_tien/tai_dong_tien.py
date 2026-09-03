@@ -1,11 +1,10 @@
 """
 [AI_CONTEXT]
 - MODULE: 1_tai_du_lieu / tai_dong_tien
-- ROLE: WebSocket: Hung goi aggTrade tu Binance Spot va Futures.
-- I/O: IN: Binance Spot WS + Futures WS | OUT: RAM (bo_nho_ram)
-- UPDATE: Tach ro Spot vs Futures stream cho Tri-Oracle Divergence.
-- CONTRACT: DATA transport only. Optional forceOrder callbacks belong to the caller;
-  this collector must not own liquidation interpretation or strategy authority.
+- ROLE: WebSocket transport for Binance Spot/Futures aggTrade.
+- I/O: IN: Binance public WS | OUT: canonical RAM queues.
+- CONTRACT: DATA transport only. It does not own cumulative CVD, liquidation
+  interpretation, Bias, Entry or Guardian authority.
 """
 
 import asyncio
@@ -16,10 +15,7 @@ import time
 
 
 async def hung_dong_tien_spot(symbol: str, bo_nho_ram):
-    """
-    [TIER A] AggTrade Binance SPOT - tien mat that, khong don bay.
-    Ghi vao: bo_nho_ram.danh_sach_khop_lenh
-    """
+    """Compatibility Spot transport; canonical runtime may replace this collector."""
     url = f"wss://stream.binance.com:9443/ws/{symbol.lower()}@aggTrade"
     while True:
         try:
@@ -35,14 +31,14 @@ async def hung_dong_tien_spot(symbol: str, bo_nho_ram):
                             'thoi_gian_ms': int(data.get('E', time.time() * 1000)),
                             'nguon': 'SPOT'
                         }
+                        # Single ownership: delta_cvd.cap_nhat_cvd consumes this
+                        # queue and updates all Spot cumulative/rolling counters.
                         bo_nho_ram.danh_sach_khop_lenh.append(lenh_khop)
-                        if lenh_khop['ban_chu_dong']:
-                            bo_nho_ram.spot_cvd_sell_total += lenh_khop['khoi_luong']
-                        else:
-                            bo_nho_ram.spot_cvd_buy_total += lenh_khop['khoi_luong']
                         bo_nho_ram.thoi_gian_dong_tien_cuoi = time.time()
                     except (KeyError, TypeError, ValueError):
                         continue
+        except asyncio.CancelledError:
+            raise
         except websockets.exceptions.ConnectionClosed as e:
             logging.warning(f"[SPOT FLOW] Mat ket noi: {e}. Ket noi lai...")
             await asyncio.sleep(3)
@@ -51,7 +47,8 @@ async def hung_dong_tien_spot(symbol: str, bo_nho_ram):
             await asyncio.sleep(3)
 
 
-# Alias tuong thich nguoc — khoi_dong.py dang goi ten cu nay
+# Backward compatibility only. Canonical Mainnet runtime replaces real Futures
+# transport through futures_flow_hardening before tasks are created.
 hung_dong_tien_futures = hung_dong_tien_spot
 
 
@@ -79,13 +76,11 @@ async def hung_dong_tien_futures_real(
     force_order_observer=None,
     force_order_epoch_reset=None,
 ):
-    """
-    Binance FUTURES executed flow plus forceOrder transport on one socket.
+    """Binance Futures executed-flow + forceOrder transport on one socket.
 
-    Futures flow is derivative evidence, never independent cash direction.
-    Canonical runtime may inject a forceOrder observer owned by a separate
-    liquidation-context module. The same event is never processed by both the
-    injected observer and this module's compatibility fallback.
+    Futures is derivative evidence. It can explain urgency/build/unwind but
+    never becomes independent cash direction. Canonical runtime may inject the
+    liquidation observer owned by ``liquidation_context``.
     """
     streams = f"{symbol.lower()}@aggTrade/{symbol.lower()}@forceOrder"
     url = f"wss://fstream.binance.com/market/stream?streams={streams}"
