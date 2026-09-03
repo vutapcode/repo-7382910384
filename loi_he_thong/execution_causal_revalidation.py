@@ -9,6 +9,7 @@ import hashlib
 import json
 
 from loi_he_thong import authority_contracts
+from loi_he_thong import execution_contradiction_shadow
 from loi_he_thong import ignition_signals
 from loi_he_thong import ignition_core
 from loi_he_thong import verified_cost_model
@@ -379,11 +380,38 @@ def validate_submit(state, side, result, now):
         return False, "SIDE_INVALID", {}
 
     timing = _submit_timing_telemetry(state, side, result, now)
+    physical_facts = {
+        name: None for name in execution_contradiction_shadow.FAIL_CLOSED_FACTS
+    }
 
     def verdict(ok, reason, detail=None):
+        detail = dict(detail or {})
+        contradiction = None
+        if reason == "POST_PROOF_OPPOSING_FLOW_2_BUCKETS":
+            venue = str(detail.get("venue") or "")
+            contradiction = {
+                "kind": (
+                    "OPPOSING_FLOW" if venue == "futures"
+                    else "CASH_PRICE_FLOW_REVERSAL"
+                ),
+                "venues": [venue] if venue else [],
+            }
+        elif reason == "POST_PROOF_CASH_PRICE_FLOW_REVERSAL":
+            venue = str(detail.get("venue") or "")
+            contradiction = {
+                "kind": "CASH_PRICE_FLOW_REVERSAL",
+                "venues": [venue] if venue else [],
+            }
+        facts = dict(physical_facts)
+        if contradiction is not None:
+            facts["post_go_contradiction"] = contradiction
+        comparison = execution_contradiction_shadow.observe_active(
+            ok, reason, facts, side=side,
+        )
         return bool(ok), str(reason), {
             **timing,
-            **dict(detail or {}),
+            **detail,
+            "phase6_execution_shadow": comparison,
             "execution_contract": execution_contract(
                 ok, reason, (result or {}).get("causal_episode_id")
             ),
@@ -395,20 +423,24 @@ def validate_submit(state, side, result, now):
     reserved = _reservation(state)
     if not reserved:
         return verdict(False, "CANONICAL_RESERVATION_MISSING")
+    physical_facts["reservation_ok"] = True
     if int(reserved.get("opportunity_id", 0) or 0) != int(
         result.get("canonical_opportunity_id", 0) or 0
     ):
         return verdict(False, "CANONICAL_OPPORTUNITY_CHANGED")
+    physical_facts["opportunity_identity_ok"] = True
     if str(reserved.get("causal_episode_id") or "") != str(
         result.get("causal_episode_id") or ""
     ):
         return verdict(False, "CAUSAL_EPISODE_CHANGED")
+    physical_facts["causal_episode_identity_ok"] = True
 
     ok, reason, authority_detail = _authority_contract(
         state, side, result, now,
     )
     if not ok:
         return verdict(ok, reason, authority_detail)
+    physical_facts["sealed_handoff_ok"] = True
 
     decision_ts = _f(result.get("ts"))
     proof_age = now - decision_ts
@@ -423,18 +455,24 @@ def validate_submit(state, side, result, now):
     bbo_age = now - _f(getattr(state, "execution_price_time", 0.0))
     if bid <= 0.0 or ask <= bid:
         return verdict(False, "EXECUTION_BBO_INVALID", {"bid": bid, "ask": ask})
+    physical_facts["bbo_valid"] = True
     if bbo_age < 0.0 or bbo_age > BBO_MAX_AGE_SECONDS:
         return verdict(
             False, "EXECUTION_BBO_STALE",
             {"age_seconds": max(0.0, bbo_age)},
         )
+    physical_facts["bbo_fresh"] = True
 
     ok, reason, detail = _epoch_ok(state, result)
     if not ok:
         return verdict(ok, reason, detail)
+    physical_facts["epoch_ok"] = True
+    physical_facts["flow_gap_free"] = True
+    physical_facts["flow_clock_valid"] = True
     rows = _rows_after(state, result)
     if rows is None:
         return verdict(False, "EXECUTED_FLOW_ENGINE_UNAVAILABLE")
+    physical_facts["post_go_observation_available"] = True
     ok, reason, detail = _opposing_ok(rows, side)
     if not ok:
         return verdict(ok, reason, detail)

@@ -18,12 +18,11 @@ FAIL_CLOSED_FACTS = (
     "causal_episode_identity_ok",
     "sealed_handoff_ok",
     "epoch_ok",
-    "gap_free",
-    "feed_fresh",
+    "flow_gap_free",
+    "flow_clock_valid",
     "bbo_valid",
     "bbo_fresh",
-    "order_filter_fill_feasible",
-    "hard_risk_admitted",
+    "post_go_observation_available",
 )
 
 STRATEGY_REJUDGMENT_REASONS = frozenset({
@@ -94,3 +93,49 @@ def compare(active_ok, active_reason, facts, *, side):
         "policy": "SHADOW_ONLY_ACTIVE_ORDER_PATH_UNCHANGED",
     }
     return {**body, "comparison_hash": _digest(body)}
+
+
+def observe_active(active_ok, active_reason, facts, *, side):
+    """Compare only when all physical facts for this boundary were observed.
+
+    Order filters and Hard Risk belong to later owners and intentionally are
+    not manufactured here. Early active rejection can leave later checks
+    unknown; that becomes a replay request, never a guessed PASS.
+    """
+    facts = dict(facts or {})
+    missing = tuple(
+        name for name in FAIL_CLOSED_FACTS if facts.get(name) is not True
+    )
+    active_reason = str(active_reason or "UNKNOWN").upper()
+    if missing:
+        first_diff = None
+        if not active_ok and active_reason in STRATEGY_REJUDGMENT_REASONS:
+            first_diff = {
+                "active_ok": False,
+                "active_reason": active_reason,
+                "shadow_ok": None,
+                "shadow_reason": "CANONICAL_COUNTERFACTUAL_REPLAY_REQUIRED",
+                "active_reason_owner": "STRATEGY_REJUDGMENT",
+            }
+        body = {
+            "version": VERSION,
+            "authority": AUTHORITY,
+            "side": str(side or "").upper(),
+            "active": {"ok": bool(active_ok), "reason": active_reason},
+            "shadow": {
+                "ok": None,
+                "reason": "PHYSICAL_FACTS_INCOMPLETE",
+                "missing_facts": missing,
+            },
+            "first_differing_reason": first_diff,
+            "comparison_eligible": False,
+            "policy": "SHADOW_ONLY_NO_INFERRED_PHYSICAL_FACTS",
+        }
+        return {**body, "comparison_hash": _digest(body)}
+    result = compare(active_ok, active_reason, facts, side=side)
+    result["comparison_eligible"] = True
+    result["comparison_hash"] = _digest({
+        key: value for key, value in result.items()
+        if key != "comparison_hash"
+    })
+    return result

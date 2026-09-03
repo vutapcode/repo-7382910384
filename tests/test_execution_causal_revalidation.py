@@ -113,6 +113,9 @@ class ExecutionCausalRevalidationTests(unittest.TestCase):
         self.assertEqual(
             detail["cash_age_by_venue_ms"], {"binance_spot": 200}
         )
+        comparison = detail["phase6_execution_shadow"]
+        self.assertTrue(comparison["comparison_eligible"])
+        self.assertTrue(comparison["shadow"]["ok"])
 
     def test_timing_telemetry_flags_confirmed_flow_that_fades(self):
         state, result = fixture()
@@ -234,6 +237,26 @@ class ExecutionCausalRevalidationTests(unittest.TestCase):
         ok, reason, _ = recheck.validate_submit(state, "LONG", result, 10.0)
         self.assertFalse(ok)
         self.assertEqual(reason, "POST_PROOF_OPPOSING_FLOW_2_BUCKETS")
+
+    def test_futures_only_opposition_is_tagged_for_phase6_ablation(self):
+        state, result = fixture()
+        history = state._ignition_signal_engine.venues["futures"].history
+        history.extend([
+            material("futures", 9600, "SHORT"),
+            material("futures", 9700, "SHORT"),
+        ])
+        ok, reason, detail = recheck.validate_submit(
+            state, "LONG", result, 10.0
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "POST_PROOF_OPPOSING_FLOW_2_BUCKETS")
+        comparison = detail["phase6_execution_shadow"]
+        self.assertTrue(comparison["comparison_eligible"])
+        self.assertTrue(comparison["shadow"]["ok"])
+        self.assertEqual(
+            comparison["shadow"]["reason"],
+            "FUTURES_ONLY_OPPOSITION_CONTEXT",
+        )
 
     def test_cash_price_reversal_needs_independent_opposing_flow_bucket(self):
         state, result = fixture()

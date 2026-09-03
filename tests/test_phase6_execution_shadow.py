@@ -23,7 +23,10 @@ class Phase6ExecutionShadowTests(unittest.TestCase):
         self.assertEqual(r["reason"], "FUTURES_ONLY_OPPOSITION_CONTEXT")
 
     def test_gap_stale_epoch_hash_mismatch_fail_closed(self):
-        for field in ("gap_free", "feed_fresh", "epoch_ok", "sealed_handoff_ok"):
+        for field in (
+            "flow_gap_free", "flow_clock_valid", "epoch_ok",
+            "sealed_handoff_ok",
+        ):
             facts = good_facts()
             facts[field] = False
             self.assertFalse(shadow.contradiction_only(facts, side="LONG")["ok"])
@@ -36,6 +39,20 @@ class Phase6ExecutionShadowTests(unittest.TestCase):
             False, "CURRENT_IMPULSE_ALREADY_CONSUMED", good_facts(), side="LONG"
         )
         self.assertTrue(r["shadow"]["ok"])
+        self.assertEqual(
+            r["first_differing_reason"]["active_reason_owner"],
+            "STRATEGY_REJUDGMENT",
+        )
+
+    def test_incomplete_physical_facts_never_invent_shadow_pass(self):
+        facts = good_facts()
+        facts["bbo_fresh"] = None
+        r = shadow.observe_active(
+            False, "BIAS_SIDE_CHANGED", facts, side="LONG"
+        )
+        self.assertFalse(r["comparison_eligible"])
+        self.assertIsNone(r["shadow"]["ok"])
+        self.assertIn("bbo_fresh", r["shadow"]["missing_facts"])
         self.assertEqual(
             r["first_differing_reason"]["active_reason_owner"],
             "STRATEGY_REJUDGMENT",

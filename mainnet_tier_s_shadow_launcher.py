@@ -1602,6 +1602,9 @@ async def _open_position(side, result, now):
                 ) or {}
             ),
             "authority_contracts": result["authority_contracts"],
+            "phase6_execution_shadow": causal_detail.get(
+                "phase6_execution_shadow"
+            ),
             "scope": "SHADOW_DEMO_AND_LIVE_PRE_SUBMIT",
         })
         if not causal_ok:
