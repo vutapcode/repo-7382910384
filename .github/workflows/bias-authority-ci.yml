@@ -1,0 +1,38 @@
+name: Bias Authority CI
+
+on:
+  push:
+    branches:
+      - main
+      - fix/adaptive-cash-bias-v11
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-bias-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile changed authority modules
+        run: |
+          python -m py_compile \
+            2_suy_luan_mapping/bias_council.py \
+            2_suy_luan_mapping/map_dong_tien/delta_cvd.py \
+            1_tai_du_lieu/tai_dong_tien/tai_dong_tien.py \
+            loi_he_thong/runtime_hardening_v3.py
+      - name: Bias unit contract
+        run: python -m unittest discover -s tests -p 'test_bias_council.py' -v
+      - name: Runtime Bias ownership contract
+        run: python -m unittest discover -s tests -p 'test_runtime_bias_flow_horizon.py' -v
+      - name: Runtime hardening source contract
+        run: python -m unittest discover -s tests -p 'test_runtime_hardening_v3_contract.py' -v
+      - name: Spot cumulative flow owner contract
+        run: python -m unittest discover -s tests -p 'test_spot_cumulative_flow_owner.py' -v
+      - name: Entry handoff regression contract
+        run: python -m unittest discover -s tests -p 'test_entry_bias_handoff.py' -v
