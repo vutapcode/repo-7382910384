@@ -87,7 +87,7 @@ def _liquidity_state(liquidity, side):
 def infer(segments, previous_side="ABSTAIN", liquidity=()):
     """Infer the current active cash-wave mechanism without a clock-time vote.
 
-    Segments must be non-overlapping and ordered newest -> oldest.  Historical
+    Segments must be non-overlapping and ordered newest -> oldest. Historical
     segments are context/falsification evidence; the newest segment owns the
     question of what is happening *now*.
     """
@@ -108,6 +108,7 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
 
     latest = observations[0]
     older_recent = observations[1:3]
+    immediate_previous = older_recent[0] if older_recent else None
     latest_side = latest["side"]
     latest_state = latest["state"]
 
@@ -131,8 +132,6 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
             "segments": observations,
         }
 
-    # Existing control: the newest evidence must explain whether the old wave
-    # still converts, is merely pulling back, is exhausting, or transferred.
     if previous in VALID_SIDES:
         if latest_state == "CONVERTING" and latest_side == previous:
             return {
@@ -145,24 +144,29 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
             }
 
         if latest_state == "CONVERTING" and latest_side in VALID_SIDES and latest_side != previous:
-            old_still_converts = any(
-                row["state"] == "CONVERTING" and row["side"] == previous
-                for row in older_recent
+            # Current control is determined by the nearest causal sequence, not
+            # by a stale 180s/600s segment.  If the immediately preceding
+            # segment already converted with the new side, an older old-side
+            # segment is historical context, not a live veto.
+            old_still_converts = bool(
+                immediate_previous
+                and immediate_previous["state"] == "CONVERTING"
+                and immediate_previous["side"] == previous
             )
-            new_recent_support = any(
-                row["state"] == "CONVERTING" and row["side"] == latest_side
-                for row in older_recent
+            new_recent_support = bool(
+                immediate_previous
+                and immediate_previous["state"] == "CONVERTING"
+                and immediate_previous["side"] == latest_side
             )
             old_failure_seen = any(
                 row["flow_side"] == previous
                 and row["state"] in {"FLOW_NONCONVERSION", "CONTRADICTED"}
                 for row in older_recent
             )
-            # One newest dual-cash conversion can transfer control when the old
-            # wave is no longer converting.  Additional recent conversion or an
-            # explicit old-side failure strengthens the explanation but is not a
-            # hard elapsed-time requirement.
-            transfer = bool(not old_still_converts and (new_recent_support or old_failure_seen or older_recent))
+            transfer = bool(
+                not old_still_converts
+                and (new_recent_support or old_failure_seen or immediate_previous)
+            )
             if transfer:
                 return {
                     "version": VERSION, "authority": False,
@@ -197,8 +201,6 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
                 "segments": observations,
             }
 
-        # Opposite price without opposite executed-flow conversion is a
-        # pullback/noise candidate, not a regime reversal.
         if latest["price_side"] in VALID_SIDES and latest["price_side"] != previous:
             return {
                 "version": VERSION, "authority": False,
@@ -210,8 +212,6 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
                 "segments": observations,
             }
 
-        # If the newest segment has no evidence of old-side conversion, do not
-        # keep the old Bias alive just because a 30m/60m displacement remains.
         recent_old_conversion = any(
             row["state"] == "CONVERTING" and row["side"] == previous
             for row in observations[:2]
@@ -236,15 +236,11 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
             "segments": observations,
         }
 
-    # No prior regime: one fresh converting segment is useful early information
-    # but remains EMERGING and below the action handoff.  Two contiguous
-    # converting segments establish a meaningful wave without requiring an
-    # arbitrary 1h warm-up.
     if latest_state == "CONVERTING" and latest_side in VALID_SIDES:
         persistent = bool(
-            older_recent
-            and older_recent[0]["state"] == "CONVERTING"
-            and older_recent[0]["side"] == latest_side
+            immediate_previous
+            and immediate_previous["state"] == "CONVERTING"
+            and immediate_previous["side"] == latest_side
         )
         return {
             "version": VERSION, "authority": False,
