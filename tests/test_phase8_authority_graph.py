@@ -14,6 +14,16 @@ class Graph(unittest.TestCase):
   s=self.base(); s["loi_he_thong/execution_causal_revalidation.py"]="BIAS_SIDE_CHANGED"; self.assertIn("EXECUTION_REINTERPRETS_DIRECTION_OR_STRATEGY",g.analyze_sources(s)["blockers"])
  def test_old_brain_fallback_fail(self):
   s=self.base(); s["mainnet_tier_s_shadow_launcher.py"]+="\nimport whale_legacy"; self.assertIn("LEGACY_BRAIN_ACTIVE_OR_FALLBACK",g.analyze_sources(s)["blockers"])
+ def test_legacy_named_state_is_not_an_import(self):
+  s=self.base(); s["3_thuc_thi/wstrade_live_execution.py"]+="\nwhale_seen=False\ndef calculate_volume_profile(): pass"
+  self.assertNotIn("LEGACY_BRAIN_ACTIVE_OR_FALLBACK",g.analyze_sources(s)["blockers"])
+ def test_explicit_non_authority_observer_is_not_second_owner(self):
+  s=self.base()
+  s["mainnet_tier_s_shadow_launcher.py"]+="\nfrom loi_he_thong import entry_action_policy"
+  s["loi_he_thong/entry_action_policy.py"]="AUTHORITY=False"
+  result=g.analyze_sources(s)
+  self.assertNotIn("ACTION_POLICY_DUPLICATE_OWNER",result["blockers"])
+  self.assertIn("loi_he_thong/entry_action_policy.py",result["shadow_only_activated"])
  def test_legacy_readonly_not_active_authority(self):
   s=self.base(); s["compat.py"]="read-only compatibility journal parser"; self.assertIn("compat.py",g.analyze_sources(s)["compatibility_only_readers"])
  def test_deterministic_graph_hash(self):

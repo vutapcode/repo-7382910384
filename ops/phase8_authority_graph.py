@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse, ast, hashlib, json, re
 from pathlib import Path
 
-VERSION="PHASE8_AUTHORITY_GRAPH_V1"
+VERSION="PHASE8_AUTHORITY_GRAPH_V2_SYMBOL_AWARE"
 ENTRYPOINT="mainnet_tier_s_lean_launcher.py"
 KNOWN_ACTIVE_FILES=(
  "mainnet_tier_s_lean_launcher.py","mainnet_tier_s_shadow_launcher.py","mainnet_tier_s_shadow_hardened_launcher.py",
@@ -16,7 +16,9 @@ SHADOW_ONLY=(
  "loi_he_thong/phase6_execution_twins.py","loi_he_thong/phase6_execution_report.py","recorder/offhost_durability.py",
  "loi_he_thong/execution_fencing_contract.py","loi_he_thong/execution_transport_contract.py",
 )
-LEGACY_PATTERNS=("entry_s_tier","whale","volume_profile","vp_entry","smc_legacy")
+LEGACY_MODULE_PATTERNS=(
+ "entry_s_tier","whale_intent","whale_legacy","vp_entry","smc_legacy",
+)
 def _stable(v): return hashlib.sha256(json.dumps(v,sort_keys=True,separators=(",",":")).encode()).hexdigest()
 def _imports(text):
     out=[]
@@ -28,11 +30,32 @@ def _imports(text):
             m=n.module or ""; out += [m+"."+a.name for a in n.names]
     return sorted(set(out))
 
+def _imports_module(imports, module):
+    return any(
+        value == module or value.endswith("."+module)
+        for value in imports
+    )
+
+def _declared_non_authority(text):
+    try: tree=ast.parse(text)
+    except SyntaxError:return False
+    for node in tree.body:
+        if not isinstance(node,(ast.Assign,ast.AnnAssign)):continue
+        targets=node.targets if isinstance(node,ast.Assign) else [node.target]
+        value=node.value
+        if any(isinstance(t,ast.Name) and t.id=="AUTHORITY" for t in targets):
+            return isinstance(value,ast.Constant) and value.value is False
+    return False
+
 def analyze_sources(sources, runtime_profile=None):
     sources={str(k):str(v) for k,v in (sources or {}).items()}; blockers=[]; active_edges=[]
     lean=sources.get(ENTRYPOINT,""); shadow=sources.get("mainnet_tier_s_shadow_launcher.py","")
     execution=sources.get("loi_he_thong/execution_causal_revalidation.py",""); guardian=sources.get("3_thuc_thi/ve_si_lenh/guardian_s_tier.py","")
     safety=sources.get("loi_he_thong/mainnet_safety.py",""); promotion=sources.get("loi_he_thong/auto_promotion.py",""); live=sources.get("3_thuc_thi/wstrade_live_execution.py","")
+    active_sources=(lean,shadow,live,execution,guardian,safety,promotion)
+    active_imports=sorted(set(
+        item for source in active_sources for item in _imports(source)
+    ))
     if not lean: blockers.append("ACTIVE_ENTRYPOINT_MISSING")
     if "mainnet_tier_s_shadow_launcher" in lean: active_edges.append([ENTRYPOINT,"mainnet_tier_s_shadow_launcher.py","import"])
     if "mainnet_tier_s_shadow_hardened_launcher" in lean: active_edges.append([ENTRYPOINT,"mainnet_tier_s_shadow_hardened_launcher.py","import"])
@@ -42,7 +65,10 @@ def analyze_sources(sources, runtime_profile=None):
     if len(truth)!=1: blockers.append("MARKET_TRUTH_OWNER_COUNT_INVALID")
     action=[]
     if "def _action_contract" in shadow or "TIER_S_ENTRY_ACTION" in shadow: action.append("mainnet_tier_s_shadow_launcher.py")
-    if "loi_he_thong/entry_action_policy" in lean or "from loi_he_thong import entry_action_policy" in lean: action.append("loi_he_thong/entry_action_policy.py")
+    action_policy=sources.get("loi_he_thong/entry_action_policy.py","")
+    action_policy_imported=_imports_module(active_imports,"entry_action_policy")
+    if action_policy_imported and not _declared_non_authority(action_policy):
+        action.append("loi_he_thong/entry_action_policy.py")
     execution_owners=[]
     if "execution_causal_revalidation" in shadow: execution_owners.append("loi_he_thong/execution_causal_revalidation.py")
     if "wstrade_live_execution.py" in shadow: execution_owners.append("3_thuc_thi/wstrade_live_execution.py")
@@ -53,11 +79,29 @@ def analyze_sources(sources, runtime_profile=None):
     if guardian_active: safety_owners.append("3_thuc_thi/ve_si_lenh/guardian_s_tier.py")
     if any(x in execution for x in ("BIAS_SIDE_CHANGED","BIAS_CONFIDENCE_DROPPED","CURRENT_IMPULSE_ALREADY_CONSUMED","TRANSITION_AUTHORITY_DEPENDENCY_INVALID")): blockers.append("EXECUTION_REINTERPRETS_DIRECTION_OR_STRATEGY")
     if guardian_active and any(x in guardian for x in ("def _s1","def _s2","def _s3","S1_price","S2_executed","S3_price")): blockers.append("GUARDIAN_CAUSAL_COUNCIL_STILL_ACTIVE")
-    active_text="\n".join((lean,shadow,live,execution,guardian,safety,promotion)).lower()
-    if any(p in active_text for p in LEGACY_PATTERNS): blockers.append("LEGACY_BRAIN_ACTIVE_OR_FALLBACK")
-    activated_shadow=[p for p in SHADOW_ONLY if Path(p).stem in active_text]
-    if activated_shadow: blockers.append("SHADOW_ONLY_MODULE_ACTIVE")
-    if "entry_action_policy" in active_text and ("def _action_contract" in shadow or "execution_policy" in shadow): blockers.append("ACTION_POLICY_DUPLICATE_OWNER")
+    active_text="\n".join(active_sources).lower()
+    legacy_imports=[
+        value for value in active_imports
+        if any(
+            value==pattern or value.endswith("."+pattern)
+            for pattern in LEGACY_MODULE_PATTERNS
+        )
+    ]
+    legacy_dynamic=[]
+    for pattern in LEGACY_MODULE_PATTERNS:
+        if re.search(r'["\'](?:[^"\']*/)?'+re.escape(pattern)+r'(?:\.py)?["\']',active_text):
+            legacy_dynamic.append(pattern)
+    if legacy_imports or legacy_dynamic:
+        blockers.append("LEGACY_BRAIN_ACTIVE_OR_FALLBACK")
+    activated_shadow=[]; unsafe_shadow=[]
+    for path in SHADOW_ONLY:
+        stem=Path(path).stem
+        if not _imports_module(active_imports,stem): continue
+        activated_shadow.append(path)
+        if not _declared_non_authority(sources.get(path,"")):
+            unsafe_shadow.append(path)
+    if unsafe_shadow: blockers.append("SHADOW_MODULE_WITHOUT_NON_AUTHORITY_DECLARATION")
+    if len(action)>1: blockers.append("ACTION_POLICY_DUPLICATE_OWNER")
     if any(x in safety for x in ("bias_state =","market_thesis =","market_thesis[","truth_direction =")): blockers.append("SAFETY_REWRITES_MARKET_TRUTH")
     auto_can_promote=bool("PromotionController" in shadow and "promote_callback" in promotion)
     manual_artifact_gate=("MANUAL_APPROVAL" in promotion and "approval_hash" in promotion)
@@ -67,7 +111,9 @@ def analyze_sources(sources, runtime_profile=None):
     out={"version":VERSION,"entrypoint":ENTRYPOINT,"truth_owners":truth,"action_owners":action,"execution_owners":execution_roles,
       "guardian_owner":"3_thuc_thi/ve_si_lenh/guardian_s_tier.py" if guardian_active else None,"safety_owners":safety_owners,
       "active_imports_calls":sorted(active_edges),"compatibility_only_readers":sorted(compatibility),"shadow_only_modules":list(SHADOW_ONLY),
-      "shadow_only_activated":activated_shadow,"hidden_fallback_config_switches":config_switches,
+      "shadow_only_activated":activated_shadow,"unsafe_shadow_activations":unsafe_shadow,
+      "legacy_authority_imports":sorted(set(legacy_imports+legacy_dynamic)),
+      "hidden_fallback_config_switches":config_switches,
       "duplicate_question_owners":[x for x in blockers if x in ("ACTION_POLICY_DUPLICATE_OWNER","EXECUTION_REINTERPRETS_DIRECTION_OR_STRATEGY","GUARDIAN_CAUSAL_COUNCIL_STILL_ACTIVE")],
       "runtime_profile":dict(runtime_profile or {}),"status":"PASS" if not blockers else "FAIL","blockers":sorted(set(blockers)),"read_only":True}
     out["graph_hash"]=_stable(out); return out
