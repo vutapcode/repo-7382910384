@@ -75,6 +75,7 @@ class SharedThesisObservationTests(unittest.TestCase):
         ))
         self.assertEqual(result["status"], "DIVERGENCE")
         self.assertFalse(result["old_thesis_falsified"])
+        self.assertEqual(result["observed_falsifiers"], [])
 
     def test_support_requires_current_price_and_flow_conversion(self):
         result = market_thesis.observe(self.truth, _observation(

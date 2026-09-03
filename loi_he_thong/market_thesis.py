@@ -435,7 +435,10 @@ def observe(contract, observation):
     )
 
     falsifiers = []
-    if primary_adverse and primary_persistent:
+    if primary_adverse and (
+        opposite_oi_build
+        or (primary_persistent and secondary_adverse_evidence)
+    ):
         falsifiers.append("PRIMARY_CASH_STOPS_OR_REVERSES_CONVERSION")
     if persistent_dual_adverse:
         falsifiers.extend([
