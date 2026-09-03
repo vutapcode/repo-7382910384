@@ -19,6 +19,7 @@ from loi_he_thong import authority_contracts
 from loi_he_thong import canonical_opportunity
 from loi_he_thong import causal_threshold_registry
 from loi_he_thong import decision_boundary_evidence
+from loi_he_thong import entry_action_policy
 from loi_he_thong import execution_causal_revalidation
 from loi_he_thong import host_cpu_governor
 from loi_he_thong import mainnet_safety
@@ -520,6 +521,35 @@ def _action_contract(result, quorum_ok, causal_episode_id=None):
     )
 
 
+def _phase6_action_shadow(result, quorum_ok):
+    """Observe the future Action owner without changing active GO/WAIT."""
+    result = dict(result or {})
+    bundle = dict(result.get("authority_contracts") or {})
+    truth = dict((bundle.get("contracts") or {}).get("MARKET_TRUTH") or {})
+    edge = dict(result.get("edge_tier") or {})
+    urgency = dict(edge.get("execution_urgency") or {})
+    ignition = dict(result.get("ignition") or {})
+    wave = dict(
+        ignition.get("bounded_wave_ledger")
+        or ignition.get("causal_wave_snapshot")
+        or {}
+    )
+    urgency["opportunity_expired"] = bool(wave.get("wave_expired", False))
+    return entry_action_policy.evaluate(
+        truth,
+        {
+            "cost_ok": edge.get("cost_ok"),
+            "economic_viable": edge.get("cost_ok"),
+            "economic_contract_version": edge.get(
+                "economic_contract_version"
+            ),
+        },
+        urgency,
+        active_result=result,
+        quorum_ok=quorum_ok,
+    )
+
+
 def _authority_contract_bundle(
     state, result, quorum_ok, causal_episode_id=None,
     execution_contract=None, *, has_exposure=False,
@@ -855,6 +885,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "authority_contracts": four_authority,
         "entry_thesis_handoff": dict(
             (result or {}).get("entry_thesis_handoff") or {}
+        ),
+        "phase6_action_shadow": dict(
+            (result or {}).get("phase6_action_shadow") or {}
         ),
         "inputs": {
             "bias": {
@@ -2055,6 +2088,9 @@ async def _entry_loop():
                     result["authority_contracts"] = _authority_contract_bundle(
                         s, result, False, opportunity.get("causal_episode_id"),
                     )
+            result["phase6_action_shadow"] = _phase6_action_shadow(
+                result, quorum_ok,
+            )
             s.entry_shadow_council = result
             near_miss = bool(result.get("decision") == "GO" and not quorum_ok)
             s.mainnet_shadow_decision_evaluations = int(
@@ -2193,6 +2229,9 @@ async def _entry_loop():
                     ],
                     "authority_contracts": recorder_snapshot[
                         "authority_contracts"
+                    ],
+                    "phase6_action_shadow": recorder_snapshot[
+                        "phase6_action_shadow"
                     ],
                     "entry_thesis_handoff": recorder_snapshot[
                         "entry_thesis_handoff"
