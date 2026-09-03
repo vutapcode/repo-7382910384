@@ -1,2 +1,2 @@
-status=BROKEN
-demo_message=GitHub connector can writ repo
+status=FIXED
+demo_message=GitHub connector can write repo
