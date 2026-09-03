@@ -1,12 +1,13 @@
-"""Adaptive cash-control Bias for the canonical Tier-S strategy.
+"""Adaptive causal cash-control Bias for the canonical Tier-S strategy.
 
 Bias answers one question only: which direction currently owns meaningful
-independent cash control, and is that control persisting or transferring?
+independent cash control, and is that control persisting, failing, or
+transferring?
 
-There is deliberately no fixed forecast horizon.  15s..60m lenses are
-observation scales used to distinguish noise, pullback, persistence and control
-transfer.  They are not votes and they are not a promise that price must move
-for a fixed amount of time.
+There is deliberately no fixed forecast horizon. Historical 15s..60m lenses
+remain observation/replay diagnostics only. Live direction comes from the
+ACTIVE causal cash wave: dual-independent-cash executed flow -> actual price
+conversion -> persistence/failure/control transfer.
 
 Directional authority:
 - Binance Spot BTCUSDT executed cash + price.
@@ -15,22 +16,30 @@ Directional authority:
 Context only:
 - Binance Futures price / executed flow.
 - Open interest / funding / liquidation.
+- L2/liquidity response until a named replay promotion exists.
 
-One causal root counts once.  Futures can explain urgency, build or unwind but
-can never replace a missing independent cash venue.  Fast entry timing and the
-strict fast reversal proof remain owned by Ignition Core.
+One causal root counts once. Futures can explain urgency, build or unwind but
+can never replace a missing independent cash venue. Fast entry timing and the
+strict fast reversal proof remain owned by Ignition Core. Economics/fees remain
+owned by Entry Edge; Bias only suppresses micro waves that have not established
+persistent cash control.
 """
 
 from collections import deque
+from importlib import import_module
 import time
 
 
-VERSION = "BIAS_COUNCIL_V11_ADAPTIVE_CASH_CONTROL"
+cash_wave_observation = import_module("2_suy_luan_mapping.cash_wave_observation")
+
+VERSION = "BIAS_COUNCIL_V12_CAUSAL_CASH_WAVE"
 CONTRACT = "DIRECTION_ONLY_NO_ENTRY_TIMING"
 FORECAST_SCOPE = "MEANINGFUL_DIRECTIONAL_REGIME_NOT_FIXED_TIME_TARGET"
 
-# Observation lenses, not hard holding/forecast horizons.
+# Long lenses are historical diagnostics only. They never own live direction.
 OBSERVATION_LENSES = (15.0, 60.0, 180.0, 600.0, 1800.0, 3600.0)
+# Non-overlapping segments form the active causal-wave observation tape.
+WAVE_SEGMENT_BOUNDARIES = (15.0, 60.0, 180.0, 600.0)
 MAX_CONTEXT_SECONDS = 3900
 SPOT_AGE = 3.0
 CB_AGE = 5.0
@@ -284,7 +293,6 @@ def s3(state, now):
         rows.append(("spot", "LONG" if spot_imb > 0.0 else "SHORT", abs(spot_imb), spot_vol, spot_imb))
     if cb_vol > 0.0 and abs(cb_imb) >= FLOW_BALANCE_FLOOR and fresh(getattr(state, "thoi_gian_coinbase_cuoi", 0.0), now, CB_AGE):
         rows.append(("coinbase", "LONG" if cb_imb > 0.0 else "SHORT", abs(cb_imb), cb_vol, cb_imb))
-    # Futures is intentionally included only in diagnostics so family dedupe is observable.
     fut_imb, fut_vol = _legacy_flow(state, now, futures=True)
     if fut_vol > 0.0 and abs(fut_imb) >= FLOW_BALANCE_FLOOR:
         rows.append(("futures", "LONG" if fut_imb > 0.0 else "SHORT", abs(fut_imb), fut_vol, fut_imb))
@@ -298,7 +306,6 @@ def s3(state, now):
 def story(votes):
     price = str((votes.get("S1_cross_price") or {}).get("vote", "ABSTAIN"))
     flow = str((votes.get("S3_multi_flow") or {}).get("vote", "ABSTAIN"))
-    oi = dict((votes.get("S2_price_x_oi") or {}).get("metrics") or {})
     if price in ("LONG", "SHORT") and flow == price:
         return "CASH_PRICE_AND_EXECUTED_FLOW_CONTROL", price, 0.0, False
     if price in ("LONG", "SHORT"):
@@ -340,7 +347,6 @@ def bias_buckets(state, now, legacy_history=None):
     if not isinstance(buckets, dict):
         buckets = {}
         state.bias_price_buckets = buckets
-        # Migrate legacy price-only fixtures/recovery state as non-flow refs.
         for row in list(legacy_history or ()):
             try:
                 buckets[int(float(row.get("ts", 0.0)))] = dict(row)
@@ -362,19 +368,50 @@ def bias_buckets(state, now, legacy_history=None):
 
 
 def _lens_reports(current, buckets, state, now, threshold):
+    """Historical diagnostics only; outputs have zero live direction authority."""
     reports = []
     for seconds in OBSERVATION_LENSES:
         tolerance = max(2.0, min(10.0, seconds * 0.04))
         ref = _reference(buckets, float(now) - seconds, tolerance)
         if not ref:
             continue
-        price = cash_price_vote(current, ref, threshold)
-        flow = cash_flow_vote(current, ref)
-        reports.append({"seconds": seconds, "price": price, "flow": flow, "reference_ts": ref.get("ts")})
+        reports.append({
+            "seconds": seconds,
+            "price": cash_price_vote(current, ref, threshold),
+            "flow": cash_flow_vote(current, ref),
+            "reference_ts": ref.get("ts"),
+            "authority": False,
+        })
     return reports
 
 
+def _segment_reports(current, buckets, now, threshold):
+    """Build non-overlapping newest->oldest segments for causal-wave inference."""
+    references = []
+    for seconds in WAVE_SEGMENT_BOUNDARIES:
+        tolerance = max(2.0, min(10.0, seconds * 0.04))
+        ref = _reference(buckets, float(now) - seconds, tolerance)
+        if ref:
+            references.append((float(seconds), ref))
+    segments = []
+    newer = current
+    start_age = 0.0
+    for end_age, older in references:
+        segments.append({
+            "start_age_seconds": start_age,
+            "end_age_seconds": end_age,
+            "price": cash_price_vote(newer, older, threshold),
+            "flow": cash_flow_vote(newer, older),
+            "newer_ts": newer.get("ts"),
+            "older_ts": older.get("ts"),
+        })
+        newer = older
+        start_age = end_age
+    return segments
+
+
 def _adaptive_cash_regime(reports):
+    """Legacy lens decoder retained for replay/tests; not used by live evaluate."""
     valid = [row for row in reports if (row.get("price") or {}).get("vote") in ("LONG", "SHORT")]
     if not valid:
         return {
@@ -388,7 +425,6 @@ def _adaptive_cash_regime(reports):
     near_side = str(near["price"]["vote"])
     context_side = str(context["price"]["vote"])
     same = [row for row in valid if str(row["price"]["vote"]) == context_side]
-    opposite_recent = [row for row in valid if row["seconds"] <= 180.0 and str(row["price"]["vote"]) != context_side]
     recent = [row for row in valid if row["seconds"] <= 180.0]
     dual_flow_side = next((
         str(row["flow"]["vote"]) for row in recent
@@ -455,16 +491,18 @@ def direction_memory(current, context, slow, trigger, threshold):
 
 
 def _compat_confidence(regime, flow_side, raw_side):
-    # Compatibility metadata for existing consumers, never a realized probability.
+    """Compatibility metadata only; never interpreted as a probability."""
     if raw_side not in ("LONG", "SHORT"):
         return 0.0
-    if regime == "CONTROL_TRANSFER":
+    if regime in ("CONTROL_TRANSFER",):
         return 0.72
-    if regime == "ESTABLISHED":
-        return 0.70 if flow_side == raw_side else 0.62
+    if regime in ("CONTROLLED", "ESTABLISHED"):
+        return 0.70
     if regime == "PULLBACK":
         return 0.60
-    return 0.58 if flow_side == raw_side else 0.52
+    if regime in ("EMERGING_CONTROL", "EMERGING"):
+        return 0.52
+    return 0.0
 
 
 def _hyst(state, report):
@@ -481,16 +519,18 @@ def _hyst(state, report):
 
     if source == "UNKNOWN_SOURCE":
         return "ABSTAIN", 0.0, "INDEPENDENT_CASH_SOURCE_UNKNOWN"
+    if source == "DIVERGING":
+        return "ABSTAIN", 0.0, "INDEPENDENT_CASH_EVIDENCE_DIVERGING"
     if old not in ("LONG", "SHORT"):
         return (raw, raw_conf, "ACQUIRE_CASH_REGIME") if raw in ("LONG", "SHORT") else ("ABSTAIN", 0.0, "NO_CASH_REGIME")
-    if raw == old:
-        return old, raw_conf, "STABLE_CASH_CONTROL"
-    if phase == "PULLBACK_AGAINST_CONTEXT" and context == old:
+    if phase == "PULLBACK_AGAINST_CONTEXT" and context == old and raw == old:
         return old, max(0.55, min(old_conf, raw_conf or old_conf)), "HOLD_CONTEXT_PULLBACK"
     if phase == "REVERSAL_CANDIDATE":
         if bool(cash.get("control_transfer_confirmed")) and raw in ("LONG", "SHORT") and raw != old:
             return raw, raw_conf, "EVIDENCE_CONFIRMED_CONTROL_TRANSFER"
         return "ABSTAIN", 0.0, "RELEASE_DURING_UNPROVEN_CONTROL_TRANSFER"
+    if raw == old:
+        return old, raw_conf, "STABLE_CASH_CONTROL"
     if raw == "ABSTAIN" and context == old and phase in ("ESTABLISHED_TREND", "CONTEXT_WITHOUT_CONFIRMATION"):
         return old, max(0.55, old_conf * 0.92), "HOLD_CONTEXT_THROUGH_ABSTAIN"
     return "ABSTAIN", 0.0, "CONFLICT_RELEASE_TO_NEUTRAL"
@@ -526,6 +566,17 @@ def fut_price(state, now):
     return 0.0, "UNAVAILABLE"
 
 
+def _previous_wave_side(state):
+    side = str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
+    wave_state = str(getattr(state, "bias_wave_state", "") or "").upper()
+    if wave_state in {"CONTROLLED", "PULLBACK"} and side in {"LONG", "SHORT"}:
+        return side
+    # Upgrade/restart compatibility: an old persisted Bias may predate V12.
+    if not wave_state and side in {"LONG", "SHORT"} and float(getattr(state, "bias_confidence", 0.0) or 0.0) >= 0.55:
+        return side
+    return "ABSTAIN"
+
+
 def evaluate(state, now=None, force_full=False):
     now = time.time() if now is None else float(now)
     spot_fresh = fresh(getattr(state, "thoi_gian_tick_cuoi", 0.0), now, SPOT_AGE)
@@ -550,7 +601,15 @@ def evaluate(state, now=None, force_full=False):
     buckets[int(now)] = current
     threshold = thr(state, spot)
     lenses = _lens_reports(current, buckets, state, now, threshold) if spot_fresh and cb_fresh else []
-    regime = _adaptive_cash_regime(lenses)
+    segments = _segment_reports(current, buckets, now, threshold) if spot_fresh and cb_fresh else []
+    wave = cash_wave_observation.infer(
+        segments,
+        previous_side=_previous_wave_side(state),
+        # Live L2 is intentionally not promoted here. The observation owner can
+        # consume execution-linked liquidity in matched replay without allowing
+        # raw walls/cancels to create direction.
+        liquidity=(),
+    )
 
     slow = _reference(buckets, now - 60.0, 3.0)
     trigger = _reference(buckets, now - 15.0, 2.0)
@@ -561,48 +620,62 @@ def evaluate(state, now=None, force_full=False):
     s2_vote = s2(current, slow, threshold, macro_fresh, oi_context) if slow else vote(reason="POSITIONING_CONTEXT_WARMUP", authority=False)
     s3_vote = s3(state, now)
 
-    raw_side = str(regime["raw_side"])
-    flow_side = str(regime.get("flow_support", "ABSTAIN"))
-    raw_conf = _compat_confidence(regime["regime_state"], flow_side, raw_side)
+    raw_side = str(wave.get("raw_side") or "ABSTAIN")
+    wave_state = str(wave.get("wave_state") or "UNKNOWN")
+    newest_flow_side = str((((wave.get("segments") or [{}])[0]).get("flow_side") if wave.get("segments") else "ABSTAIN") or "ABSTAIN")
+    raw_conf = _compat_confidence(wave_state, newest_flow_side, raw_side)
     if not spot_fresh or not cb_fresh:
         raw_side, raw_conf = "ABSTAIN", 0.0
         knowledge = "UNKNOWN_SOURCE"
         reason = "INDEPENDENT_CASH_SOURCE_STALE"
+    elif wave_state == "CONTRADICTED":
+        knowledge = "DIVERGING"
+        reason = "DUAL_CASH_FLOW_PRICE_CONTRADICTION"
+    elif wave_state == "UNKNOWN":
+        knowledge = "UNKNOWN_MARKET"
+        reason = "ACTIVE_CASH_WAVE_UNRESOLVED"
     else:
-        explicit_flow_conflict = any(
-            str((row.get("flow") or {}).get("reason")) == "DUAL_CASH_FLOW_CONFLICT"
-            for row in lenses if str((row.get("price") or {}).get("vote")) == raw_side
-        )
-        knowledge = "DIVERGING" if explicit_flow_conflict else "SUPPORTED" if raw_side in ("LONG", "SHORT") else "UNKNOWN_MARKET"
+        knowledge = "SUPPORTED"
         reason = {
-            "ESTABLISHED": "ADAPTIVE_DUAL_CASH_REGIME",
-            "PULLBACK": "PULLBACK_INSIDE_CASH_CONTEXT",
-            "CONTROL_TRANSFER": "DUAL_CASH_CONTROL_TRANSFER",
-            "EMERGING": "EMERGING_DUAL_CASH_CONTROL",
-        }.get(regime["regime_state"], "CASH_REGIME_UNRESOLVED")
+            "CONTROLLED": "ACTIVE_DUAL_CASH_WAVE_CONTROL",
+            "PULLBACK": "PULLBACK_INSIDE_ACTIVE_CASH_WAVE",
+            "CONTROL_TRANSFER": "DUAL_CASH_WAVE_CONTROL_TRANSFER",
+            "EMERGING_CONTROL": "EMERGING_DUAL_CASH_WAVE",
+            "EXHAUSTION": "OLD_CASH_WAVE_EXHAUSTED",
+            "ABSORPTION": "OLD_CASH_WAVE_ABSORBED",
+            "TRANSITION": "CASH_CONTROL_TRANSFER_UNPROVEN",
+        }.get(wave_state, "ACTIVE_CASH_WAVE_OBSERVED")
 
     direction_mem = {
-        "context_side": regime["context_side"],
-        "candidate_side": regime["candidate_side"],
-        "phase": regime["phase"],
+        "context_side": wave.get("context_side", "ABSTAIN"),
+        "candidate_side": wave.get("candidate_side", "ABSTAIN"),
+        "phase": wave.get("phase", "WARMUP_OR_NEUTRAL"),
         "cash_180s": next(((row.get("price") or {}) for row in lenses if row["seconds"] == 180.0), vote(reason="UNAVAILABLE")),
         "cash_60s": next(((row.get("price") or {}) for row in lenses if row["seconds"] == 60.0), vote(reason="UNAVAILABLE")),
         "cash_15s": next(((row.get("price") or {}) for row in lenses if row["seconds"] == 15.0), vote(reason="UNAVAILABLE")),
+        "historical_lens_direction_authority": False,
     }
     cash_control = {
-        **regime,
+        **wave,
+        "regime_state": wave_state,
+        "observation_segments": segments,
         "observation_lenses": lenses,
         "authority_roots": ["BINANCE_SPOT_CASH", "COINBASE_USD_CASH"],
         "futures_direction_authority": False,
         "oi_direction_authority": False,
+        "historical_lens_direction_authority": False,
+        "static_l2_direction_authority": False,
+        "flow_price_conversion_required": True,
+        "micro_wave_entry_authority": False,
     }
     st = story({"S1_cross_price": s1_vote, "S2_price_x_oi": s2_vote, "S3_multi_flow": s3_vote})
     raw_report = {
         "version": VERSION, "bias": raw_side, "confidence": raw_conf,
         "quorum": 1 if raw_side in ("LONG", "SHORT") else 0,
-        "reason": reason, "mode": "FULL", "regime_state": regime["regime_state"],
+        "reason": reason, "mode": "FULL", "regime_state": wave_state,
+        "wave_state": wave_state,
         "knowledge_state": knowledge, "forecast_scope": FORECAST_SCOPE,
-        "dominant_lens_seconds": regime.get("dominant_lens_seconds"),
+        "dominant_lens_seconds": None,
         "story": {"name": st[0], "direction": st[1], "confidence_adjustment": 0.0, "veto": False},
         "s_votes": {"S1_cross_price": s1_vote, "S2_price_x_oi": s2_vote, "S3_multi_flow": s3_vote},
         "a_votes": {"A1_funding_basis": vote(reason="CONTEXT_ONLY"), "A2_spot_lead": vote(reason="CONTEXT_ONLY")},
@@ -623,8 +696,8 @@ def evaluate(state, now=None, force_full=False):
     out = dict(raw_report)
     out.update(raw_bias=raw_side, raw_confidence=raw_conf, bias=side, confidence=round(C(conf), 6), hysteresis=transition_reason)
     out["reversal_latch"] = {
-        "status": "CONFIRMED" if transition_reason == "EVIDENCE_CONFIRMED_CONTROL_TRANSFER" else "PENDING" if regime["phase"] == "REVERSAL_CANDIDATE" else "INACTIVE",
-        "candidate_side": regime["candidate_side"],
+        "status": "CONFIRMED" if transition_reason == "EVIDENCE_CONFIRMED_CONTROL_TRANSFER" else "PENDING" if wave.get("phase") == "REVERSAL_CANDIDATE" else "INACTIVE",
+        "candidate_side": wave.get("candidate_side", "ABSTAIN"),
         "started_at": None,
         "confirmed_at": now if transition_reason == "EVIDENCE_CONFIRMED_CONTROL_TRANSFER" else None,
         "authority": False,
@@ -637,6 +710,7 @@ def update_state(state, now=None, force_full=False):
     out = evaluate(state, now=now, force_full=force_full)
     state.bias_state = out["bias"]
     state.bias_confidence = out["confidence"]
+    state.bias_wave_state = out.get("wave_state", "UNKNOWN")
     state.bias_council = out
     state.bias_updated_at = out["ts"]
     state.bias_version = VERSION
