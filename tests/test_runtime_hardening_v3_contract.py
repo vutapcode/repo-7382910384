@@ -5,17 +5,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class RuntimeHardeningV3ContractTests(unittest.TestCase):
-    def test_runtime_patch_compiles_and_contains_core_guards(self):
+    def test_runtime_patch_compiles_and_preserves_single_bias_owner(self):
         path = ROOT / "loi_he_thong" / "runtime_hardening_v3.py"
         text = path.read_text(encoding="utf-8")
         compile(text, str(path), "exec")
         for marker in (
-            "coinbase_cvd_1m",
-            "futures_flow_1s_buffer",
-            "BIAS_FLOW_SEC = 60.0",
+            "TIER_S_RUNTIME_PATCH_V4_SINGLE_BIAS_OWNER",
+            "CANONICAL_BIAS_OWNER_UNCHANGED",
+            "BIAS_OWNER_MUTATED_BY_RUNTIME_HARDENING",
             "GUARDIAN_FLOW_SEC = 3.0",
-            "material_floor_btc_by_venue",
-            "MIN_VOL_BTC_BY_VENUE",
             "reversed(rows)",
             "0.0 <= float(now) - ts <= 5.0",
             "base.FEE_BPS_PER_SIDE = fee",
@@ -23,6 +21,14 @@ class RuntimeHardeningV3ContractTests(unittest.TestCase):
             'out["entry_ready"] = False',
         ):
             self.assertIn(marker, text)
+        for retired in (
+            "BIAS_FLOW_SEC = 60.0",
+            "BIAS_MIN_COVERAGE_SEC",
+            "BIAS_MIN_IMB",
+            "material_floor_btc_by_venue",
+            "bias.s3 = s3",
+        ):
+            self.assertNotIn(retired, text)
 
     def test_state_guard_compiles_and_checks_v2_invariants(self):
         path = ROOT / "ops" / "shadow_state_guard.py"
@@ -60,13 +66,13 @@ class RuntimeHardeningV3ContractTests(unittest.TestCase):
         self.assertIn("shadow_state_guard.py", text)
         self.assertIn("runtime_hardening_v3.py", text)
 
-    def test_recent_fixes_stay_locked(self):
+    def test_recent_runtime_and_state_fixes_stay_locked(self):
         runtime_path = ROOT / "loi_he_thong" / "runtime_hardening_v3.py"
         runtime = runtime_path.read_text(encoding="utf-8")
         compile(runtime, str(runtime_path), "exec")
         self.assertNotIn("MIN_IAB", runtime)
-        self.assertIn("BIAS_MIN_IMB", runtime)
-        self.assertIn("coverage >= BIAS_MIN_COVERAGE_SEC", runtime)
+        self.assertIn("_install_bias(base)", runtime)
+        self.assertIn("before is not after", runtime)
 
         guard_path = ROOT / "ops" / "shadow_state_guard.py"
         guard = guard_path.read_text(encoding="utf-8")
