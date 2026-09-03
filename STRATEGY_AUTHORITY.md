@@ -16,178 +16,142 @@ rebuild or reinterpret the approved Truth.
 
 - Market Truth owner: `loi_he_thong/market_thesis.py`. It alone records the
   mechanism, support, competing explanations, falsifiers and source health.
-- Action owner: the final decision integration in
-  `mainnet_tier_s_shadow_launcher.py`. It emits only `ACT_TAKER_NOW`,
-  `POST_MAKER`, `WAIT_INFORMATION` or an explicitly supported future
-  `ABANDON`; it does not reinterpret market truth.
-- Execution owner: `loi_he_thong/execution_causal_revalidation.py`. It emits
-  only `EXECUTE`, `CANCEL` or `EXECUTION_UNKNOWN` after submit-time facts.
-- Safety owner: `loi_he_thong/mainnet_safety.py`. It reports operational action
-  and distinguishes `SYSTEM_UNSAFE` from `UNKNOWN_SOURCE`; neither label means
-  the market thesis was falsified.
+- Action owner: final decision integration in `mainnet_tier_s_shadow_launcher.py`.
+- Execution owner: `loi_he_thong/execution_causal_revalidation.py`.
+- Safety owner: `loi_he_thong/mainnet_safety.py`.
+- Hard Risk remains final capital-safety authority.
 
-Old journal fields remain readable through a compatibility view, but that view
-is always `authority_eligible=false`. A downstream mutation invalidates the
-contract hash instead of silently changing another owner's conclusion.
-
-Guardian's historical `thesis_status` remains an unsealed compatibility
-observation until Phase 4B. New positions receive the frozen Entry handoff,
-but Guardian shared-thesis authority and exit semantics have not migrated yet.
-It is not a second `MARKET_TRUTH` contract owner.
+Old journal fields remain readable through compatibility views but cannot gain
+new authority merely because they exist.
 
 1. Market data authority
    - Binance Spot BBO and `aggTrade` executed flow.
    - Coinbase Spot ticker and executed matches.
    - Binance Futures BBO, `aggTrade`, Open Interest and funding.
+   - Coinbase L2 and quote-normalization collectors remain data/research only.
+
 2. Data-quality and causal guards
-   - freshness, websocket idle recovery, receive-clock guards, flow alignment,
-     epoch/gap reset, OI freshness and fail-closed runtime health.
-3. Bias Council
-   - S1 cross-venue price, S2 price x OI, S3 executed flow.
-   - Output is direction plus confidence/hysteresis only.
+   - Freshness, websocket idle recovery, receive-clock guards, epoch/gap reset,
+     OI freshness and fail-closed runtime health.
+   - Binance Spot cumulative executed flow has one owner:
+     `2_suy_luan_mapping/map_dong_tien/delta_cvd.py`.
+     Collectors transport trades; they do not maintain a second cumulative CVD.
+   - Reconnect/sequence epoch boundaries must not be bridged by Bias memory.
+
+3. Bias V11 — adaptive independent-cash regime
+   - Owner: `2_suy_luan_mapping/bias_council.py`.
+   - Question: **which direction currently owns meaningful independent cash
+     control, and is that control persisting, pulling back, or transferring?**
+   - Direction roots are Binance Spot BTCUSDT cash and Coinbase BTC-USD cash.
+     Both are required for independent cross-cash price authority; executed
+     dual-cash flow is supporting evidence for persistence/control transfer.
+   - Binance Futures price/flow, OI, funding and liquidation are derivative or
+     positioning context only. They cannot replace a missing cash venue and
+     cannot cast an independent Bias direction vote.
+   - `price + OI` is no longer a second directional seat. OI may report
+     expansion/contraction and candidate build/unwind mechanisms only.
+   - Observation lenses `15s / 60s / 180s / 10m / 30m / 60m` are **not votes,
+     hard holding times, forecast promises or entry windows**. They are a
+     bounded causal memory used to distinguish micro-noise, meaningful
+     persistence, pullback and regime control transfer. The live horizon is
+     therefore evidence-driven rather than fixed to one hour.
+   - A short opposing move inside established longer cash control is a
+     `PULLBACK`, not an automatic reversal. A control transfer requires recent
+     opposite dual-cash price acceptance plus same-side independent executed
+     cash support; it is not confirmed by waiting an arbitrary number of
+     seconds.
+   - Missing/stale independent cash returns `UNKNOWN_SOURCE` and cannot acquire
+     a new direction.
+   - Runtime hardening is forbidden from replacing `bias_council.s3` or any
+     other Bias reasoning function. `runtime_hardening_v3._install_bias()` is a
+     guard proving the canonical owner remains unchanged.
+   - Output remains direction/context only. Bias never owns Entry timing,
+     execution, position management or Hard Risk.
+
 4. Ignition Core V1
    - Bias is frozen before the impulse. Receive-time 100 ms executed flow,
      venue-normalized surprise, price conversion and clock uncertainty drive
      `IGNITION -> PROBE -> PROVE`.
    - Cash may propose. Futures may alert, but cannot open without independent
-     Binance Spot or Coinbase price plus executed-flow response within 600 ms.
-   - The frozen Bias handoff includes cash direction phase, hysteresis, story,
-     price/flow votes and OI regime. A pending two-step reversal cannot reuse
-     the old direction to authorize Entry.
-   - PROVE is failed reversion or two accelerating 100 ms metaorder buckets.
-     Failed reversion requires material opposition, adverse excursion, material
-     reclaim and material same-side acceptance persisting for at least 400 ms.
-   - Consumed fraction uses the greater of venue-local episode displacement and
-     bounded 3/6/15-second pre-ignition cash displacement, divided by live 1m
-     ATR. This prevents a late proposer from resetting a mature wave to zero;
-     missing ATR fails closed. Only IGNITION/EARLY at most 0.35 may enter.
-   - A Futures proposer must obtain fresh OI before Entry. A material fresh OI
-     decrease classifies the move as unwind and cannot authorize a Futures-led
-     entry; cash-led unwind remains a distinct cash-authority path.
-   - Coinbase older than five seconds fails closed. Static walls/cancels and
-     BBO quantity without executed flow never authorize Entry.
+     Binance Spot or Coinbase price plus executed-flow response within the
+     Ignition causal episode.
+   - Fast control-transfer/reversal remains an Ignition question. Bias V11 does
+     not make Ignition wait for a 30m/60m observation lens before recognizing a
+     strict fast reversal.
+   - PROVE remains failed reversion or persistent/accelerating cash execution
+     under the existing Ignition contract. Static walls/cancels and BBO size
+     without executed flow never authorize Entry.
+   - A Futures proposer must obtain fresh OI before Entry. OI decline may
+     classify unwind; it does not create a new directional Bias.
+
 5. Residual Edge
    - The observed cash lead over Futures is handoff timing metadata, not
-     remaining alpha. Better Futures confirmation must not reduce Edge.
-     Completed net Guardian outcomes plus verified executable costs replace
-     the 13/20/35 bps prior. Those values remain historical metadata only.
-   - Shadow bootstrap may collect structurally valid trades. Real money needs
-     at least 30 persisted outcomes, positive expectancy, non-negative LCB,
-     non-negative 25 bps stress and verified commission.
-   - A bounded 1-6 second persistent-metaorder lane has shadow/demo bootstrap
-     authority after the same Bias, current-cash, flow-efficiency, maturity,
-     OI-context and Edge contracts pass. Its observer snapshot itself has no
-     direct Entry authority. Its immutable contract is
-     `shadow_bootstrap_authority=true`, `live_authority=false`. Empirical
-     expectancy/LCB/stress remains research evidence and cannot silently turn
-     this lane into live authority; that would require a separately reviewed
-     canonical wiring and contract change.
-   - Fast Ignition and Persistent Metaorder publish one read-only
-     `CausalWaveSnapshot` representation. This does not merge their proof
-     policies or extend their horizons; it prevents downstream modules from
-     assigning different meanings to the same conversion/freshness evidence.
-   - Fast Transition uses a proof graph, not a weighted score. A proved old-side
-     cash failure may survive a brief new-side evidence lull inside the existing
-     five-second episode lifetime; Futures pressure and current cash conversion
-     keep their shorter lifetimes. Remembered failure cannot authorize Entry:
-     a fresh same-side cash event must return and all flow, maturity and
-     economics gates still apply.
+     remaining alpha.
+   - Completed net Guardian outcomes plus verified executable costs remain the
+     empirical promotion evidence.
+   - Shadow bootstrap may collect structurally valid trades. Real money remains
+     evidence-gated and is not promoted by this Bias refactor.
+   - Fast Ignition and Persistent Metaorder share read-only causal-wave
+     representation without merging proof policies or horizons.
+
+6. Market Truth / Action boundary
+   - `MARKET_THESIS_V3_AUTHORITY_SEPARATED` freezes the entry mechanism,
+     supporting evidence, competing explanations and falsifiers.
+   - Market Truth may consume the frozen Bias context but cannot rebuild Bias or
+     turn derivative context into independent cash evidence.
+   - Action consumes sealed Truth and economics; it does not reinterpret the
+     market mechanism.
+
 7. Execution and active position
-   - After Action approves, launcher no longer re-reads current Bias to judge
-     the same causal proof. It verifies the immutable Entry handoff instead.
-     A missing, mismatched or mutated handoff blocks before submit and is
-     attributed to the dependency owner.
-   - Every reserved GO is measured again immediately before submit using the
-     shared Ignition classifier. Journal telemetry records GO-to-submit delay,
-     flow state at GO/submit and cash age. This measurement cannot authorize a
-     rejected Entry; the post-proof raw scan remains a contradiction-only
-     safety guard, not a second strategy council.
-   - Shadow sizing uses balance; exchange filters are enforced only when live
-     filters are verified. Unknown filters remain `UNVERIFIED_FILTERS`.
-   - Guardian exits only on adverse price with causal deterioration that breaks
-     the cash-led thesis recorded at entry. Its old sensitive thresholds are an
-     early scout only; they cannot independently authorize an exit.
-   - `MARKET_THESIS_V3_AUTHORITY_SEPARATED` freezes the Entry mechanism,
-     expected sequence and
-     falsifiers. Guardian monitors that contract; PnL, entry price, best-R,
-     holding time and account history cannot change causal thesis status.
-     Capital protection remains a separate Risk authority.
-   - A runner with an active one-way profit floor gets a longer confirmation
-     window during an ordinary pullback. Extreme cross-venue price plus strong
-     adverse flow bypasses that shield through the fast-kill path.
-   - A frozen established 180/60/15 second trend gets the same soft confirmation
-     window while current context still agrees. Reversal candidates and fast
-     causal danger disable that shield; Hard Risk remains final authority.
-   - Hard SL is final risk authority; profit ratchet and fee-aware floor remain
-     subordinate risk protection. Support widens the trailing gap, while the
-     floor only ratchets forward and can never loosen afterward.
-   - Shadow daily PnL is audit-only and never limits test trades. The configured
-     daily-loss breaker is enforced only by the authenticated live execution path.
-   - Loss of support or neutral flow cannot independently trigger an exhaustion
-     exit inside Risk; historical `whale_*` checkpoint fields are migration-only.
+   - After Action approves, execution verifies the immutable Entry handoff. It
+     cannot re-read current Bias and re-judge the same causal proof.
+   - Submit-time checks are execution facts only.
+   - Guardian owns adverse-move interpretation after entry; PnL cannot rewrite
+     Market Truth.
+   - Hard SL remains final risk authority. Profit ratchet and fee-aware floor
+     remain subordinate capital protection.
+   - Loss of support or neutral flow alone does not become a second Risk exit
+     council.
+
 8. Journal/state/calibration
    - Only completed canonical shadow outcomes may update empirical calibration.
-   - Calibration samples must persist across restarts and remain version-bound.
-   - Bias OI freshness hooks may adjust only the collector-aligned age bound;
-     they must not monkey-patch Ignition, Guardian or execution authority.
-   - A qualified causal opportunity follows `reserve -> fill -> commit`.
-     Terminal non-fills release the reservation so the same still-live episode
-     may retry; temporary BBO health is an execution concern, not identity.
+   - Calibration samples remain version-bound and persistence-safe.
+   - Recorder/replay are evidence systems only and never gain trading authority.
+   - Any future Bias promotion/tuning must use availability-time-safe matched
+     replay and compare the same causal population. Higher apparent accuracy
+     caused only by excessive `ABSTAIN` is not improvement.
+   - Research may evaluate 30m/60m forward behavior as diagnostics, but those
+     labels never become a hard live forecast horizon automatically.
 
 ## Explicit non-authorities
 
-- `2_suy_luan_mapping/whale_intent.py`: retired research experiment. Its
-  `CATCH` and `SHADOW_PROBE` outputs must never enter production decisions.
-- `1_tai_du_lieu/tai_whale_depth/`: experimental data-only collector; not loaded
-  by the canonical launcher and cannot vote.
-- `recorder/`: independent, public-data, read-only evidence recorder. It cannot
-  submit orders or authorize Bias/Entry/Exit.
-- `recorder/wavefront.py`: parallel `WAVEFRONT_SHADOW` research evaluator. Its
-  cash-proposer/Futures-follower candidates, maker/taker twins and residual-edge
-  reports always carry `authority=false`; promotion is manual and requires a
-  separate canonical wiring change after the evidence gates pass.
-- `loi_he_thong/entry_council_shadow.py`: retired pre-Ignition evaluator kept
-  only for historical journal/test decoding. It is not a fallback lane.
-- `recorder/liquidity_response.py`: offline executed-depletion/refill research.
-  A cancel or disappearing wall is never execution and its output cannot vote.
-- `recorder/causal_world_model.py`: event/state/hypothesis shadow brain. It may
-  explain competing mechanisms and emit `causal_world_state`, but every row is
-  `authority=false` and cannot authorize Bias, Entry, Execution or Guardian.
-- `recorder/coinbase_l2.py`: public Level-2 reconstruction used only by the
-  recorder. Ordered updates are transported in lossless 100 ms batches;
-  quantity removal is not execution without correlated matches.
-- `recorder/replay.py`: deterministic evidence transport/reconstruction only.
-  A replay becomes promotion evidence only when a canonical strategy adapter
-  explicitly evaluates the complete active chain.
-- `ops/wstrade_replay_validation.py`: retired Whale/CATCH research replay and
-  explicitly invalid for Mainnet promotion.
-- Physical legacy SMC/orderbook/volume-profile modules: not loaded. The bootstrap
-  exposes inert compatibility shells only.
+- `2_suy_luan_mapping/whale_intent.py`: retired research experiment.
+- `1_tai_du_lieu/tai_whale_depth/`: experimental data-only collector.
+- `recorder/`: independent, public-data, read-only evidence recorder.
+- `recorder/wavefront.py`: parallel shadow research evaluator only.
+- `loi_he_thong/entry_council_shadow.py`: retired pre-Ignition evaluator.
+- `recorder/liquidity_response.py` and
+  `2_suy_luan_mapping/cash_liquidity_response.py`: executed-liquidity-response
+  research. A cancellation or disappearing wall is never execution and cannot
+  vote Bias merely because L2 exists.
+- `recorder/causal_world_model.py`: explanatory shadow world model only.
+- `recorder/coinbase_l2.py` and live Coinbase L2 transport: data-only.
+- `1_tai_du_lieu/tai_usdt_usd/tai_usdt_usd.py`: quote-normalization data-only;
+  it cannot create BTC direction.
+- `recorder/replay.py`: deterministic evidence reconstruction only.
+- Physical legacy SMC/orderbook/volume-profile modules: not loaded authority.
 
 ## Upgrade priority
 
-Prefer empirical persistence, canonical deterministic replay and flow-quality
-measurement. Do not add another indicator, veto or confidence field unless a
-named active downstream consumer and behavioral test prove its effect.
+Prefer better causal state, independent cash evidence, deterministic replay and
+flow-quality measurement. Do not add a new score, indicator, veto or horizon
+unless a named owner/question and matched evidence prove that it corrects a
+specific misunderstanding.
 
-## Historical parameter provenance (non-authoritative, 2026-08-23)
+## Historical parameter provenance (non-authoritative)
 
-This bootstrap is evidence-bound, not a promise of alpha:
-
-- Binance plugin, BTCUSDT USD-M: 239 closed 1m bars and 287 closed 5m bars.
-  The 5m range distribution was p50 `12.95`, p75 `19.70`, p95 `35.06` bps;
-  therefore old reports used `13/20/35` bps. Ignition Core does not authorize
-  entries from these candle-range numbers.
-- Recorder, latest three hours: 3,600 non-overlapping 3s buckets. Volume p25 was
-  Binance Spot `0.01735`, Futures `0.152`, Coinbase `0.001614` BTC. Rounded
-  materiality floors are `0.015/0.15/0.002` BTC respectively.
-- Absolute 3s imbalance p25 was Futures `0.4859`, Binance Spot `0.6589`, and
-  Coinbase `0.7656`; initial minimum/strong flow thresholds are `0.20/0.55`.
-- Local OI polling p95 absolute change was `0.008392%`; initial OI build
-  threshold is rounded to `0.0085%`.
-- Binance exchange information verified BTCUSDT `TRADING`, price tick `0.10`,
-  quantity min/step `0.001`, and min notional `50 USDT`. Public plugin data does
-  not verify account commission, balance, leverage, margin mode, or order path.
-
-Any future replacement must record its source window and reset promotion
-evidence through the normal code/config version gate.
+Historical threshold values in the repository are bootstrap/research metadata,
+not claims of predictive probability. Current Bias V11 deliberately treats its
+multi-scale lenses as observations rather than independent votes, and any
+future replacement must record source windows and reset promotion evidence
+through the normal code/config version gate.
