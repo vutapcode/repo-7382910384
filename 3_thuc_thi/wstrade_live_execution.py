@@ -788,6 +788,45 @@ def _emit_final_aborted_fill(state, event_callback, flatten_order=None):
 
 def _entry_causal_thesis(result):
     """Keep only the cash-led facts Guardian needs to judge thesis failure."""
+    result = dict(result or {})
+    handoff = dict(result.get("entry_thesis_handoff") or {})
+    if authority_contracts.verify_entry_handoff(
+        handoff,
+        expected_side=result.get("side"),
+        expected_episode_id=result.get("causal_episode_id"),
+    ):
+        truth = dict(handoff.get("market_thesis") or {})
+        action = dict(handoff.get("action_contract") or {})
+        why = dict(truth.get("why_entry") or {})
+        economics = dict(action.get("economics") or {})
+        anchors = sorted({
+            str(value).lower()
+            for value in (why.get("cash_anchors") or ())
+            if str(value).lower() in {"spot", "coinbase"}
+        })
+        primary = str(why.get("primary_cash_anchor") or "").lower()
+        if primary not in anchors:
+            primary = None
+        return {
+            "version": "ENTRY_CAUSAL_THESIS_V3_FROZEN_ACTION_HANDOFF",
+            "entry_thesis_handoff": handoff,
+            "market_thesis": truth,
+            "market_truth_hash": handoff.get("market_truth_hash"),
+            "action_hash": handoff.get("action_hash"),
+            "causal_episode_id": handoff.get("causal_episode_id"),
+            "authority_basis": why.get("authority_basis"),
+            "primary_cash_anchor": primary,
+            "cash_anchors": anchors,
+            "handoff_status": "ACTION_APPROVED_FROZEN_TRUTH",
+            "oi_intent": {"status": truth.get("oi_context")},
+            "proof_type": why.get("proof_type"),
+            "proposer": why.get("proposer"),
+            "economic_contract_version": economics.get(
+                "economic_contract_version"
+            ),
+            "bias_thesis": dict(truth.get("bias_context") or {}),
+        }
+
     causal=(result or {}).get("causal") or {}
     ignition=(result or {}).get("ignition") or causal.get("ignition") or {}
     edge=dict((result or {}).get("edge_tier") or {})
@@ -912,6 +951,35 @@ async def _open_position_locked(
         ),
         "causal_episode_id": result.get("causal_episode_id"),
     }
+    requires_handoff = bool(
+        result.get("canonical_opportunity_id")
+        or result.get("authority_contracts")
+        or result.get("entry_thesis_handoff")
+    )
+    if requires_handoff and not authority_contracts.verify_entry_handoff(
+        result.get("entry_thesis_handoff") or {},
+        expected_side=side,
+        expected_episode_id=result.get("causal_episode_id"),
+    ):
+        state.wstrade_live_last_entry_outcome.update({
+            "status": "REJECTED_BEFORE_SUBMIT",
+            "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
+        })
+        state.wstrade_live_last_entry_gate = {
+            "ok": False,
+            "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
+            "detail": "ACTION_APPROVED_MARKET_TRUTH_REQUIRED",
+        }
+        if event_callback:
+            event_callback("LIVE_ENTRY_HANDOFF_REJECTED", {
+                "causal_episode_id": result.get("causal_episode_id"),
+                "canonical_opportunity_id": result.get(
+                    "canonical_opportunity_id"
+                ),
+                "side": side,
+                "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
+            })
+        return None
     if not bool(getattr(state, "wstrade_live_armed", False)):
         return None
     if not bool(getattr(state, "wstrade_live_entry_allowed", True)):

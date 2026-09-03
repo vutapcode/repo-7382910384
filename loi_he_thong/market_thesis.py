@@ -126,6 +126,17 @@ def build(result, *, primary_cash_anchor=None, cash_anchors=()):
         str(value).lower() for value in cash_anchors
         if str(value).lower() in {"spot", "coinbase"}
     })
+    primary_aliases = {
+        "binance_spot": "spot", "spot": "spot",
+        "coinbase_spot": "coinbase", "coinbase": "coinbase",
+    }
+    proposed_primary = primary_aliases.get(
+        str(ignition.get("proposer") or "").lower()
+    )
+    if primary_cash_anchor not in anchors:
+        primary_cash_anchor = (
+            proposed_primary if proposed_primary in anchors else None
+        )
     has_cash_evidence = bool(
         anchors and (
             proof != "UNKNOWN"
@@ -164,6 +175,29 @@ def build(result, *, primary_cash_anchor=None, cash_anchors=()):
             "primary_cash_anchor": primary_cash_anchor,
             "cash_anchors": anchors,
             "authority_basis": result.get("authority_basis"),
+        },
+        "bias_context": {
+            "direction": frozen.get("direction"),
+            "confidence": frozen.get("confidence"),
+            "context_side": (
+                frozen.get("direction_context") or {}
+            ).get("context_side"),
+            "phase": (frozen.get("direction_context") or {}).get("phase"),
+            "candidate_side": (
+                frozen.get("direction_context") or {}
+            ).get("candidate_side"),
+            "hysteresis": (
+                frozen.get("direction_context") or {}
+            ).get("hysteresis"),
+            "price_vote": (
+                frozen.get("direction_context") or {}
+            ).get("price_vote"),
+            "flow_vote": (
+                frozen.get("direction_context") or {}
+            ).get("flow_vote"),
+            "oi_regime": (
+                frozen.get("direction_context") or {}
+            ).get("oi_regime"),
         },
         "supporting_evidence": supporting,
         "competing_explanations": competing,

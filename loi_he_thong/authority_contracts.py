@@ -12,7 +12,9 @@ import math
 
 
 VERSION = "FOUR_AUTHORITY_CONTRACTS_V1"
+ENTRY_HANDOFF_VERSION = "ENTRY_THESIS_HANDOFF_V1"
 LAYERS = {"MARKET_TRUTH", "ACTION", "EXECUTION", "SAFETY"}
+ENTRY_ACTIONS = {"ACT_TAKER_NOW", "POST_MAKER"}
 
 
 def _plain(value):
@@ -114,6 +116,92 @@ def verify_bundle(value):
         and all(verify(contract) for contract in contracts.values())
         and supplied == _digest(value)
     )
+
+
+def freeze_entry_handoff(value, *, expected_side=None, expected_episode_id=None):
+    """Freeze the exact Truth and Action contracts that approved an Entry.
+
+    This is a transfer envelope, not a fifth authority.  Execution may replace
+    its own contract later without changing either hash captured here.
+    """
+    value = _plain(dict(value or {}))
+    if not verify_bundle(value):
+        raise ValueError("AUTHORITY_BUNDLE_INVALID")
+    contracts = dict(value.get("contracts") or {})
+    truth = dict(contracts.get("MARKET_TRUTH") or {})
+    action = dict(contracts.get("ACTION") or {})
+    episode_id = str(value.get("causal_episode_id") or "")
+    side = str(truth.get("side") or "ABSTAIN").upper()
+    if not episode_id:
+        raise ValueError("ENTRY_HANDOFF_EPISODE_MISSING")
+    if str(action.get("action") or "") not in ENTRY_ACTIONS:
+        raise ValueError("ACTION_NOT_ENTRY_APPROVED")
+    if truth.get("status") != "SUPPORTED":
+        raise ValueError("MARKET_TRUTH_NOT_SUPPORTED")
+    if side not in {"LONG", "SHORT"}:
+        raise ValueError("MARKET_TRUTH_SIDE_INVALID")
+    if expected_side is not None and side != str(expected_side).upper():
+        raise ValueError("ENTRY_HANDOFF_SIDE_MISMATCH")
+    if expected_episode_id is not None and episode_id != str(
+        expected_episode_id or ""
+    ):
+        raise ValueError("ENTRY_HANDOFF_EPISODE_MISMATCH")
+    body = {
+        "version": ENTRY_HANDOFF_VERSION,
+        "immutable_snapshot": True,
+        "causal_episode_id": episode_id or None,
+        "side": side,
+        "thesis_version": truth.get("version"),
+        "mechanism": truth.get("mechanism"),
+        "supporting_evidence": list(truth.get("supporting_evidence") or ()),
+        "competing_explanations": list(
+            truth.get("competing_explanations") or ()
+        ),
+        "falsifiers": list(truth.get("falsifiers") or ()),
+        "expected_next_observations": list(
+            truth.get("expected_next_observations") or ()
+        ),
+        "source_health": dict(truth.get("source_health") or {}),
+        "market_truth_hash": truth.get("contract_hash"),
+        "action_hash": action.get("contract_hash"),
+        "market_thesis": truth,
+        "action_contract": action,
+    }
+    return {**body, "handoff_hash": _digest(body)}
+
+
+def verify_entry_handoff(value, *, expected_side=None, expected_episode_id=None):
+    value = _plain(dict(value or {}))
+    supplied = str(value.pop("handoff_hash", "") or "")
+    truth = dict(value.get("market_thesis") or {})
+    action = dict(value.get("action_contract") or {})
+    side = str(value.get("side") or "ABSTAIN").upper()
+    episode_id = str(value.get("causal_episode_id") or "")
+    if not (
+        supplied
+        and value.get("version") == ENTRY_HANDOFF_VERSION
+        and supplied == _digest(value)
+        and verify(truth)
+        and verify(action)
+        and truth.get("layer") == "MARKET_TRUTH"
+        and action.get("layer") == "ACTION"
+        and truth.get("status") == "SUPPORTED"
+        and str(action.get("action") or "") in ENTRY_ACTIONS
+        and bool(episode_id)
+        and truth.get("contract_hash") == value.get("market_truth_hash")
+        and action.get("contract_hash") == value.get("action_hash")
+        and str(truth.get("side") or "").upper() == side
+        and str(truth.get("causal_episode_id") or "") == episode_id
+        and str(action.get("causal_episode_id") or "") == episode_id
+    ):
+        return False
+    if expected_side is not None and side != str(expected_side).upper():
+        return False
+    if expected_episode_id is not None and episode_id != str(
+        expected_episode_id or ""
+    ):
+        return False
+    return True
 
 
 def read_journal_bundle(payload):

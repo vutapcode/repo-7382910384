@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock, patch
 
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from loi_he_thong import authority_contracts
+from loi_he_thong import execution_causal_revalidation
 from loi_he_thong import ignition_core, ignition_signals
+from loi_he_thong import market_thesis
 
 
 path = Path(__file__).parents[1] / '3_thuc_thi' / 'wstrade_live_execution.py'
@@ -123,6 +126,33 @@ def state():
     )
 
 
+def action_approved_result(result, side='LONG'):
+    result = dict(result or {})
+    episode_id = str(result.get('causal_episode_id') or 'episode-test')
+    result.update({
+        'decision': 'GO', 'reason': 'IGNITION_PROVED', 'side': side,
+        'causal_episode_id': episode_id,
+    })
+    truth = market_thesis.build(result)
+    action = authority_contracts.seal(
+        'ACTION', 'TEST_ACTION', episode_id,
+        {'action': 'ACT_TAKER_NOW'},
+    )
+    execution = execution_causal_revalidation.pending_contract(episode_id)
+    safety = authority_contracts.seal(
+        'SAFETY', 'TEST_SAFETY', episode_id,
+        {'safety_state': 'SAFE', 'safety_action': 'ALLOW'},
+    )
+    result['authority_contracts'] = authority_contracts.bundle(
+        truth, action, execution, safety,
+    )
+    result['entry_thesis_handoff'] = authority_contracts.freeze_entry_handoff(
+        result['authority_contracts'], expected_side=side,
+        expected_episode_id=episode_id,
+    )
+    return result
+
+
 class LiveExecutionTests(unittest.TestCase):
     def test_pre_submit_revalidation_rejects_stale_or_changed_causal_state(self):
         s = state()
@@ -203,11 +233,11 @@ class LiveExecutionTests(unittest.TestCase):
             s.mainnet_commission_source = "BINANCE_ACCOUNT_COMMISSION_RATE"
             s.mainnet_maker_fee_bps = 2.0
             s.mainnet_taker_fee_bps = 5.0
-            result = {
+            result = action_approved_result({
                 "execution_policy": "TAKER", "phase": "RELEASE",
                 "canonical_opportunity_id": 7,
                 "causal_episode_id": "episode-7",
-            }
+            })
             result["execution_cost_contract"] = (
                 live.verified_cost_model.freeze_execution_cost_contract(result, s)
             )

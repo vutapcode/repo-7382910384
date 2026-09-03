@@ -341,10 +341,21 @@ Sau Entry, Guardian có theo dõi/falsify chính thesis đã mở vị thế hay
 
 ## 4A. Entry handoff
 
-- [ ] Freeze thesis version, episode identity, mechanism, evidence, falsifiers và expected observations khi Action phê duyệt.
-- [ ] Entry không tái-phán causal proof đã thuộc Truth owner.
-- [ ] Entry chỉ được reject vì action economics hoặc dependency contract không thỏa; reason phải đúng owner.
-- [ ] Không để top-level `GO` khi thesis/action vẫn `WAIT`.
+- [x] Freeze thesis version, episode identity, mechanism, evidence, falsifiers và expected observations khi Action phê duyệt.
+- [x] Entry không tái-phán causal proof đã thuộc Truth owner.
+- [x] Entry chỉ được reject vì action economics hoặc dependency contract không thỏa; reason phải đúng owner.
+- [x] Không để top-level `GO` khi thesis/action vẫn `WAIT`.
+
+### Kết quả 4A — 2026-09-03
+
+- `ENTRY_THESIS_HANDOFF_V1` đóng dấu đúng Market Truth + Action đã duyệt;
+  thiếu episode, sai side hoặc mutation đều fail-closed trước submit.
+- Launcher bỏ post-Action Bias re-adjudication; current dependency chỉ còn do
+  Execution owner kiểm ngay trước submit.
+- Shadow/live chỉ thay Execution contract sau revalidation, không rebuild ba
+  owner còn lại. Journal gắn reject về `ACTION / EXECUTION / SAFETY`.
+- Chỉ hoàn tất 4/16 checklist Đợt 4. Guardian 4B, shadow migration và PASS
+  vẫn để mở; chưa thay Guardian exit semantics hoặc Hard Risk.
 
 ## 4B. Guardian shared thesis
 

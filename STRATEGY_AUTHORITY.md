@@ -9,8 +9,10 @@
 ### Four-authority contract boundary
 
 Every decision journal row may carry one content-addressed
-`FOUR_AUTHORITY_CONTRACTS_V1` bundle. The bundle is observational in this
-migration and does not change GO/WAIT behavior.
+`FOUR_AUTHORITY_CONTRACTS_V1` bundle. A qualified Action additionally seals
+`ENTRY_THESIS_HANDOFF_V1`: the exact Market Truth and Action snapshots that
+approved the Entry. Execution may refresh only its own contract; it cannot
+rebuild or reinterpret the approved Truth.
 
 - Market Truth owner: `loi_he_thong/market_thesis.py`. It alone records the
   mechanism, support, competing explanations, falsifiers and source health.
@@ -29,9 +31,9 @@ is always `authority_eligible=false`. A downstream mutation invalidates the
 contract hash instead of silently changing another owner's conclusion.
 
 Guardian's historical `thesis_status` remains an unsealed compatibility
-observation until the Phase 4 shared-thesis migration. It is not a second
-`MARKET_TRUTH` contract owner, and this contract-only phase does not change its
-exit semantics.
+observation until Phase 4B. New positions receive the frozen Entry handoff,
+but Guardian shared-thesis authority and exit semantics have not migrated yet.
+It is not a second `MARKET_TRUTH` contract owner.
 
 1. Market data authority
    - Binance Spot BBO and `aggTrade` executed flow.
@@ -91,6 +93,10 @@ exit semantics.
      a fresh same-side cash event must return and all flow, maturity and
      economics gates still apply.
 7. Execution and active position
+   - After Action approves, launcher no longer re-reads current Bias to judge
+     the same causal proof. It verifies the immutable Entry handoff instead.
+     A missing, mismatched or mutated handoff blocks before submit and is
+     attributed to the dependency owner.
    - Every reserved GO is measured again immediately before submit using the
      shared Ignition classifier. Journal telemetry records GO-to-submit delay,
      flow state at GO/submit and cash age. This measurement cannot authorize a

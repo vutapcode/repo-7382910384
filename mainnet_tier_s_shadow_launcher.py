@@ -429,7 +429,7 @@ def _entry_quorum_ok(result, state, now):
 
 
 def _bias_or_transition_authorized(result, state):
-    """Revalidate only dependencies owned by the frozen authority basis."""
+    """Legacy diagnostic helper; the active post-Action path must not call it."""
     side = str((result or {}).get("side") or "ABSTAIN").upper()
     bias_side = str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
     if side not in ("LONG", "SHORT"):
@@ -501,9 +501,22 @@ def _action_contract(result, quorum_ok, causal_episode_id=None):
         # Existing authority has no explicit ABANDON output. Contract-only
         # migration must not invent one from a WAIT reason.
         action = "WAIT_INFORMATION"
+    edge = dict(result.get("edge_tier") or {})
     return authority_contracts.seal(
         "ACTION", "TIER_S_ENTRY_ACTION", causal_episode_id,
-        {"action": action},
+        {
+            "action": action,
+            "execution_policy": policy or None,
+            "decision_reason": result.get("reason"),
+            "economics": {
+                "cost_ok": edge.get("cost_ok"),
+                "economic_contract_version": edge.get(
+                    "economic_contract_version"
+                ),
+                "execution_style": edge.get("execution_style"),
+                "forward_edge_status": edge.get("forward_edge_status"),
+            },
+        },
     )
 
 
@@ -529,6 +542,30 @@ def _authority_contract_bundle(
     return authority_contracts.bundle(truth, action, execution, safety)
 
 
+def _freeze_entry_handoff(result, causal_episode_id=None):
+    """Transfer the exact Action-approved Truth without re-adjudicating it."""
+    result = dict(result or {})
+    episode_id = str(
+        causal_episode_id or result.get("causal_episode_id") or ""
+    )
+    return authority_contracts.freeze_entry_handoff(
+        result.get("authority_contracts") or {},
+        expected_side=result.get("side"),
+        expected_episode_id=episode_id,
+    )
+
+
+def _entry_handoff_valid(result, *, side=None, causal_episode_id=None):
+    result = dict(result or {})
+    return authority_contracts.verify_entry_handoff(
+        result.get("entry_thesis_handoff") or {},
+        expected_side=side or result.get("side"),
+        expected_episode_id=(
+            causal_episode_id or result.get("causal_episode_id")
+        ),
+    )
+
+
 def _record_post_go_rejection(
     result, reject_stage, blocking_reason, failed_dependency=None,
 ):
@@ -538,12 +575,23 @@ def _record_post_go_rejection(
         return False
     ignition = dict(result.get("ignition") or {})
     dependencies = dict(result.get("authority_dependencies") or {})
+    stage = str(reject_stage or "UNKNOWN").upper()
+    if stage in {"RISK_ADMISSION", "HARD_RISK", "SAFETY"}:
+        reject_owner = "SAFETY"
+    elif stage in {
+        "EXECUTION_REVALIDATION", "CANONICAL_RESERVATION",
+        "EXECUTION_HANDOFF",
+    }:
+        reject_owner = "EXECUTION"
+    else:
+        reject_owner = "ACTION"
     _append_event("ENTRY_POST_GO_REJECTED", {
         "schema_version": "POST_GO_REJECTION_V1",
         "cycle_id": result.get("decision_cycle_id"),
         "causal_episode_id": result.get("causal_episode_id"),
         "side": result.get("side"),
-        "reject_stage": str(reject_stage or "UNKNOWN"),
+        "reject_stage": stage,
+        "reject_owner": reject_owner,
         "blocking_reason": str(blocking_reason or "UNKNOWN"),
         "authority_basis": result.get("authority_basis"),
         "proof_hash": result.get("authority_proof_hash"),
@@ -723,8 +771,24 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
     authority_reason = str(
         (result or {}).get("reason", "UNKNOWN") or "UNKNOWN"
     )
-    authorized = bool(authority_decision == "GO" and quorum_ok)
+    episode_id = (
+        (opportunity or {}).get("causal_episode_id")
+        or (result or {}).get("causal_episode_id")
+    )
+    handoff_valid = bool(
+        authority_decision == "GO"
+        and quorum_ok
+        and _entry_handoff_valid(
+            result, side=side, causal_episode_id=episode_id,
+        )
+    )
+    authorized = bool(
+        authority_decision == "GO" and quorum_ok and handoff_valid
+    )
     final_decision = "GO" if authorized else "WAIT"
+    if authority_decision == "GO" and quorum_ok and not handoff_valid:
+        miss = "ENTRY_HANDOFF_CONTRACT_INVALID"
+        failed = list(dict.fromkeys([*failed, miss]))
     final_reason = authority_reason if authorized else (miss or authority_reason)
     hard_sl_bps = None
     if reference > 0.0 and side in ("LONG", "SHORT"):
@@ -774,10 +838,6 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "time_to_edge": (edge_report or {}).get("time_to_edge"),
     }
     boundaries = decision_boundary_evidence.build(result, edge_report)
-    episode_id = (
-        (opportunity or {}).get("causal_episode_id")
-        or (result or {}).get("causal_episode_id")
-    )
     four_authority = dict(
         (result or {}).get("authority_contracts") or {}
     ) or _authority_contract_bundle(
@@ -793,6 +853,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "threshold_registry_version": causal_threshold_registry.VERSION,
         "causal_episode_id": episode_id,
         "authority_contracts": four_authority,
+        "entry_thesis_handoff": dict(
+            (result or {}).get("entry_thesis_handoff") or {}
+        ),
         "inputs": {
             "bias": {
                 "direction": getattr(state, "bias_state", "ABSTAIN"),
@@ -847,6 +910,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "authorization_status": (
                 "AUTHORIZED" if authorized else "BLOCKED"
             ),
+            "entry_handoff_valid": handoff_valid,
             "side": side,
             "mode": (result or {}).get("entry_mode", "NONE"),
             "phase": (result or {}).get("phase"),
@@ -948,8 +1012,11 @@ def _record_position_state(pos, guardian, risk, price, now, force=False):
 
 
 def _open_shadow(side, result, now):
+    result = dict(result or {})
+    if not _entry_handoff_valid(result, side=side):
+        app.state.mainnet_shadow_last_skip = "ENTRY_HANDOFF_CONTRACT_INVALID"
+        return None
     if not bool(getattr(app.state, "mainnet_shadow_ready", False)):
-        result = dict(result or {})
         reason = "SHADOW_EXECUTION_BBO_NOT_READY"
         app.state.mainnet_shadow_last_skip = reason
         bid = float(getattr(app.state, "execution_best_bid", 0.0) or 0.0)
@@ -975,7 +1042,6 @@ def _open_shadow(side, result, now):
             },
         })
         return None
-    result = dict(result or {})
     execution = dict(result.pop("_shadow_execution", {}) or {})
     bid = float(getattr(app.state, "execution_best_bid", 0.0) or 0.0)
     ask = float(getattr(app.state, "execution_best_ask", 0.0) or 0.0)
@@ -1432,6 +1498,13 @@ def _close_shadow(pos, guardian_result, now):
 
 
 async def _open_position(side, result, now):
+    if not _entry_handoff_valid(result, side=side):
+        app.state.mainnet_shadow_last_skip = "ENTRY_HANDOFF_CONTRACT_INVALID"
+        _record_post_go_rejection(
+            result, "EXECUTION_HANDOFF", "ENTRY_HANDOFF_CONTRACT_INVALID",
+            "entry_thesis_handoff",
+        )
+        return None
     if not bool(getattr(app.state, "mainnet_shadow_ready", False)):
         app.state.mainnet_shadow_last_skip = "STALE_ENTRY_RUNTIME_HEALTH"
         return None
@@ -1451,9 +1524,8 @@ async def _open_position(side, result, now):
             "checked_at": float(now),
             "scope": "SHARED_SHADOW_LIVE_CONTRACT",
         }
-        result["authority_contracts"] = _authority_contract_bundle(
-            app.state, result, True, result.get("causal_episode_id"),
-            execution_contract=causal_detail.get("execution_contract"),
+        result["authority_contracts"] = live_execution._replace_execution_contract(
+            result, causal_detail.get("execution_contract") or {},
         )
         _append_event("ENTRY_SUBMIT_REVALIDATED", {
             "schema_version": "GO_SUBMIT_TIMING_V1",
@@ -1946,9 +2018,29 @@ async def _entry_loop():
                 s, result, qualified=quorum_ok, now=now
             )
             result = dict(result)
+            result["causal_episode_id"] = opportunity.get(
+                "causal_episode_id"
+            ) or result.get("causal_episode_id")
             result["authority_contracts"] = _authority_contract_bundle(
                 s, result, quorum_ok, opportunity.get("causal_episode_id"),
             )
+            if result.get("decision") == "GO" and quorum_ok:
+                try:
+                    result["entry_thesis_handoff"] = _freeze_entry_handoff(
+                        result, opportunity.get("causal_episode_id"),
+                    )
+                except ValueError as exc:
+                    quorum_ok = False
+                    blocking_stage = "EDGE_OR_QUORUM"
+                    reason = str(exc) or "ENTRY_HANDOFF_CONTRACT_INVALID"
+                    s.entry_structural_contract = {
+                        "ok": False,
+                        "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
+                        "detail": reason,
+                    }
+                    result["authority_contracts"] = _authority_contract_bundle(
+                        s, result, False, opportunity.get("causal_episode_id"),
+                    )
             s.entry_shadow_council = result
             near_miss = bool(result.get("decision") == "GO" and not quorum_ok)
             s.mainnet_shadow_decision_evaluations = int(
@@ -2088,6 +2180,9 @@ async def _entry_loop():
                     "authority_contracts": recorder_snapshot[
                         "authority_contracts"
                     ],
+                    "entry_thesis_handoff": recorder_snapshot[
+                        "entry_thesis_handoff"
+                    ],
                     "decision_record": recorder_snapshot,
                 })
                 decision_event_emitted = True
@@ -2113,16 +2208,16 @@ async def _entry_loop():
                 )
                 await asyncio.sleep(ENTRY_POLL)
                 continue
-            if not _bias_or_transition_authorized(result, s):
-                s.mainnet_shadow_entry_state = "WAIT_BIAS_OR_TRANSITION_AUTHORITY"
-                s.mainnet_shadow_last_skip = "BIAS_ALIGNMENT_FAIL"
-                authority = dict(
-                    getattr(s, "entry_authority_validation", {}) or {}
-                )
+            if not _entry_handoff_valid(
+                result, side=side,
+                causal_episode_id=opportunity.get("causal_episode_id"),
+            ):
+                s.mainnet_shadow_entry_state = "WAIT_ENTRY_HANDOFF_CONTRACT"
+                s.mainnet_shadow_last_skip = "ENTRY_HANDOFF_CONTRACT_INVALID"
                 _record_post_go_rejection(
-                    result, "AUTHORITY_REVALIDATION",
-                    authority.get("reason", "BIAS_ALIGNMENT_FAIL"),
-                    authority.get("detail") or result.get("authority_basis"),
+                    result, "EXECUTION_HANDOFF",
+                    "ENTRY_HANDOFF_CONTRACT_INVALID",
+                    "entry_thesis_handoff",
                 )
                 await asyncio.sleep(ENTRY_POLL)
                 continue
