@@ -191,9 +191,9 @@ class BiasCouncilTests(unittest.TestCase):
     def test_exhausted_wave_does_not_use_long_lens_to_hold_bias(self):
         s = state()
         s.bias_state, s.bias_confidence, s.bias_wave_state = "LONG", 0.70, "CONTROLLED"
-        # Price no longer progresses in the latest segment while buyers keep
-        # executing; old 60/180s price displacement remains LONG.
-        s.best_bid, s.best_ask, s.coinbase_price = 99.0, 99.1, 99.05
+        # Executed buyers persist but price is flat to the latest cash anchor;
+        # old 60/180s displacement remains LONG and must not keep Bias alive.
+        s.best_bid, s.best_ask, s.coinbase_price = 98.99, 99.01, 99.0
         s.spot_cvd_buy_total = 30.0
         s.spot_cvd_sell_total = 2.0
         s.coinbase_cvd_buy_total = 30.0
