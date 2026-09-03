@@ -4,7 +4,7 @@ This module contains identity and invariants only. Trading thresholds stay in
 their owning strategy modules so metadata cannot silently override live logic.
 """
 
-PROFILE_VERSION = "IGNITION_CORE_ENTRY_ECONOMICS_V10_ENTRY_HANDOFF"
+PROFILE_VERSION = "IGNITION_CORE_ENTRY_ECONOMICS_V11_ADAPTIVE_CASH_BIAS"
 
 _PROFILE = {
     "name": "IGNITION_CORE_V1",
@@ -13,7 +13,7 @@ _PROFILE = {
     "market": "BTCUSDT",
     "canonical_entrypoint": "mainnet_tier_s_lean_launcher.py",
     "architecture": (
-        "BIAS_COUNCIL",
+        "BIAS_ADAPTIVE_CASH_CONTROL_V11",
         "IGNITION_PREDICT_PROBE_PROVE",
         "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
         "MARKET_THESIS_V3_AUTHORITY_SEPARATED",
@@ -32,7 +32,12 @@ _PROFILE = {
     "invariants": (
         "CAUSAL_ONLY",
         "FROZEN_PRE_IMPULSE_BIAS",
+        "BIAS_DIRECTION_ROOTS_ARE_INDEPENDENT_CASH_ONLY",
+        "BIAS_OBSERVATION_LENSES_ARE_NOT_FIXED_FORECAST_HORIZONS",
+        "BIAS_CONTROL_TRANSFER_IS_EVIDENCE_DRIVEN_NOT_TIMER_DRIVEN",
         "FUTURES_NEVER_SELF_OPENS",
+        "FUTURES_AND_OI_ARE_CONTEXT_ONLY_FOR_BIAS_DIRECTION",
+        "ONE_CAUSAL_ROOT_COUNTS_ONCE",
         "CASH_PRICE_AND_EXECUTED_FLOW_AUTHORITY",
         "FAIL_NEUTRAL_ON_STALE_OPTIONAL_EVIDENCE",
         "FROZEN_COST_COUNTED_ONCE",
