@@ -104,14 +104,18 @@ It is not a second `MARKET_TRUTH` contract owner.
      safety guard, not a second strategy council.
    - Shadow sizing uses balance; exchange filters are enforced only when live
      filters are verified. Unknown filters remain `UNVERIFIED_FILTERS`.
-   - Guardian exits only on adverse price with causal deterioration that breaks
-     the cash-led thesis recorded at entry. Its old sensitive thresholds are an
-     early scout only; they cannot independently authorize an exit.
+   - Current Guardian action remains the rollback baseline during the Phase-4
+     migration. A parallel `GUARDIAN_SHARED_THESIS_SHADOW_V1` consumes the exact
+     sealed Entry truth plus subsequent canonical measurements and has
+     `authority=false`; it is not blended with the current decision.
    - `MARKET_THESIS_V3_AUTHORITY_SEPARATED` freezes the Entry mechanism,
      expected sequence and
-     falsifiers. Guardian monitors that contract; PnL, entry price, best-R,
-     holding time and account history cannot change causal thesis status.
-     Capital protection remains a separate Risk authority.
+     falsifiers. `market_thesis.observe()` alone maps later evidence to
+     `SUPPORT / DIVERGENCE / CONTROL_TRANSFER / FALSIFY / UNKNOWN`; PnL, entry
+     price, best-R, holding time and account history cannot change that status.
+     Capital protection remains a separate Risk authority. Guardian authority
+     cannot move to this lane until same-WAL executable counterfactual outcomes
+     prove capture ratio and hard-stop acceptance.
    - A runner with an active one-way profit floor gets a longer confirmation
      window during an ordinary pullback. Extreme cross-venue price plus strong
      adverse flow bypasses that shield through the fast-kill path.

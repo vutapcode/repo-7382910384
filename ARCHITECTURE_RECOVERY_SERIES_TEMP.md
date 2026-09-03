@@ -359,25 +359,39 @@ Sau Entry, Guardian có theo dõi/falsify chính thesis đã mở vị thế hay
 
 ## 4B. Guardian shared thesis
 
-- [ ] Guardian consume frozen thesis + subsequent canonical events.
-- [ ] Output tối thiểu: `SUPPORT / DIVERGENCE / CONTROL_TRANSFER / FALSIFY / UNKNOWN`.
-- [ ] Normal noise/pullback không tự thành falsification.
-- [ ] Missing/stale evidence có thể buộc safety exit nhưng thesis status phải là `UNKNOWN`.
-- [ ] PnL, best-R, runner state và capital preference không được sửa market truth.
-- [ ] Hard SL/reconciliation/feed-critical vẫn bypass Guardian reasoning.
+- [x] Guardian consume frozen thesis + subsequent canonical events.
+- [x] Output tối thiểu: `SUPPORT / DIVERGENCE / CONTROL_TRANSFER / FALSIFY / UNKNOWN`.
+- [x] Normal noise/pullback không tự thành falsification.
+- [x] Missing/stale evidence có thể buộc safety exit nhưng thesis status phải là `UNKNOWN`.
+- [x] PnL, best-R, runner state và capital preference không được sửa market truth.
+- [x] Hard SL/reconciliation/feed-critical vẫn bypass Guardian reasoning.
 
 ## Migration an toàn
 
-- [ ] Chạy shared-thesis Guardian shadow song song chỉ để so quyết định.
-- [ ] Same thesis + same events phải cho deterministic trace.
+- [x] Chạy shared-thesis Guardian shadow song song chỉ để so quyết định.
+- [x] Same thesis + same events phải cho deterministic trace.
 - [ ] So premature exits, late exits, capture ratio, hard-stop rate trên cùng WAL.
-- [ ] Chỉ cut authority khi shadow thắng acceptance; không weighted ensemble.
+- [x] Chỉ cut authority khi shadow thắng acceptance; không weighted ensemble.
 
 ## PASS
 
 - [ ] Guardian không có causal council độc lập trả lời trùng Truth owner.
-- [ ] Safety exit không đầu độc label thesis/calibration.
+- [x] Safety exit không đầu độc label thesis/calibration.
 - [ ] Không giảm Guardian capture ratio hoặc tăng hard-stop rate ngoài giới hạn đã phê duyệt.
+
+### Kết quả 4B shadow implementation — 2026-09-03
+
+- `MARKET_THESIS_OBSERVATION_V1` là owner duy nhất ánh xạ frozen Entry truth và
+  canonical observation sang năm trạng thái thesis; dữ liệu vốn/PnL bị loại
+  khỏi payload được hash.
+- `GUARDIAN_SHARED_THESIS_SHADOW_V1` chạy song song, `authority=false`, không
+  weighted ensemble và không thay đổi quyết định/Hard Risk hiện tại.
+- `phase4_guardian_shadow_report.py` xác minh lại contract/hash/determinism trên
+  cùng WAL, tách safety exit khỏi thesis labels và fail-closed cutover.
+- Chưa có position dùng checkpoint 4A trong WAL, nên chưa thể đo executable
+  counterfactual net/capture/hard-stop. Vì vậy legacy Guardian vẫn giữ action
+  authority và hai PASS về cutover/capture còn mở; không được đánh dấu Đợt 4
+  hoàn tất bằng synthetic test.
 
 ---
 
