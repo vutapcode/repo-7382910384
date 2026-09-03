@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, dataclass
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ from recorder.metadata import strategy_config_version as current_config_version
 
 
 VERSION = "WSTRADE_AUTO_PROMOTION_V1"
+MANUAL_APPROVAL_VERSION = "MANUAL_MAINNET_APPROVAL_V1"
+MANUAL_APPROVAL_KIND = "AUTHORIZE_MAINNET_CUTOVER"
 VN_TZ = timezone(timedelta(hours=7))
 SIGNED_TOTALS = frozenset({"realized", "stress"})
 
@@ -48,6 +51,80 @@ def _load(path):
         return value if isinstance(value, dict) else {}
     except (OSError, TypeError, ValueError):
         return {}
+
+
+def _canonical_json(value):
+    return json.dumps(
+        value, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def manual_approval_document(
+    *, code_version, config_version, issued_at, expires_at,
+    approver_identity, nonce,
+):
+    """Build, but never persist, a content-addressed operator approval.
+
+    Runtime deliberately has no helper that writes this document. Creating
+    the file remains an explicit off-process operator action.
+    """
+    body = {
+        "version": MANUAL_APPROVAL_VERSION,
+        "approval_kind": MANUAL_APPROVAL_KIND,
+        "code_version": str(code_version or ""),
+        "config_version": str(config_version or ""),
+        "issued_at": float(issued_at),
+        "expires_at": float(expires_at),
+        "approver_identity": str(approver_identity or ""),
+        "nonce": str(nonce or ""),
+        "producer": "HUMAN_OPERATOR",
+    }
+    return {
+        **body,
+        "approval_hash": hashlib.sha256(_canonical_json(body)).hexdigest(),
+    }
+
+
+def verify_manual_approval(path, *, code_version, config_version, now=None):
+    """Fail closed unless a human artifact authorizes this exact build."""
+    now = time.time() if now is None else float(now)
+    path = Path(path)
+    try:
+        mode = path.stat().st_mode
+        if mode & 0o022:
+            return False, "MANUAL_APPROVAL_FILE_WRITABLE_BY_OTHERS", {}
+        document = _load(path)
+    except OSError:
+        return False, "MANUAL_APPROVAL_ARTIFACT_REQUIRED", {}
+    supplied = str(document.pop("approval_hash", "") or "")
+    expected = hashlib.sha256(_canonical_json(document)).hexdigest()
+    if not supplied or supplied != expected:
+        return False, "MANUAL_APPROVAL_HASH_INVALID", {}
+    if document.get("version") != MANUAL_APPROVAL_VERSION:
+        return False, "MANUAL_APPROVAL_VERSION_INVALID", {}
+    if document.get("approval_kind") != MANUAL_APPROVAL_KIND:
+        return False, "MANUAL_APPROVAL_KIND_INVALID", {}
+    if str(document.get("producer") or "").upper() != "HUMAN_OPERATOR":
+        return False, "AUTO_PROMOTION_CANNOT_APPROVE", {}
+    approver = str(document.get("approver_identity") or "").strip()
+    if not approver or "AUTO" in approver.upper():
+        return False, "MANUAL_APPROVER_IDENTITY_INVALID", {}
+    if not str(document.get("nonce") or "").strip():
+        return False, "MANUAL_APPROVAL_NONCE_MISSING", {}
+    if str(document.get("code_version") or "") != str(code_version or ""):
+        return False, "MANUAL_APPROVAL_CODE_VERSION_MISMATCH", {}
+    if str(document.get("config_version") or "") != str(config_version or ""):
+        return False, "MANUAL_APPROVAL_CONFIG_VERSION_MISMATCH", {}
+    issued_at = float(document.get("issued_at", 0.0) or 0.0)
+    expires_at = float(document.get("expires_at", 0.0) or 0.0)
+    if issued_at <= 0.0 or issued_at > now or expires_at <= now:
+        return False, "MANUAL_APPROVAL_TIME_WINDOW_INVALID", {}
+    return True, "PASS", {
+        "approval_hash": supplied,
+        "approver_identity": approver,
+        "expires_at": expires_at,
+        "path": str(path),
+    }
 
 
 @dataclass(frozen=True)
@@ -94,7 +171,28 @@ class PromotionController:
             "WSTRADE_REPLAY_REPORT_PATH",
             "/home/ubuntu/.local/state/wstrade/replay_validation.json",
         ))
+        self.manual_approval_path = Path(os.getenv(
+            "WSTRADE_MANUAL_APPROVAL_PATH",
+            "/etc/wstrade/approvals/mainnet.json",
+        ))
         self.persisted = _load(self.path)
+
+    def manual_approval_status(self, state, now=None):
+        code_version, config_version = self._versions(state)
+        ok, reason, detail = verify_manual_approval(
+            self.manual_approval_path,
+            code_version=code_version,
+            config_version=config_version,
+            now=now,
+        )
+        status = {
+            "version": MANUAL_APPROVAL_VERSION,
+            "ok": bool(ok),
+            "reason": str(reason),
+            **detail,
+        }
+        state.wstrade_manual_approval = status
+        return status
 
     @staticmethod
     def _versions(state):
@@ -363,6 +461,9 @@ class PromotionController:
             "WSTRADE_IGNITION_MANUAL_APPROVAL", "false"
         ).strip().lower() not in ("1", "true", "yes", "on"):
             blockers.append("IGNITION_MANUAL_APPROVAL_REQUIRED")
+        approval = self.manual_approval_status(state, now=now)
+        if not approval["ok"]:
+            blockers.append(approval["reason"])
         if not replay_ok:
             blockers.append("REPLAY_VALIDATION_REQUIRED")
         if elapsed_hours < self.validation_hours_required:

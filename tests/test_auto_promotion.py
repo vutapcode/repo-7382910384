@@ -6,7 +6,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from loi_he_thong.auto_promotion import PromotionController
+from loi_he_thong.auto_promotion import (
+    PromotionController,
+    manual_approval_document,
+    verify_manual_approval,
+)
 
 
 def eligible_state():
@@ -40,11 +44,24 @@ class AutoPromotionTests(unittest.TestCase):
             'strategy_authority': 'IGNITION_CORE_V1',
         }))
 
+    @staticmethod
+    def approval(path, *, now, code='code', config='config'):
+        path.write_text(json.dumps(manual_approval_document(
+            code_version=code,
+            config_version=config,
+            issued_at=now - 60.0,
+            expires_at=now + 3600.0,
+            approver_identity='operator-test',
+            nonce='unit-test-once',
+        )))
+        path.chmod(0o600)
+
     def test_all_gates_make_auto_promotion_eligible(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
             'WSTRADE_MODE': 'AUTO_PROMOTE', 'WSTRADE_VALIDATION_HOURS': '72',
             'WSTRADE_IGNITION_MANUAL_APPROVAL': 'true',
             'WSTRADE_REPLAY_REPORT_PATH': str(Path(temp) / 'replay.json'),
+            'WSTRADE_MANUAL_APPROVAL_PATH': str(Path(temp) / 'approval.json'),
         }, clear=False):
             path = Path(temp) / 'promotion.json'
             (Path(temp) / 'replay.json').write_text(json.dumps({
@@ -57,9 +74,44 @@ class AutoPromotionTests(unittest.TestCase):
                 'shadow_peak_balance': 5.4, 'max_shadow_drawdown_usdt': 0.0,
                 'armed': False,
             }))
+            self.approval(Path(temp) / 'approval.json', now=73 * 3600)
             result = PromotionController(path).evaluate(eligible_state(), now=73 * 3600)
         self.assertTrue(result['eligible'])
         self.assertEqual(result['blockers'], ())
+
+    def test_manual_flag_cannot_replace_content_addressed_artifact(self):
+        state = eligible_state()
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {
+            'WSTRADE_MODE': 'AUTO_PROMOTE',
+            'WSTRADE_VALIDATION_HOURS': '0',
+            'WSTRADE_IGNITION_MANUAL_APPROVAL': 'true',
+            'WSTRADE_REPLAY_REPORT_PATH': str(Path(temp) / 'replay.json'),
+            'WSTRADE_MANUAL_APPROVAL_PATH': str(Path(temp) / 'missing.json'),
+        }, clear=False):
+            self.replay(Path(temp) / 'replay.json')
+            result = PromotionController(
+                Path(temp) / 'promotion.json'
+            ).evaluate(state, now=1.0)
+        self.assertFalse(result['eligible'])
+        self.assertIn('MANUAL_APPROVAL_ARTIFACT_REQUIRED', result['blockers'])
+
+    def test_manual_approval_is_bound_to_exact_code_and_hash(self):
+        with tempfile.TemporaryDirectory() as temp:
+            approval = Path(temp) / 'approval.json'
+            self.approval(approval, now=100.0)
+            ok, reason, _ = verify_manual_approval(
+                approval, code_version='code', config_version='config', now=100.0
+            )
+            self.assertTrue(ok, reason)
+            document = json.loads(approval.read_text())
+            document['code_version'] = 'other-code'
+            approval.write_text(json.dumps(document))
+            approval.chmod(0o600)
+            ok, reason, _ = verify_manual_approval(
+                approval, code_version='code', config_version='config', now=100.0
+            )
+            self.assertFalse(ok)
+            self.assertEqual(reason, 'MANUAL_APPROVAL_HASH_INVALID')
 
     def test_stale_external_metric_and_cpu_violation_fail_closed(self):
         state = eligible_state()

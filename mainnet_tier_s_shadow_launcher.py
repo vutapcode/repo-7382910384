@@ -1614,6 +1614,16 @@ async def _close_position(pos, guardian_result, now):
 
 async def _promote_live(snapshot):
     s = app.state
+    approval = PROMOTION.manual_approval_status(s)
+    if not approval.get("ok"):
+        s.wstrade_live_arm_reason = approval.get(
+            "reason", "MANUAL_APPROVAL_ARTIFACT_REQUIRED"
+        )
+        _append_event("MAINNET_APPROVAL_BLOCKED", {
+            "approval": approval,
+            "promotion": snapshot,
+        })
+        return False
     if not bool(getattr(s, "mainnet_live_entry_ready", False)) or not (
         host_cpu_governor.entry_allowed(s)
     ):
