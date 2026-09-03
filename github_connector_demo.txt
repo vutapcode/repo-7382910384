@@ -1,2 +1,0 @@
-status=FIXED
-demo_message=GitHub connector can write repo
