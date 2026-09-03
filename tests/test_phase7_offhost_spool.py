@@ -45,4 +45,32 @@ class OffhostSpoolTests(unittest.TestCase):
         rec=asyncio.run(spool.upload_once(Backend(head_sha="different"),self.man["artifact_id"],now=1.0))
         self.assertEqual(rec.state,"CORRUPT"); self.assertTrue(self.art.exists()); self.assertEqual(spool.checksum_failures,1)
 
+    def test_pending_queue_survives_process_restart(self):
+        root = self.root / "spool"
+        first = OffhostSpool(root)
+        self.assertTrue(first.enqueue(self.art, self.mp, self.man))
+
+        second = OffhostSpool(root)
+
+        record = second.records[self.man["artifact_id"]]
+        self.assertEqual(record.state, "PENDING")
+        self.assertEqual(record.artifact_path, str(self.art))
+        self.assertEqual((root / "spool-index-v1.json").stat().st_mode & 0o777, 0o600)
+
+    def test_retry_state_survives_process_restart(self):
+        root = self.root / "spool"
+        first = OffhostSpool(root, retry_base=0.01, retry_cap=0.02)
+        first.enqueue(self.art, self.mp, self.man)
+        asyncio.run(first.upload_once(
+            Backend(status="RETRYABLE_FAILURE"),
+            self.man["artifact_id"], now=1.0,
+        ))
+
+        second = OffhostSpool(root)
+
+        record = second.records[self.man["artifact_id"]]
+        self.assertEqual(record.state, "RETRYABLE_FAILURE")
+        self.assertEqual(record.attempts, 1)
+        self.assertGreater(record.next_attempt_at, 1.0)
+
 if __name__=="__main__": unittest.main()
