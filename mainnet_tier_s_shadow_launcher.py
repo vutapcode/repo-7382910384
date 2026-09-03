@@ -968,6 +968,10 @@ def _record_position_state(pos, guardian, risk, price, now, force=False):
         str(guardian.get("reason", "UNKNOWN")),
         str(guardian.get("guardian_phase", "HEALTHY")),
         str(guardian.get("recovery_result", "NONE")),
+        str(guardian.get("shared_thesis_status", "UNKNOWN")),
+        str((guardian.get("shared_thesis_shadow") or {}).get(
+            "decision", "HOLD"
+        )),
         str(risk.get("decision", "HOLD")),
         str(risk.get("reason", "UNKNOWN")),
         round(float(getattr(pos, "best_r", 0.0) or 0.0), 1),

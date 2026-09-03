@@ -2,9 +2,9 @@
 from collections import deque
 import time
 
-from loi_he_thong import liquidation_context
+from loi_he_thong import authority_contracts, liquidation_context, market_thesis
 
-VERSION="GUARDIAN_S_TIER_V13_MARKET_THESIS_CONTRACT"
+VERSION="GUARDIAN_S_TIER_V14_SHARED_THESIS_SHADOW"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -391,6 +391,143 @@ def _entry_thesis_break(state,pos,now,s1,s2,s3):
         "mechanism":market_contract.get("mechanism"),
         "observed_falsifiers":observed_falsifiers,
         "pnl_fields_used_for_thesis":False,
+    }
+
+
+def _frozen_market_thesis(pos):
+    """Read the exact sealed Market Truth approved at Entry, if available."""
+    entry = dict(getattr(pos, "entry_causal_thesis", {}) or {})
+    handoff = dict(entry.get("entry_thesis_handoff") or {})
+    expected_side = str(getattr(pos, "side", "") or "").upper()
+    expected_episode = str(
+        getattr(pos, "causal_episode_id", "")
+        or entry.get("causal_episode_id") or ""
+    )
+    if authority_contracts.verify_entry_handoff(
+        handoff,
+        expected_side=expected_side,
+        expected_episode_id=expected_episode,
+    ):
+        return dict(handoff.get("market_thesis") or {})
+    direct = dict(entry.get("market_thesis") or {})
+    if (
+        authority_contracts.verify(direct)
+        and direct.get("layer") == "MARKET_TRUTH"
+        and str(direct.get("side") or "").upper() == expected_side
+        and str(direct.get("causal_episode_id") or "") == expected_episode
+    ):
+        return direct
+    return {}
+
+
+def _fresh(ts, now, limit):
+    try:
+        age = float(now) - float(ts or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return float(ts or 0.0) > 0.0 and 0.0 <= age <= float(limit)
+
+
+def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
+    """Adapt canonical runtime measurements without issuing a truth vote."""
+    truth = _frozen_market_thesis(pos)
+    episode_id = str(
+        (truth or {}).get("causal_episode_id")
+        or getattr(pos, "causal_episode_id", "") or ""
+    )
+    spot_fresh = bool(
+        _fresh(getattr(state, "thoi_gian_tick_cuoi", 0.0), now, 3.0)
+        and _fresh(getattr(state, "thoi_gian_dong_tien_cuoi", 0.0), now, 5.0)
+        and str(getattr(
+            state, "guardian_s_spot_flow_ordering", "MONOTONIC",
+        )) == "MONOTONIC"
+    )
+    coinbase_fresh = bool(
+        _fresh(
+            getattr(state, "thoi_gian_coinbase_ticker_cuoi", 0.0), now, 5.0,
+        )
+        and _fresh(getattr(state, "coinbase_flow_3s_ts", 0.0), now, 5.0)
+    )
+    futures_fresh = bool(
+        _last_fut(state, now) > 0.0
+        and str(getattr(
+            state, "guardian_s_futures_flow_ordering", "MONOTONIC",
+        )) == "MONOTONIC"
+    )
+    oi_fresh = _fresh(
+        getattr(state, "thoi_gian_vi_mo_cuoi", 0.0), now, 18.0,
+    )
+
+    frozen_sources = dict(((truth or {}).get("source_health") or {}).get(
+        "sources", {}
+    ) or {})
+    current_epochs = {
+        "binance_spot": getattr(state, "spot_flow_epoch", None),
+        "coinbase_spot": getattr(state, "coinbase_flow_epoch", None),
+        "futures": getattr(state, "futures_flow_epoch", None),
+    }
+    epoch_changed = False
+    for name, row in frozen_sources.items():
+        expected = (row or {}).get("epoch")
+        current = current_epochs.get(str(name))
+        if expected is None or current is None:
+            continue
+        try:
+            epoch_changed = epoch_changed or int(expected) != int(current)
+        except (TypeError, ValueError):
+            epoch_changed = True
+
+    oi_metrics = dict(s3.get("metrics") or {})
+    return truth, {
+        "version": "GUARDIAN_CANONICAL_OBSERVATION_V1",
+        "causal_episode_id": episode_id or None,
+        "position_side": str(getattr(pos, "side", "") or "").upper(),
+        "source_health": {
+            "spot": "FRESH" if spot_fresh else "UNKNOWN",
+            "coinbase": "FRESH" if coinbase_fresh else "UNKNOWN",
+            "futures": "FRESH" if futures_fresh else "UNKNOWN",
+        },
+        "price_horizons": dict((s1.get("metrics") or {}).get("horizons") or {}),
+        "flow_signed_imbalances": dict(
+            (s2.get("metrics") or {}).get("signed_imbalances") or {}
+        ),
+        "oi": {
+            "status": s3.get("status") if oi_fresh else "STALE_UNKNOWN",
+            "fresh": bool(oi_fresh),
+            "change_pct": oi_metrics.get("oi_pct") if oi_fresh else None,
+        },
+        "gap_or_epoch_invalid": bool(
+            getattr(state, "shadow_data_gap_active", False)
+            or getattr(pos, "data_gap_seen", False)
+            or epoch_changed
+        ),
+        "material_flow_imbalance": MIN_FLOW_IMB,
+    }
+
+
+def _shared_thesis_shadow_action(observation):
+    """Non-authoritative migration decision from the shared truth taxonomy."""
+    status = str((observation or {}).get("status") or "UNKNOWN").upper()
+    if status in {"CONTROL_TRANSFER", "FALSIFY"}:
+        decision = "EXIT"
+        reason = "SHARED_ENTRY_THESIS_FALSIFIED"
+    elif status == "DIVERGENCE":
+        decision = "DETERIORATING"
+        reason = "SHARED_ENTRY_THESIS_DIVERGING"
+    elif status == "SUPPORT":
+        decision = "HOLD"
+        reason = "SHARED_ENTRY_THESIS_SUPPORTED"
+    else:
+        decision = "HOLD"
+        reason = "SHARED_ENTRY_THESIS_UNKNOWN_SAFETY_SEPARATE"
+    return {
+        "version": "GUARDIAN_SHARED_THESIS_SHADOW_V1",
+        "authority": False,
+        "decision": decision,
+        "reason": reason,
+        "thesis_status": status,
+        "safety_bypass_separate": True,
+        "weighted_ensemble": False,
     }
 
 def _trend_context_shield(state,pos):
@@ -818,6 +955,15 @@ def assess(state,pos,now=None):
     external_guard=_external_guard(state,now,s1,s2,s3)
     profile=_adverse_profile(s1,s2)
     thesis=_entry_thesis_break(state,pos,now,s1,s2,s3)
+    frozen_truth,canonical_thesis_event=_canonical_thesis_observation(
+        state,pos,now,s1,s2,s3
+    )
+    shared_thesis_observation=market_thesis.observe(
+        frozen_truth,canonical_thesis_event
+    )
+    shared_thesis_shadow=_shared_thesis_shadow_action(
+        shared_thesis_observation
+    )
     if profile["active"]:
         if float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0)<=0.0:
             pos.guardian_s_scout_since=now
@@ -1004,8 +1150,19 @@ def assess(state,pos,now=None):
         exit_profile="TIME_TO_EDGE_SUSPICION"
 
     conf=sum(votes[k]["confidence"] for k in adverse)/max(1,len(adverse))
+    shared_thesis_shadow={
+        **shared_thesis_shadow,
+        "legacy_guardian_decision":decision,
+        "decision_match":shared_thesis_shadow["decision"]==decision,
+        "cutover_eligible":False,
+        "cutover_blocker":"CANONICAL_WAL_ACCEPTANCE_NOT_PROVED",
+    }
     return {"version":VERSION,"decision":decision,"reason":reason,"side":str(pos.side).upper(),
             "thesis_status":thesis.get("thesis_status","UNKNOWN"),
+            "shared_thesis_status":shared_thesis_observation["status"],
+            "shared_thesis_observation":shared_thesis_observation,
+            "canonical_thesis_event":canonical_thesis_event,
+            "shared_thesis_shadow":shared_thesis_shadow,
             "guardian_action":decision,
             "thesis_and_capital_policy_separate":True,
             "confidence":round(conf,6),"hold_seconds":round(hold,4),"votes":votes,
