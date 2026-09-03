@@ -1,8 +1,9 @@
 import copy
 import importlib
 import unittest
+from types import SimpleNamespace
 
-from loi_he_thong import market_thesis
+from loi_he_thong import authority_contracts, market_thesis
 
 
 guardian = importlib.import_module("3_thuc_thi.ve_si_lenh.guardian_s_tier")
@@ -137,6 +138,60 @@ class SharedThesisObservationTests(unittest.TestCase):
             self.assertFalse(result["authority"])
             self.assertFalse(result["weighted_ensemble"])
             self.assertTrue(result["safety_bypass_separate"])
+
+    def test_guardian_adapter_reads_exact_frozen_handoff(self):
+        action = authority_contracts.seal(
+            "ACTION", "ENTRY_ACTION_POLICY", "episode-shared-1",
+            {"action": "ACT_TAKER_NOW"},
+        )
+        bundle = authority_contracts.bundle(
+            self.truth,
+            action,
+            authority_contracts.seal(
+                "EXECUTION", "EXECUTION_REVALIDATION", "episode-shared-1",
+                {"execution_action": "EXECUTE"},
+            ),
+            authority_contracts.seal(
+                "SAFETY", "MAINNET_SAFETY", "episode-shared-1",
+                {"safety_state": "SAFE"},
+            ),
+        )
+        handoff = authority_contracts.freeze_entry_handoff(bundle)
+        position = SimpleNamespace(
+            side="LONG", causal_episode_id="episode-shared-1",
+            entry_causal_thesis={
+                "causal_episode_id": "episode-shared-1",
+                "entry_thesis_handoff": handoff,
+            },
+        )
+        state = SimpleNamespace(
+            thoi_gian_tick_cuoi=100.0, thoi_gian_dong_tien_cuoi=100.0,
+            thoi_gian_coinbase_ticker_cuoi=100.0,
+            coinbase_flow_3s_ts=100.0, thoi_gian_vi_mo_cuoi=100.0,
+            guardian_s_spot_flow_ordering="MONOTONIC",
+            guardian_s_futures_flow_ordering="MONOTONIC",
+            spot_flow_epoch=2, coinbase_flow_epoch=3,
+            danh_sach_khop_lenh_futures=[{
+                "thoi_gian_ms": 100_000, "gia": 100.0,
+            }],
+        )
+        s1 = {"metrics": {"horizons": {"3.0": {
+            "threshold_bps": 1.5,
+            "moves": {"spot": 2.0, "coinbase": 2.0, "futures": 1.0},
+        }}}}
+        s2 = {"metrics": {"signed_imbalances": {
+            "spot": 0.4, "coinbase": 0.4, "futures": 0.1,
+        }}}
+        s3 = {"status": "NEUTRAL", "metrics": {"oi_pct": 0.0}}
+
+        truth, event = guardian._canonical_thesis_observation(
+            state, position, 100.0, s1, s2, s3,
+        )
+        observed = market_thesis.observe(truth, event)
+
+        self.assertEqual(truth["contract_hash"], self.truth["contract_hash"])
+        self.assertEqual(event["causal_episode_id"], "episode-shared-1")
+        self.assertEqual(observed["status"], "SUPPORT")
 
 
 if __name__ == "__main__":
