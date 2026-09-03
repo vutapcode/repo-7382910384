@@ -98,7 +98,7 @@ Desired public data:
 Semantic role: `KRW_LOCAL_CASH_DATA_ONLY`
 
 Hard invariant: raw KRW BTC price is never directly comparable with BTC-USD or
-BTC-USDT. A future consumer must separate FX/local-basis movement from BTC demand.
+BTCUSDT. A future consumer must separate FX/local-basis movement from BTC demand.
 
 ### 5. Bybit derivative stress
 
@@ -189,15 +189,158 @@ Requirements:
 
 Until a provider is selected and verified, status is `UNAVAILABLE_PROVIDER_UNSET`.
 
-## Future Phase-2 source (not current implementation scope)
+## Non-price Prime owners
 
-Owner path reserved conceptually: `1_tai_du_lieu/tai_deribit_options/`
+These modules exist to answer questions that another exchange price cannot answer.
+They remain DATA-ONLY and MUST NOT be turned into generic LONG/SHORT votes.
+
+### 10. Stablecoin stress / quote health
+
+Owner path: `1_tai_du_lieu/tai_stablecoin_stress/`
+
+Semantic role: `STABLECOIN_STRESS_DATA_ONLY`
+
+Purpose: answer whether a BTCUSDT dislocation is partly caused by stress in the quote
+asset rather than new BTC demand/supply.
+
+Desired observations:
+- USDT and USDC market-price deviation versus USD using independently named venues/providers
+- cross-venue stablecoin basis disagreement
+- liquidity deterioration / spread widening where available
+- redemption/reserve status only as slow context when sourced from an official provider
+
+Hard invariants:
+- stablecoin stress does not create BTC direction.
+- do not derive this module from BTCUSDT versus BTCUSD; that would be circular.
+- depeg/basis is a falsifier or normalization input, not an alpha vote.
+
+Future consumer question: `IS_THE_QUOTE_ASSET_DISTORTING_THE_OBSERVED_BTC_MOVE?`
+
+### 11. Options forward-risk regime
+
+Owner path: `1_tai_du_lieu/tai_deribit_options/`
 
 Semantic role: `OPTIONS_RISK_REGIME_DATA_ONLY`
 
-Deribit/options may later answer forward-risk / implied-volatility questions. It must
-never be treated as a direct LONG/SHORT cash vote. Do not implement or wire it as part
-of the current Prime collector phase unless separately approved.
+Purpose: observe how the market prices future uncertainty/tail risk, not current cash
+direction.
+
+Desired observations:
+- BTC option implied volatility by tenor
+- put/call skew or equivalent risk-reversal observations
+- option OI / volume when semantics are clear
+- underlying/index timestamps and source health
+
+Hard invariants:
+- IV/skew cannot directly issue LONG/SHORT.
+- options data belongs to forward-risk/regime context, not cash-control evidence.
+- do not mix option OI with Futures OI identity inference.
+
+Future consumer question: `IS_FORWARD_TAIL_RISK_BEING_REPRICED_WHILE_THE_CURRENT_CASH_THESIS_PLAYS_OUT?`
+
+### 12. ETF / regulated structural flow
+
+Owner path: `1_tai_du_lieu/tai_etf_flow/`
+
+Semantic role: `REGULATED_STRUCTURAL_FLOW_DATA_ONLY`
+
+Purpose: observe slow institutional allocation/redemption pressure in regulated BTC
+vehicles.
+
+Desired observations:
+- official or provider-attributed ETF creations/redemptions / net flows
+- publication timestamp and economic reference date must be distinct
+- source revision/version when available
+
+Hard invariants:
+- ETF flow is slow structural context; never a hot Entry trigger.
+- publication-time semantics must prevent lookahead in replay.
+- do not infer intraday execution direction from daily net flow alone.
+
+Future consumer question: `IS_THERE_PERSISTENT_REGULATED_CAPITAL_INFLOW_OR_OUTFLOW_IN_THE_BACKGROUND?`
+
+### 13. Macro risk context
+
+Owner path: `1_tai_du_lieu/tai_macro_risk/`
+
+Semantic role: `MACRO_RISK_CONTEXT_DATA_ONLY`
+
+Purpose: observe broad USD/rates/equity risk repricing that may explain simultaneous
+cross-asset moves without pretending to identify BTC microstructure control.
+
+Candidate observations after provider selection:
+- DXY or a clearly defined USD index proxy
+- US Treasury yield reference(s)
+- S&P/Nasdaq futures or equivalent risk proxy
+- event/receive time, provider, market-open status and source health
+
+Hard invariants:
+- macro context cannot override live executed BTC cash evidence.
+- no indicator score or weighted risk-on/risk-off composite.
+- stale/closed-market values must be marked as such, never forward-filled as fresh truth.
+
+Future consumer question: `IS_A_BROAD_MACRO_REPRICING_A_PLAUSIBLE_COMMON_CAUSE_OF_THE_MOVE?`
+
+### 14. On-chain context
+
+Owner path: `1_tai_du_lieu/tai_onchain_context/`
+
+Semantic role: `ONCHAIN_BACKGROUND_DATA_ONLY`
+
+Purpose: observe slow blockchain settlement/transfer context that may matter over
+minutes-to-days, while acknowledging that a transfer is not the same thing as a trade.
+
+Candidate observations after provider selection:
+- exchange-labelled inflow/outflow
+- large transfers with explicit entity-confidence metadata
+- miner/treasury flows where provenance is strong
+
+Hard invariants:
+- wallet transfer != buy/sell.
+- exchange inflow != immediate sell.
+- entity labels and block confirmation latency must be recorded.
+- on-chain data never participates in 100ms-6s Ignition/Entry timing.
+
+Future consumer question: `IS_THERE_SLOW_SETTLEMENT_PRESSURE_RELEVANT_TO_THE_BACKGROUND_THESIS?`
+
+## Future consumer routing
+
+Collection modules expose facts only. Future reasoning modules must request the source
+that owns the question; they must not read every source and create an undifferentiated
+score.
+
+Suggested routing contract:
+
+- `CASH_CONTROL / IGNITION`
+  - executed Binance Spot / Coinbase / regional fiat cash after quote normalization
+  - optional cash L2 response for depletion/refill/absorption
+  - MUST NOT consume ETF, macro, on-chain, options as direct direction votes
+
+- `QUOTE_NORMALIZATION`
+  - `tai_usdt_usd`, `tai_eur_usd`, `tai_krw_usd`, `tai_stablecoin_stress`
+  - output should describe distortion/health, not direction
+
+- `DERIVATIVE_MECHANISM`
+  - Binance Futures/OI/liquidation + `tai_bybit` + `tai_cme`
+  - answer follow/build/unwind/forced-flow questions
+  - MUST NOT self-create cash direction
+
+- `FORWARD_RISK_CONTEXT`
+  - `tai_deribit_options`
+  - answer risk-regime/tail repricing only
+
+- `STRUCTURAL_BACKGROUND`
+  - `tai_etf_flow`, `tai_macro_risk`, `tai_onchain_context`
+  - background context only; no hot-path veto unless separately proven and promoted
+
+Any future consumer must document:
+1. exact question being answered;
+2. exact source owner(s);
+3. why the evidence is independent or explicitly grouped;
+4. event-time and availability-time semantics;
+5. falsification condition;
+6. whether the answer changes Market Truth, Action Policy, or only context;
+7. matched-replay evidence before authority promotion.
 
 ## Normalized event envelope
 
@@ -219,6 +362,8 @@ Every staged source must eventually expose normalized data carrying at least:
 - `authority=false`
 
 A reconnect/gap begins a new causal epoch. Never bridge continuity claims across it.
+For slow published datasets, store both economic/reference time and first-availability
+(publication/receive) time so replay cannot look ahead.
 
 ## Runtime boundary
 
@@ -245,6 +390,12 @@ Do not count correlated evidence as independent:
   not independent cash control.
 - Coinbase USD and Upbit KRW may represent different fiat pools, but raw price comparison
   still requires quote/basis normalization.
+- USDT/USD basis + stablecoin-stress observations may share venues/providers; deduplicate
+  before treating them as separate evidence.
+- CME futures and options-derived institutional signals remain derivative/risk families,
+  never cash confirmations.
+- ETF flow, macro and on-chain are slow background families, not three independent hot
+  confirmations.
 
 ## Session rule
 
