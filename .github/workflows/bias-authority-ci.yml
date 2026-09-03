@@ -28,6 +28,8 @@ jobs:
             loi_he_thong/runtime_hardening_v3.py
       - name: Bias unit contract
         run: python -m unittest discover -s tests -p 'test_bias_council.py' -v
+      - name: Adaptive regime transition contract
+        run: python -m unittest discover -s tests -p 'test_bias_adaptive_regime.py' -v
       - name: Runtime Bias ownership contract
         run: python -m unittest discover -s tests -p 'test_runtime_bias_flow_horizon.py' -v
       - name: Runtime hardening source contract
