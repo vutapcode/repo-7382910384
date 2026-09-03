@@ -9,18 +9,49 @@ shared observation. It never changes runtime authority.
 
 import argparse
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+import sys
 
 import orjson
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from loi_he_thong import authority_contracts, market_thesis
-from recorder.replay import iter_merged_records, parse_time
+from recorder.replay import _iter_jsonl, _iter_parquet, parse_time
 
 
 VERSION = "PHASE4_GUARDIAN_SHARED_THESIS_REPORT_V1"
 MIN_COMPLETED_POSITIONS = 30
+
+
+def iter_bot_records(data_root, start_ms, end_ms):
+    """Read only hour partitions intersecting the explicit evidence window."""
+    data_root = Path(data_root)
+    moment = datetime.fromtimestamp(start_ms / 1000.0, tz=timezone.utc).replace(
+        minute=0, second=0, microsecond=0,
+    )
+    final = datetime.fromtimestamp(end_ms / 1000.0, tz=timezone.utc).replace(
+        minute=0, second=0, microsecond=0,
+    )
+    while moment <= final:
+        day = moment.strftime("%Y-%m-%d")
+        hour = moment.strftime("%H")
+        parquet = data_root / "raw" / "parquet" / "bot_event" / day / (
+            hour + ".parquet"
+        )
+        wal = data_root / "raw" / "wal" / "bot_event" / day / (
+            hour + ".jsonl"
+        )
+        if parquet.exists():
+            yield from _iter_parquet(parquet, start_ms, end_ms)
+        elif wal.exists():
+            yield from _iter_jsonl(wal, start_ms, end_ms)
+        moment += timedelta(hours=1)
 
 
 def _stable(value):
@@ -237,10 +268,10 @@ def main(argv=None):
     parser.add_argument("--end", required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    rows = iter_merged_records(
-        args.data_root, streams={"bot_event"},
-        start_ms=parse_time(args.start), end_ms=parse_time(args.end),
-    )
+    start_ms, end_ms = parse_time(args.start), parse_time(args.end)
+    if start_ms is None or end_ms is None or end_ms < start_ms:
+        raise SystemExit("INVALID_EXPLICIT_EVIDENCE_WINDOW")
+    rows = iter_bot_records(args.data_root, start_ms, end_ms)
     report = build_report(rows)
     body = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
