@@ -789,7 +789,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
     )
     oi_ts = float(getattr(state, "thoi_gian_vi_mo_cuoi", 0.0) or 0.0)
     reference = _execution_mid(state)
-    side = str((result or {}).get("side", "ABSTAIN") or "ABSTAIN").upper()
+    decision_side = str(
+        (result or {}).get("side", "ABSTAIN") or "ABSTAIN"
+    ).upper()
     causal = dict((result or {}).get("causal") or {})
     ignition_snapshot = dict((result or {}).get("ignition") or {})
     taxonomy = _miss_taxonomy_details(result, edge_report, quorum_ok)
@@ -805,11 +807,41 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         (opportunity or {}).get("causal_episode_id")
         or (result or {}).get("causal_episode_id")
     )
+    ignition_episode_id = str(
+        ignition_snapshot.get("causal_episode_id")
+        or ignition_snapshot.get("episode_id") or ""
+    )
+    ignition_side = str(
+        ignition_snapshot.get("side") or "ABSTAIN"
+    ).upper()
+    causal_episode_side = (
+        ignition_side
+        if episode_id and str(episode_id) == ignition_episode_id
+        and ignition_side in ("LONG", "SHORT")
+        else decision_side if decision_side in ("LONG", "SHORT") else "ABSTAIN"
+    )
+    background_bias_side = str(
+        getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN"
+    ).upper()
+    transition = dict(
+        ignition_snapshot.get("transition_authority") or {}
+    )
+    pending_reversal_research_only = bool(
+        episode_id
+        and causal_episode_side in ("LONG", "SHORT")
+        and causal_episode_side != background_bias_side
+        and str(ignition_snapshot.get("status") or "").upper()
+            == "PENDING_BIAS_FLIP"
+        and not bool(
+            ignition_snapshot.get("transition_confirmed")
+            or transition.get("confirmed")
+        )
+    )
     handoff_valid = bool(
         authority_decision == "GO"
         and quorum_ok
         and _entry_handoff_valid(
-            result, side=side, causal_episode_id=episode_id,
+            result, side=decision_side, causal_episode_id=episode_id,
         )
     )
     authorized = bool(
@@ -821,9 +853,11 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         failed = list(dict.fromkeys([*failed, miss]))
     final_reason = authority_reason if authorized else (miss or authority_reason)
     hard_sl_bps = None
-    if reference > 0.0 and side in ("LONG", "SHORT"):
+    if reference > 0.0 and causal_episode_side in ("LONG", "SHORT"):
         try:
-            hard_sl, _ = live_execution._risk_geometry(state, side, reference)
+            hard_sl, _ = live_execution._risk_geometry(
+                state, causal_episode_side, reference,
+            )
             hard_sl_bps = abs(reference - float(hard_sl)) / reference * 10000.0
         except (AttributeError, TypeError, ValueError):
             hard_sl_bps = None
@@ -882,6 +916,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "taxonomy_version": "TIER_S_MISS_TAXONOMY_V7_BOUNDARY_EVIDENCE",
         "threshold_registry_version": causal_threshold_registry.VERSION,
         "causal_episode_id": episode_id,
+        "background_bias_side": background_bias_side,
+        "causal_episode_side": causal_episode_side,
+        "decision_side": decision_side,
         "authority_contracts": four_authority,
         "entry_thesis_handoff": dict(
             (result or {}).get("entry_thesis_handoff") or {}
@@ -944,7 +981,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
                 "AUTHORIZED" if authorized else "BLOCKED"
             ),
             "entry_handoff_valid": handoff_valid,
-            "side": side,
+            "side": decision_side,
+            "background_bias_side": background_bias_side,
+            "causal_episode_side": causal_episode_side,
             "mode": (result or {}).get("entry_mode", "NONE"),
             "phase": (result or {}).get("phase"),
             "confidence": float((result or {}).get("confidence", 0.0) or 0.0),
@@ -960,7 +999,12 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "counterfactual": {
             "eligible": bool(
                 miss and counterfactual_reference > 0.0
-                and side in ("LONG", "SHORT")
+                and causal_episode_side in ("LONG", "SHORT")
+            ),
+            "economic_miss_eligible": not pending_reversal_research_only,
+            "research_only_reason": (
+                "UNCONFIRMED_PENDING_REVERSAL"
+                if pending_reversal_research_only else None
             ),
             "reference_price": counterfactual_reference or None,
             "decision_reference_price": reference or None,
@@ -975,7 +1019,10 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
                 "SAME_RECEIVE_TIME_EVIDENCE_CHAIN"
                 if research_origin_valid else "DECISION_TIME_ORIGIN"
             ),
-            "side": side,
+            "side": causal_episode_side,
+            "background_bias_side": background_bias_side,
+            "causal_episode_side": causal_episode_side,
+            "decision_side": decision_side,
             "hard_sl_bps": round(hard_sl_bps, 4) if hard_sl_bps is not None else None,
             "frozen_economics": {
                 "execution_style": cost_snapshot.get("execution_style"),

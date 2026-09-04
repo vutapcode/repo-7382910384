@@ -462,6 +462,29 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertEqual(final["classification"], "NO_ECONOMIC_SCREEN")
         self.assertFalse(final["economic_miss_confirmed"])
 
+    def test_unconfirmed_pending_reversal_is_research_only(self):
+        event = decision_event(
+            episode_id="ign:futures:LONG:1000", reference_price=100.0,
+        )
+        decision = event["payload"]["decision_record"]
+        decision.update({
+            "background_bias_side": "SHORT",
+            "causal_episode_side": "LONG",
+            "decision_side": "SHORT",
+        })
+        decision["counterfactual"].update({
+            "side": "LONG",
+            "economic_miss_eligible": False,
+            "research_only_reason": "UNCONFIRMED_PENDING_REVERSAL",
+        })
+        self.tracker.observe(event)
+        tracker = next(iter(self.tracker.pending.values()))
+        self.assertEqual(tracker["sample_scope"], "CAUSAL_EPISODE_RESEARCH_ONLY")
+        self.assertFalse(tracker["economic_miss_eligible"])
+        self.assertEqual(tracker["background_bias_side"], "SHORT")
+        self.assertEqual(tracker["causal_episode_side"], "LONG")
+        self.assertEqual(tracker["side"], "LONG")
+
     def test_full_counterfactual_can_confirm_good_reject(self):
         event = decision_event(episode_id="episode-good-reject")
         cf = event["payload"]["decision_record"]["counterfactual"]

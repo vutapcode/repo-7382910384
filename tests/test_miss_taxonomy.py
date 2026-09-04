@@ -194,6 +194,43 @@ class MissTaxonomyTests(unittest.TestCase):
         self.assertEqual(oi["max_age_seconds"], 18.0)
         self.assertIn("opportunity_research", snapshot["inputs"])
 
+    def test_pending_reversal_keeps_episode_side_research_only(self):
+        state = SimpleNamespace(
+            open_interest=100.0, thoi_gian_vi_mo_cuoi=99.0,
+            bias_council={}, bias_state="SHORT", bias_confidence=0.7,
+            execution_best_bid=100.0, execution_best_ask=100.1,
+        )
+        episode_id = "ign:futures:LONG:100000"
+        result = {
+            "decision": "WAIT",
+            "reason": "BIAS_NOT_READY",
+            "side": "SHORT",
+            "causal_episode_id": episode_id,
+            "s_votes": {},
+            "ignition": {
+                "causal_episode_id": episode_id,
+                "episode_id": episode_id,
+                "side": "LONG",
+                "status": "PENDING_BIAS_FLIP",
+                "authority": False,
+                "transition_confirmed": False,
+                "transition_authority": {"confirmed": False, "side": "LONG"},
+            },
+        }
+        snapshot = launcher._decision_snapshot(
+            state, result, {}, False, "cycle-reversal", 100.0,
+            opportunity={"causal_episode_id": episode_id},
+        )
+        self.assertEqual(snapshot["background_bias_side"], "SHORT")
+        self.assertEqual(snapshot["decision_side"], "SHORT")
+        self.assertEqual(snapshot["causal_episode_side"], "LONG")
+        self.assertEqual(snapshot["counterfactual"]["side"], "LONG")
+        self.assertFalse(snapshot["counterfactual"]["economic_miss_eligible"])
+        self.assertEqual(
+            snapshot["counterfactual"]["research_only_reason"],
+            "UNCONFIRMED_PENDING_REVERSAL",
+        )
+
     def test_accepted_bootstrap_shadow_trade_is_not_a_miss(self):
         result = {
             "decision": "GO", "reason": "IGNITION_METAORDER_CONTINUATION",

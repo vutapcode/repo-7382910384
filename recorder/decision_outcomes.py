@@ -15,9 +15,9 @@ MAX_PENDING = 512
 MAX_CLOSED = 2_048
 DIAGNOSTIC_WAVE_GAP_MS = 5_000
 DIAGNOSTIC_WAVE_PRICE_BPS = 3.0
-VERSION = "DECISION_COUNTERFACTUAL_V6_FINAL_ADJUDICATION"
-ADJUDICATION_VERSION = "ECONOMIC_MISS_ADJUDICATION_V2_NEUTRAL_SCREEN"
-DOSSIER_VERSION = "OPPORTUNITY_DOSSIER_V1_CAUSAL_TIMELINE"
+VERSION = "DECISION_COUNTERFACTUAL_V7_EXPLICIT_SIDE_TRUTH"
+ADJUDICATION_VERSION = "ECONOMIC_MISS_ADJUDICATION_V3_EXPLICIT_SIDE_TRUTH"
+DOSSIER_VERSION = "OPPORTUNITY_DOSSIER_V2_EXPLICIT_SIDE_TRUTH"
 MAX_DECISION_TRACE = 32
 
 
@@ -104,6 +104,15 @@ class DecisionOutcomeTracker:
                 "miss_taxonomy": output.get("miss_taxonomy") or payload.get("miss_taxonomy"),
                 "failed_gates": output.get("failed_gates") or payload.get("failed_gates") or [],
                 "counterfactual": counterfactual,
+                "background_bias_side": decision.get(
+                    "background_bias_side"
+                ) or output.get("background_bias_side"),
+                "causal_episode_side": decision.get(
+                    "causal_episode_side"
+                ) or output.get("causal_episode_side"),
+                "decision_side": decision.get("decision_side") or output.get(
+                    "side"
+                ),
                 "frozen_economics": dict(
                     counterfactual.get("frozen_economics") or {}
                 ),
@@ -390,6 +399,14 @@ class DecisionOutcomeTracker:
                 "sample_scope": tracker.get("sample_scope"),
                 "anchor_role": tracker.get("anchor_role"),
                 "side": tracker.get("side"),
+                "background_bias_side": tracker.get(
+                    "background_bias_side"
+                ),
+                "causal_episode_side": tracker.get("causal_episode_side"),
+                "decision_side": tracker.get("decision_side"),
+                "research_only_reason": tracker.get(
+                    "research_only_reason"
+                ),
                 "first_seen_ms": tracker.get("start_ms"),
                 "first_decision_ms": (
                     first.get("event_time_ms") or tracker.get("start_ms")
@@ -626,9 +643,14 @@ class DecisionOutcomeTracker:
             if not better_anchor or existing.get("completed"):
                 return
             self.pending.pop(tracking_key, None)
+        explicit_economic_eligibility = cf.get("economic_miss_eligible")
         economic_miss_eligible = bool(
             episode_id or sample_scope == "EXECUTION_EVENT"
         ) and sample_scope != "PERSISTENT_METAORDER_SHADOW"
+        if explicit_economic_eligibility is False:
+            economic_miss_eligible = False
+            if episode_id:
+                sample_scope = "CAUSAL_EPISODE_RESEARCH_ONLY"
         economic_wave_id = (
             self._economic_wave_id(episode_id, side, start_ms, reference)
             if economic_miss_eligible else None
@@ -648,6 +670,12 @@ class DecisionOutcomeTracker:
             "economic_screen_ever": False,
             "start_ms": start_ms,
             "side": side,
+            "background_bias_side": candidate.get("background_bias_side"),
+            "causal_episode_side": (
+                candidate.get("causal_episode_side") or side
+            ),
+            "decision_side": candidate.get("decision_side"),
+            "research_only_reason": cf.get("research_only_reason"),
             "reference_price": reference,
             "hard_sl_bps": _f(cf.get("hard_sl_bps"), None),
             "high": reference,
