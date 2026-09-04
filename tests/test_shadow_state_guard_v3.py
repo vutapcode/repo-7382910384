@@ -322,6 +322,48 @@ class ShadowStateGuardV3Tests(unittest.TestCase):
         accepted = self.run_guard(payload)
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
+    def test_v15_split_demo_ledgers_checkpoint_is_accepted(self):
+        payload = {
+            "version": "SHADOW_RUNTIME_STATE_V15_SPLIT_DEMO_LEDGERS",
+            "balance": 5000.0, "realized_pnl": 0.0,
+            "trades": 0, "wins": 0, "losses": 0, "breakevens": 0,
+            "event_seq": 1, "decision_evaluations": 1,
+            "near_misses": 0, "decision_funnel": {"COUNCIL": 1},
+            "canonical_opportunities": 1, "canonical_qualified": 0,
+            "canonical_captured": 0,
+            "canonical_last_consumed_opportunity_id": 0,
+            "edge_calibration_rows": [],
+            "edge_calibration_code_version": "code-v15",
+            "edge_calibration_config_version": "config-v15",
+            "entry_economics_v2_rows": [],
+            "entry_economics_code_version": "code-v15",
+            "entry_economics_config_version": "config-v15",
+            "execution_transaction": None,
+            "execution_control_plane": {},
+            "shadow_ledgers": {
+                "version": "SHADOW_LEDGER_METRICS_V1",
+                "research_probe": {
+                    "trades": 1, "wins": 0, "losses": 1,
+                    "breakevens": 0, "realized_pnl": -1.0,
+                    "gross_profit": 0.0, "gross_loss": 1.0,
+                    "stress_25bps_pnl": -2.0,
+                },
+                "live_like": {
+                    "trades": 0, "wins": 0, "losses": 0,
+                    "breakevens": 0, "realized_pnl": 0.0,
+                    "gross_profit": 0.0, "gross_loss": 0.0,
+                    "stress_25bps_pnl": 0.0,
+                },
+            },
+            "position": None,
+        }
+        accepted = self.run_guard(payload)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        payload["shadow_ledgers"]["live_like"]["trades"] = 1
+        rejected = self.run_guard(payload)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("counter_invariant", rejected.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
