@@ -1,7 +1,7 @@
 [Unit]
 Description=WStrade Ignition Core V1 BTCUSDT engine
-After=network-online.target
-Wants=network-online.target
+After=network-online.target wstrade-recorder.service
+Wants=network-online.target wstrade-recorder.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 

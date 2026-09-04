@@ -1,7 +1,7 @@
 [Unit]
 Description=WStrade host and Lightsail CPU health supervisor
-After=network-online.target wstrade-bot.service
-Wants=network-online.target
+After=network-online.target wstrade-recorder.service wstrade-bot.service
+Wants=network-online.target wstrade-recorder.service wstrade-bot.service
 
 [Service]
 Type=simple

@@ -58,3 +58,17 @@ Shadow execution is deliberately conservative: canonical ACCEPTANCE entries use
 the same 750-ms maker lifetime as live and require post-placement aggressive
 trade-through volume. Canonical RELEASE entries and all exits cross the spread
 and include adverse slippage. No retired CATCH lane has authority.
+
+## Deploy/restart the complete SHADOW stack
+
+After a code update, do not restart services independently.  With the demo
+position flat and the worktree clean, run:
+
+`sudo /home/ubuntu/WStrade/.venv/bin/python ops/shadow_stack_ctl.py`
+
+The controller verifies repository integrity, persisted state/journal
+consistency and fail-closed flags; installs the checked-in units; starts the
+recorder before the bot; and requires fresh same-code recorder, bot and system
+health before reporting `SHADOW_STACK_READY`.  If verification fails, the bot
+is stopped while the public recorder remains available.  It never enables
+Mainnet or changes strategy authority.

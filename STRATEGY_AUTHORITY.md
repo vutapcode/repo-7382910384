@@ -105,6 +105,10 @@ new authority merely because they exist.
    - PROVE remains failed reversion or persistent/accelerating cash execution
      under the existing Ignition contract. Static walls/cancels and BBO size
      without executed flow never authorize Entry.
+   - The persistent lane is a shadow/demo bootstrap consumer of the shared
+     `CausalWaveSnapshot`: `shadow_bootstrap_authority=true` and
+     `live_authority=false`. It collects executable evidence but cannot grant
+     real-money authority before canonical replay approval.
    - A Futures proposer must obtain fresh OI before Entry. OI decline may
      classify unwind; it does not create a new directional Bias.
 
@@ -116,7 +120,7 @@ new authority merely because they exist.
      merely because a cash wave exists.
    - Completed net Guardian outcomes plus verified executable costs remain the
      empirical promotion evidence.
-   - Shadow bootstrap may collect structurally valid trades. Real money remains
+   - The shadow/demo bootstrap may collect structurally valid trades. Real money remains
      evidence-gated and is not promoted by this Bias refactor.
    - Fast Ignition and persistent cash-wave representation share observations
      without merging proof policies or horizons.
