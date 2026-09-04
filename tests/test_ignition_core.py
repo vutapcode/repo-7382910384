@@ -774,7 +774,10 @@ class IgnitionCoreTests(unittest.TestCase):
         transition = promoted["transition_authority"]
         self.assertEqual(
             transition["version"],
-            "FAST_TRANSITION_V4_CAUSAL_PATH_FAILURE",
+            "FAST_TRANSITION_V5_CONTROL_OWNERSHIP",
+        )
+        self.assertEqual(
+            transition["control_ownership_state"], "CONTROL_OWNED"
         )
         self.assertTrue(transition["control_transfer_memory_valid"])
         self.assertTrue(
@@ -1138,6 +1141,84 @@ class IgnitionCoreTests(unittest.TestCase):
             transition["proof_nodes"]["old_side_failure"]["observed_at_ms"],
             3_500,
         )
+
+    def test_historical_dual_cash_reclaim_is_onset_not_current_ownership(self):
+        pending = {
+            "side": "LONG", "started_receive_ms": 3_200,
+            "pre_impulse_bias_snapshot": {"direction": "SHORT"},
+            "opposing_flow_efficiency_at_onset": {"venues": {}},
+        }
+        old_a = evidence_row(2_900, "SHORT", 100.10)
+        old_b = evidence_row(3_000, "SHORT", 100.05)
+        new_binance = evidence_row(3_400, "LONG", 100.12)
+        old_coinbase = evidence_row(
+            3_000, "SHORT", 100.06, strong=False, material=False,
+        )
+        old_coinbase["venue"] = "coinbase_spot"
+        new_coinbase = evidence_row(3_500, "LONG", 100.13)
+        new_coinbase["venue"] = "coinbase_spot"
+        histories = {
+            "binance_spot": (old_a, old_b, new_binance),
+            "coinbase_spot": (old_coinbase, new_coinbase),
+            "futures": (),
+        }
+        current_old = {"venues": {
+            "binance_spot": {"state": "UNKNOWN"},
+            "coinbase_spot": {"state": "UNKNOWN"},
+        }}
+        with patch.object(
+            ignition_core, "_flow_efficiency_snapshot",
+            return_value=current_old,
+        ):
+            transition = ignition_core._transition_snapshot(
+                pending, histories, 4_300,
+            )
+        self.assertTrue(transition["old_side_failure_confirmed"])
+        self.assertTrue(transition["control_onset"])
+        self.assertFalse(transition["control_owned"])
+        self.assertEqual(
+            transition["control_ownership_state"], "CONTROL_ONSET"
+        )
+        self.assertEqual(transition["status"], "CONTROL_ONSET")
+        self.assertFalse(transition["confirmed"])
+
+    def test_explicit_failure_plus_current_dual_cash_owns_control(self):
+        pending = {
+            "side": "LONG", "started_receive_ms": 3_200,
+            "pre_impulse_bias_snapshot": {"direction": "SHORT"},
+            "opposing_flow_efficiency_at_onset": {"venues": {}},
+        }
+        old_a = evidence_row(2_900, "SHORT", 100.10)
+        old_b = evidence_row(3_000, "SHORT", 100.05)
+        new_binance = evidence_row(3_400, "LONG", 100.12)
+        old_coinbase = evidence_row(
+            3_000, "SHORT", 100.06, strong=False, material=False,
+        )
+        old_coinbase["venue"] = "coinbase_spot"
+        new_coinbase = evidence_row(3_500, "LONG", 100.13)
+        new_coinbase["venue"] = "coinbase_spot"
+        histories = {
+            "binance_spot": (old_a, old_b, new_binance),
+            "coinbase_spot": (old_coinbase, new_coinbase),
+            "futures": (),
+        }
+        current_old = {"venues": {
+            "binance_spot": {"state": "UNKNOWN"},
+            "coinbase_spot": {"state": "UNKNOWN"},
+        }}
+        with patch.object(
+            ignition_core, "_flow_efficiency_snapshot",
+            return_value=current_old,
+        ):
+            transition = ignition_core._transition_snapshot(
+                pending, histories, 3_550,
+            )
+        self.assertTrue(transition["control_owned"])
+        self.assertEqual(
+            transition["control_ownership_basis"],
+            "EXPLICIT_OLD_FAILURE_CURRENT_DUAL_CASH",
+        )
+        self.assertTrue(transition["confirmed"])
 
     def test_old_side_failure_is_timestamped_when_it_actually_emerges(self):
         pending = {

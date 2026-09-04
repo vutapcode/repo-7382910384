@@ -90,9 +90,18 @@ def build(result, *, primary_cash_anchor=None, cash_anchors=()):
         result.get("side") or ignition.get("side") or frozen.get("direction"),
         "ABSTAIN",
     )
+    ownership_state = transition.get("control_ownership_state")
+    ownership_confirmed = bool(
+        ownership_state == "CONTROL_OWNED"
+        or (
+            ownership_state is None
+            and transition.get("new_side_cash_control_confirmed")
+        )
+    )
     transition_confirmed = bool(
         ignition.get("transition_confirmed")
         and _u(transition.get("status")) == "REVERSAL_CONFIRMED"
+        and ownership_confirmed
     )
     oi_state = _u(oi.get("status") or raw_oi.get("intent"))
     if transition_confirmed:

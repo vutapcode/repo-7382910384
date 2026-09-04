@@ -45,7 +45,7 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-INFERENCE_VERSION = "IGNITION_INFERENCE_V6_CAUSAL_REVERSAL_HANDOFF"
+INFERENCE_VERSION = "IGNITION_INFERENCE_V7_CONTROL_OWNERSHIP_HANDOFF"
 ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
 PERSISTENT_AUTHORITY_SCOPE = {
     "shadow_bootstrap_authority": True,
@@ -1262,15 +1262,58 @@ def _transition_snapshot(pending, histories, now_ms):
     else:
         contradiction_grade = "NONE"
     hard_contradiction = contradiction_grade == "DUAL_CASH_CONTROL"
-    confirmed = bool(
+    new_flow_state = str(
+        new_flow_summary.get("state") or "UNKNOWN"
+    ).upper()
+    non_owning_flow_states = {
+        "FADING", "DECAYING", "PERSISTENT_NONCONVERSION",
+        "PROGRESS_DECAY", "ABSORBED", "EXHAUSTED",
+        "REACCELERATION_UNCONFIRMED",
+    }
+    current_dual_cash_acceptance = bool(
+        current_cash.get("dual_cash_synchronous_acceptance")
+    )
+    persistent_new_side_control = bool(new_side_cash_control_confirmed)
+    # A true old-side failure may transfer control quickly, but only while
+    # both independent cash venues are still accepting the new side.  This is
+    # deliberately narrower than treating any historical synchronous reclaim
+    # as present ownership.
+    explicit_failure_fast_control = bool(
+        old_side_failure_confirmed
+        and current_dual_cash_acceptance
+        and new_flow_state not in non_owning_flow_states
+    )
+    control_onset = bool(
         old_side_failure_confirmed
         and new_side_cash_acceptance_confirmed
         and not hard_contradiction
     )
+    control_owned = bool(
+        control_onset
+        and (persistent_new_side_control or explicit_failure_fast_control)
+    )
+    if hard_contradiction:
+        control_ownership_state = "CONTROL_FAILED"
+        control_ownership_basis = "DUAL_CASH_CONTRADICTION"
+    elif control_owned and persistent_new_side_control:
+        control_ownership_state = "CONTROL_OWNED"
+        control_ownership_basis = "PERSISTENT_DUAL_CASH_CONTROL"
+    elif control_owned:
+        control_ownership_state = "CONTROL_OWNED"
+        control_ownership_basis = "EXPLICIT_OLD_FAILURE_CURRENT_DUAL_CASH"
+    elif control_onset:
+        control_ownership_state = "CONTROL_ONSET"
+        control_ownership_basis = "HISTORICAL_ACCEPTANCE_NOT_CURRENT_CONTROL"
+    else:
+        control_ownership_state = "UNRESOLVED"
+        control_ownership_basis = "INSUFFICIENT_CAUSAL_TRANSFER"
+    confirmed = control_owned
     if hard_contradiction:
         status = "TRANSITION_FAILED"
     elif confirmed:
         status = "REVERSAL_CONFIRMED"
+    elif control_onset:
+        status = "CONTROL_ONSET"
     elif dual_cash:
         status = "CROSS_CASH_ACCEPTED"
     elif accepted_venues:
@@ -1281,9 +1324,6 @@ def _transition_snapshot(pending, histories, now_ms):
         status = "OPPOSING_IMPULSE"
     else:
         status = "TRANSITION_WATCH"
-    new_flow_state = str(
-        new_flow_summary.get("state") or "UNKNOWN"
-    ).upper()
     if hard_contradiction:
         control_phase = "OLD_SIDE_RECLAIMED"
     elif confirmed and new_flow_state == "CONTINUING_CONFIRMED":
@@ -1371,8 +1411,13 @@ def _transition_snapshot(pending, histories, now_ms):
         },
     }
     return {
-        "version": "FAST_TRANSITION_V4_CAUSAL_PATH_FAILURE",
+        "version": "FAST_TRANSITION_V5_CONTROL_OWNERSHIP",
         "status": status, "confirmed": confirmed,
+        "control_ownership_state": control_ownership_state,
+        "control_owned": control_owned,
+        "control_onset": control_onset,
+        "current_dual_cash_acceptance": current_dual_cash_acceptance,
+        "control_ownership_basis": control_ownership_basis,
         "control_phase": control_phase,
         "side": side, "background_side": background,
         "failed_continuation": failed_continuation,
@@ -1712,6 +1757,14 @@ def _strict_transition_side(episode):
         str(value).lower()
         for value in transition.get("accepted_cash_venues") or ()
     }
+    ownership_state = transition.get("control_ownership_state")
+    ownership_confirmed = bool(
+        ownership_state == "CONTROL_OWNED"
+        or (
+            ownership_state is None
+            and transition.get("new_side_cash_control_confirmed")
+        )
+    )
     if not (
         side in ("LONG", "SHORT")
         and episode.get("transition_confirmed")
@@ -1723,6 +1776,7 @@ def _strict_transition_side(episode):
             transition.get("new_side_cash_control_confirmed"),
         )
         and transition.get("cash_synchronous_transition")
+        and ownership_confirmed
         and not transition.get("hard_contradiction")
         and CASH.issubset(accepted)
     ):
@@ -2170,6 +2224,14 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
     current_proof = dict(
         payload.get("current_execution_proof") or fallback_proof
     )
+    ownership_state = transition.get("control_ownership_state")
+    ownership_confirmed = bool(
+        ownership_state == "CONTROL_OWNED"
+        or (
+            ownership_state is None
+            and transition.get("new_side_cash_control_confirmed")
+        )
+    )
     transition_confirmed = bool(
         payload.get("transition_confirmed")
         and transition.get("status") == "REVERSAL_CONFIRMED"
@@ -2180,6 +2242,7 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
             transition.get("new_side_cash_control_confirmed"),
         )
         and transition.get("cash_synchronous_transition")
+        and ownership_confirmed
         and not transition.get("hard_contradiction")
         and CASH.issubset(transition_cash)
     )
@@ -2249,6 +2312,10 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
             "new_side_cash_acceptance": True,
             "new_side_cash_control": bool(
                 transition.get("new_side_cash_control_confirmed")
+            ),
+            "control_ownership_state": str(
+                transition.get("control_ownership_state")
+                or "CONTROL_OWNED"
             ),
             "dual_cash_acceptance": True,
             "qualified_acceptance_span_ms": transition.get(
