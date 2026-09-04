@@ -8,9 +8,12 @@ from __future__ import annotations
 import hashlib
 import json
 
-VERSION = "PHASE6_EXECUTION_TWINS_V1"
+VERSION = "PHASE6_EXECUTION_TWINS_V2_EXECUTABLE_PATH"
 AUTHORITY = False
-BRANCHES = ("TAKER_NOW", "WAIT100", "WAIT300", "WAIT600", "MAKER_IF_EXECUTABLE")
+BRANCHES = (
+    "TAKER_NOW", "WAIT100", "WAIT300", "WAIT500", "WAIT600",
+    "MAKER_IF_EXECUTABLE",
+)
 
 
 def _digest(value):
@@ -43,6 +46,10 @@ def _state_at(events, at):
 
 def _entry_price(side, bbo):
     return float(bbo["ask"] if side == "LONG" else bbo["bid"])
+
+
+def _exit_price(side, bbo):
+    return float(bbo["bid"] if side == "LONG" else bbo["ask"])
 
 
 def _maker_fill(side, limit_price, qty, queue_ahead, placed_at, expires_at, events):
@@ -97,13 +104,32 @@ def _post_fill_outcome(branch, side, entry_price, fill_time, events, frozen_cost
     hard_stop = False
     support_time = None
     failure_time = None
+    direction = 1.0 if side == "LONG" else -1.0
+    cost = float(frozen_cost)
+    mfe = 0.0
+    mae = 0.0
+    time_to_positive_net = None
     for e in events:
-        if float(e.get("available_time", -1)) <= float(fill_time):
+        event_time = float(e.get("available_time", -1))
+        if event_time <= float(fill_time):
             continue
+        # Mark the branch only against an executable BBO already available at
+        # this observation. Future candle extrema are never used.
+        bbo = _latest_bbo(events, event_time)
+        if bbo is not None:
+            executable_exit = _exit_price(side, bbo)
+            excursion = (
+                (executable_exit - entry_price) / entry_price * 10000.0
+                * direction
+            )
+            mfe = max(mfe, excursion)
+            mae = min(mae, excursion)
+            if time_to_positive_net is None and excursion - cost > 0.0:
+                time_to_positive_net = event_time - float(fill_time)
         if support_time is None and e.get("support") is True:
-            support_time = float(e["available_time"]) - float(fill_time)
+            support_time = event_time - float(fill_time)
         if failure_time is None and e.get("failure") is True:
-            failure_time = float(e["available_time"]) - float(fill_time)
+            failure_time = event_time - float(fill_time)
         risk = hard_risk_step(e) if hard_risk_step else None
         if risk and risk.get("exit"):
             hard_stop = True
@@ -123,25 +149,32 @@ def _post_fill_outcome(branch, side, entry_price, fill_time, events, frozen_cost
             "capture_ratio": None,
             "gross_pnl_bps": None,
             "net_bps": None,
-            "time_to_positive_net": None,
+            "mfe_bps": mfe,
+            "mae_bps": mae,
+            "time_to_positive_net": time_to_positive_net,
             "time_to_support": support_time,
             "time_to_failure": failure_time,
             "exit_reason": exit_reason,
         }
-    direction = 1.0 if side == "LONG" else -1.0
     gross = (exit_price - entry_price) / entry_price * 10000.0 * direction
-    cost = float(frozen_cost)
     net = gross - cost
+    executable_mfe_after_cost = max(0.0, mfe - cost)
+    capture_ratio = (
+        max(0.0, min(1.0, net / executable_mfe_after_cost))
+        if executable_mfe_after_cost > 0.0 else 0.0
+    )
     return {
         "status": "CLOSED",
         "branch": branch,
         "hard_stop": hard_stop,
-        "capture_ratio": None,
+        "capture_ratio": capture_ratio,
+        "mfe_bps": mfe,
+        "mae_bps": mae,
         "gross_pnl_bps": gross,
         "frozen_cost_bps": cost,
         "cost_applications": 1,
         "net_bps": net,
-        "time_to_positive_net": 0.0 if net > 0 else None,
+        "time_to_positive_net": time_to_positive_net,
         "time_to_support": support_time,
         "time_to_failure": failure_time,
         "exit_reason": exit_reason,

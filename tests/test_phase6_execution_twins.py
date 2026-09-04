@@ -52,6 +52,7 @@ class Phase6TwinsTests(unittest.TestCase):
         self.assertEqual(rows["TAKER_NOW"]["entry_price"], 100.0)
         self.assertEqual(rows["WAIT100"]["entry_price"], 101.0)
         self.assertEqual(rows["WAIT300"]["entry_price"], 102.0)
+        self.assertEqual(rows["WAIT500"]["entry_price"], 102.0)
         self.assertEqual(rows["WAIT600"]["entry_price"], 103.0)
 
     def test_maker_order_after_trade_cannot_use_prior_trade(self):
@@ -70,6 +71,17 @@ class Phase6TwinsTests(unittest.TestCase):
         r = twins.evaluate(op(), events(), guardian_step=guardian)
         taker = {x["branch"]: x for x in r["branches"]}["TAKER_NOW"]
         self.assertEqual(taker["outcome"]["cost_applications"], 1)
+
+    def test_path_metrics_use_only_executable_bbo(self):
+        r = twins.evaluate(op(), events(), guardian_step=guardian)
+        outcome = {row["branch"]: row for row in r["branches"]}[
+            "TAKER_NOW"
+        ]["outcome"]
+        self.assertGreater(outcome["mfe_bps"], 0.0)
+        self.assertLessEqual(outcome["mae_bps"], 0.0)
+        self.assertIsNotNone(outcome["time_to_positive_net"])
+        self.assertGreaterEqual(outcome["capture_ratio"], 0.0)
+        self.assertLessEqual(outcome["capture_ratio"], 1.0)
 
     def test_twins_share_identity_and_are_deterministic(self):
         a = twins.evaluate(op(), events(), guardian_step=guardian)
