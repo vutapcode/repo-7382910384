@@ -25,6 +25,10 @@ class CrossDerivativeContext:
         }
         self.liquidations = deque(maxlen=256)
         self.last_identity = None
+        self.last_emitted_available_ms = {
+            "binance_usdm": 0,
+            "bybit_linear": 0,
+        }
         self.emitted = 0
 
     @staticmethod
@@ -146,9 +150,18 @@ class CrossDerivativeContext:
             snapshot["binance_oi"]["after_available_ms"],
             snapshot["bybit_oi"]["after_available_ms"],
         )
-        if identity == self.last_identity:
+        # A relation is one matched observation, not a Bybit tick stream.
+        # Require both venues to advance before publishing the next pair so a
+        # fast optional feed cannot amplify one slow Binance REST snapshot.
+        if (
+            identity == self.last_identity
+            or identity[0] <= self.last_emitted_available_ms["binance_usdm"]
+            or identity[1] <= self.last_emitted_available_ms["bybit_linear"]
+        ):
             return
         self.last_identity = identity
+        self.last_emitted_available_ms["binance_usdm"] = identity[0]
+        self.last_emitted_available_ms["bybit_linear"] = identity[1]
         self.emit("cross_derivative_context", snapshot, event_time_ms=now_ms)
         self.emitted += 1
 

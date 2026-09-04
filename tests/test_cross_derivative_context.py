@@ -69,6 +69,18 @@ class CrossDerivativeContextTests(unittest.TestCase):
         ))
         self.assertEqual(len(self.tracker.oi["binance_usdm"]), 1)
 
+    def test_fast_bybit_updates_do_not_amplify_one_binance_snapshot(self):
+        self.tracker.observe(record("open_interest", "binance_usdm", 1_000, 100))
+        self.tracker.observe(record("bybit_derivative_state", "bybit_linear", 1_100, 200))
+        self.tracker.observe(record("open_interest", "binance_usdm", 2_000, 101))
+        self.tracker.observe(record("bybit_derivative_state", "bybit_linear", 2_100, 201))
+        self.assertEqual(len(self.rows), 1)
+        self.tracker.observe(record("bybit_derivative_state", "bybit_linear", 2_200, 202))
+        self.tracker.observe(record("bybit_derivative_state", "bybit_linear", 2_300, 203))
+        self.assertEqual(len(self.rows), 1)
+        self.tracker.observe(record("open_interest", "binance_usdm", 3_000, 102))
+        self.assertEqual(len(self.rows), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
