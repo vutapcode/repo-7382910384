@@ -19,6 +19,7 @@ from recorder.liquidity_response import (
     SpotLiquidityResponseAnalyzer,
 )
 from recorder.causal_world_model import CausalWorldModel
+from recorder.cross_derivative_context import CrossDerivativeContext
 from recorder.storage import AppendOnlyStore
 from recorder.wavefront import WavefrontShadowEvaluator
 
@@ -561,6 +562,7 @@ async def run():
         )
     )
     collector.causal_world_model = CausalWorldModel(research_emit)
+    collector.cross_derivative_context = CrossDerivativeContext(research_emit)
     if config.wavefront_enabled:
         collector.wavefront_evaluator = WavefrontShadowEvaluator(
             lambda stream, payload, event_time_ms=None: collector.emit(

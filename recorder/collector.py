@@ -36,6 +36,7 @@ class BinanceRecorder:
         self.spot_liquidity_response_analyzer = None
         self.coinbase_liquidity_response_analyzer = None
         self.causal_world_model = None
+        self.cross_derivative_context = None
         self._causal_clocks = {}
         self._stream_epochs = {}
         self._wavefront_health_at_ms = 0
@@ -194,6 +195,17 @@ class BinanceRecorder:
                 self.health.causal_world_model = self.causal_world_model.summary()
             except Exception as exc:
                 self.health.error('causal_world_model', exc)
+        # Bybit is a recorder-only mechanism witness. It sees raw records even
+        # when feed_research=False, ignores its own output, and cannot affect
+        # strategy direction or vetoes.
+        if published and self.cross_derivative_context is not None:
+            try:
+                self.cross_derivative_context.observe(record)
+                self.health.cross_derivative_context = (
+                    self.cross_derivative_context.summary()
+                )
+            except Exception as exc:
+                self.health.error('cross_derivative_context', exc)
         return published
 
     def _emit_cash_batch(
