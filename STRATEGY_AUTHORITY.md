@@ -200,28 +200,15 @@ new authority merely because they exist.
 
 ## Upgrade priority
 
-Prefer empirical persistence, canonical deterministic replay and flow-quality
-measurement. Do not add another indicator, veto or confidence field unless a
-named active downstream consumer and behavioral test prove its effect.
+Prefer better causal state, independent cash evidence, deterministic replay and
+flow-quality measurement. Do not add a score, indicator, veto or horizon unless
+a named owner/question and matched evidence prove that it corrects a specific
+misunderstanding.
 
-## Historical parameter provenance (non-authoritative, 2026-08-23)
+## Historical parameter provenance (non-authoritative)
 
-This bootstrap is evidence-bound, not a promise of alpha:
-
-- Binance plugin, BTCUSDT USD-M: 239 closed 1m bars and 287 closed 5m bars.
-  The 5m range distribution was p50 `12.95`, p75 `19.70`, p95 `35.06` bps;
-  therefore old reports used `13/20/35` bps. Ignition Core does not authorize
-  entries from these candle-range numbers.
-- Recorder, latest three hours: 3,600 non-overlapping 3s buckets. Volume p25 was
-  Binance Spot `0.01735`, Futures `0.152`, Coinbase `0.001614` BTC. Rounded
-  materiality floors are `0.015/0.15/0.002` BTC respectively.
-- Absolute 3s imbalance p25 was Futures `0.4859`, Binance Spot `0.6589`, and
-  Coinbase `0.7656`; initial minimum/strong flow thresholds are `0.20/0.55`.
-- Local OI polling p95 absolute change was `0.008392%`; initial OI build
-  threshold is rounded to `0.0085%`.
-- Binance exchange information verified BTCUSDT `TRADING`, price tick `0.10`,
-  quantity min/step `0.001`, and min notional `50 USDT`. Public plugin data does
-  not verify account commission, balance, leverage, margin mode, or order path.
-
-Any future replacement must record its source window and reset promotion
-evidence through the normal code/config version gate.
+Historical threshold values in the repository are bootstrap/research metadata,
+not claims of predictive probability. Bias V12 treats long observation lenses
+as diagnostics only; live direction comes from causal cash-wave conversion and
+falsification. Any future replacement must record source windows and reset
+promotion evidence through the normal code/config version gate.
