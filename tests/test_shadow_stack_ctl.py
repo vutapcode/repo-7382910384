@@ -62,6 +62,11 @@ class ShadowStackCtlTests(unittest.TestCase):
             "After=network-online.target wstrade-recorder.service wstrade-bot.service",
             health,
         )
+        self.assertIn("Wants=network-online.target", health)
+        self.assertNotIn(
+            "Wants=network-online.target wstrade-recorder.service wstrade-bot.service",
+            health,
+        )
 
 
 if __name__ == "__main__":
