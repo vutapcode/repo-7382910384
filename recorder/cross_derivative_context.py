@@ -37,7 +37,9 @@ class CrossDerivativeContext:
 
     def _observe_oi(self, record, venue):
         payload = dict(record.get("payload") or {})
-        value = _f(payload.get("open_interest"))
+        value = _f(
+            payload.get("open_interest", payload.get("openInterest"))
+        )
         observed_ms = self._time(record)
         epoch = int(record.get("epoch", 0) or 0)
         if value is None or value <= 0.0 or observed_ms <= 0:

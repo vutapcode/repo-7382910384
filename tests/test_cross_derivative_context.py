@@ -62,6 +62,13 @@ class CrossDerivativeContextTests(unittest.TestCase):
         self.assertEqual(payload["relation"], "DIVERGENT")
         self.assertNotIn("side", payload)
 
+    def test_binance_rest_camel_case_open_interest_is_consumed(self):
+        self.tracker.observe(record(
+            "open_interest", "binance_usdm", 1_000,
+            openInterest="100.0",
+        ))
+        self.assertEqual(len(self.tracker.oi["binance_usdm"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
