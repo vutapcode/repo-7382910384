@@ -149,7 +149,10 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         }
         self.tracker.observe(event)
         self.tracker.observe(trade(6_000, 10, 100.20, high=100.20, low=100.0))
-        payload = self.rows[0][1]
+        payload = next(
+            row[1] for row in self.rows
+            if row[0] == "decision_counterfactual"
+        )
         self.assertEqual(payload["economic_miss_threshold_bps"], 10.5)
         self.assertTrue(payload["economic_miss_screen_passed"])
         self.assertTrue(payload["economic_miss_eligible"])
@@ -178,7 +181,10 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
 
         self.assertEqual(list(self.tracker.pending), ["diag:LONG:1000"])
         self.tracker.observe(trade(6_200, 10, 100.20, high=100.20, low=100.0))
-        payload = self.rows[0][1]
+        payload = next(
+            row[1] for row in self.rows
+            if row[0] == "decision_counterfactual"
+        )
         self.assertEqual(payload["sample_scope"], "DECISION_CYCLE")
         self.assertEqual(payload["anchor_role"], "DECISION_CYCLE")
         self.assertEqual(payload["episode_anchor_rank"], 0)
@@ -335,7 +341,10 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertEqual(tracker["strategy_code_version"], "code-v1")
         self.assertEqual(tracker["strategy_config_version"], "config-v1")
         self.tracker.observe(trade(6_000, 10, 99.0, high=101.0, low=98.0))
-        payload = self.rows[0][1]
+        payload = next(
+            row[1] for row in self.rows
+            if row[0] == "decision_counterfactual"
+        )
         self.assertEqual(payload["miss_taxonomy"], "RISK_DAILY_LOCK")
         self.assertEqual(payload["signed_close_bps"], 100.0)
         self.assertEqual(payload["sample_scope"], "EXECUTION_EVENT")
@@ -356,9 +365,12 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
             "episode-abort::EXECUTION"
         ])
         self.tracker.observe(trade(6_000, 10, 101.0))
-        self.assertEqual(len(self.rows), 1)
+        outcome_rows = [
+            row for row in self.rows if row[0] == "decision_counterfactual"
+        ]
+        self.assertEqual(len(outcome_rows), 1)
         self.assertEqual(
-            self.rows[0][1]["miss_taxonomy"],
+            outcome_rows[0][1]["miss_taxonomy"],
             "LIVE_FILLED_THEN_FLATTENED",
         )
 
@@ -378,8 +390,14 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
             self.tracker.pending["tier-s:7::GO"]["cycle_id"], "qualified"
         )
         self.tracker.observe(trade(7_000, 10, 102.0, high=103.0, low=100.0))
-        self.assertEqual(len(self.rows), 2)
-        payload = next(row[1] for row in self.rows if row[1]["anchor_role"] == "QUALIFIED")
+        outcome_rows = [
+            row for row in self.rows if row[0] == "decision_counterfactual"
+        ]
+        self.assertEqual(len(outcome_rows), 2)
+        payload = next(
+            row[1] for row in outcome_rows
+            if row[1]["anchor_role"] == "QUALIFIED"
+        )
         self.assertEqual(payload["cycle_id"], "qualified")
         self.assertEqual(payload["causal_episode_id"], "tier-s:7")
         self.assertEqual(payload["sample_scope"], "CAUSAL_EPISODE_GO_ANCHOR")
@@ -485,6 +503,43 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertEqual(tracker["causal_episode_side"], "LONG")
         self.assertEqual(tracker["side"], "LONG")
         self.assertEqual(tracker["counterfactual_side"], "LONG")
+
+    def test_execution_twin_manifest_is_authority_free_and_deterministic(self):
+        event = decision_event(episode_id="episode-twins")
+        cf = event["payload"]["decision_record"]["counterfactual"]
+        cf.update({
+            "counterfactual_side": "LONG",
+            "quantity_btc": 0.001,
+            "maker_ttl_ms": 750,
+            "frozen_economics": {
+                "execution_cost_contract": {
+                    "budgets_bps": {"MAKER": 8.5, "TAKER": 12.0},
+                },
+            },
+        })
+        self.tracker.observe(event)
+        manifest = next(
+            payload for stream, payload, _ in self.rows
+            if stream == "execution_twin_manifest"
+        )
+        self.assertFalse(manifest["authority"])
+        self.assertIsNone(manifest["selection"])
+        self.assertEqual(manifest["side"], "LONG")
+        self.assertNotIn(
+            "STYLE_SPECIFIC_FROZEN_COSTS_MISSING", manifest["blockers"]
+        )
+        self.assertIn(
+            "CURRENT_GUARDIAN_CANONICAL_REPLAY_PENDING",
+            manifest["blockers"],
+        )
+        first_hash = manifest["manifest_hash"]
+        self.tracker.observe(event)
+        manifests = [
+            payload for stream, payload, _ in self.rows
+            if stream == "execution_twin_manifest"
+        ]
+        self.assertEqual(len(manifests), 1)
+        self.assertEqual(manifests[0]["manifest_hash"], first_hash)
 
     def test_full_counterfactual_can_confirm_good_reject(self):
         event = decision_event(episode_id="episode-good-reject")

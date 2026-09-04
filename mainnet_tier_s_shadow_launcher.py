@@ -900,6 +900,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         ),
         "forward_edge": (edge_report or {}).get("forward_edge"),
         "time_to_edge": (edge_report or {}).get("time_to_edge"),
+        "execution_cost_contract": (edge_report or {}).get(
+            "execution_cost_contract"
+        ),
     }
     boundaries = decision_boundary_evidence.build(result, edge_report)
     four_authority = dict(
@@ -1021,6 +1024,8 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             ),
             "side": causal_episode_side,
             "counterfactual_side": causal_episode_side,
+            "quantity_btc": QTY_BTC,
+            "maker_ttl_ms": int(live_execution.MAKER_TTL_SECONDS * 1000),
             "background_bias_side": background_bias_side,
             "causal_episode_side": causal_episode_side,
             "decision_side": decision_side,
@@ -1029,6 +1034,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
                 "execution_style": cost_snapshot.get("execution_style"),
                 "cost_budget_bps": cost_snapshot.get("budget_bps"),
                 "minimum_net_edge_bps": cost_snapshot.get("minimum_net_edge_bps"),
+                "execution_cost_contract": cost_snapshot.get(
+                    "execution_cost_contract"
+                ),
                 "commission_verified": cost_snapshot.get("commission_verified"),
                 "commission_verification_reason": cost_snapshot.get(
                     "commission_verification_reason"

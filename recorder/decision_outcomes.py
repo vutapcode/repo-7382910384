@@ -6,6 +6,8 @@ invalidated on a sequence discontinuity instead of bridging a data gap.
 """
 
 from collections import deque, OrderedDict
+import hashlib
+import json
 
 
 WINDOWS_MS = (5_000, 15_000, 30_000, 60_000)
@@ -56,6 +58,7 @@ class DecisionOutcomeTracker:
         self.economic_waves = {}
         self.episode_wave_ids = OrderedDict()
         self.adjudicated_waves = OrderedDict()
+        self.twin_manifest_ids = OrderedDict()
 
     @staticmethod
     def _candidate(record):
@@ -715,6 +718,10 @@ class DecisionOutcomeTracker:
             ),
         }
         self._append_decision_evidence(self.pending[tracking_key], candidate)
+        if economic_miss_eligible:
+            self._emit_execution_twin_manifest(
+                record, self.pending[tracking_key]
+            )
         if self.last_gap_event_ms >= start_ms:
             tracker = self.pending.pop(tracking_key)
             self._emit_invalid(
@@ -735,6 +742,68 @@ class DecisionOutcomeTracker:
             dropped_key, dropped = self.pending.popitem(last=False)
             self._emit_invalid(dropped, "PENDING_CAPACITY_EXCEEDED", start_ms)
             self._close_key(dropped_key)
+
+    def _emit_execution_twin_manifest(self, record, tracker):
+        """Freeze replay inputs; never select an execution branch online."""
+        identity = str(
+            tracker.get("causal_episode_id") or tracker.get("tracking_key")
+            or ""
+        )
+        if not identity or identity in self.twin_manifest_ids:
+            return
+        cf = dict(tracker.get("counterfactual") or {})
+        frozen = dict(tracker.get("frozen_economics") or {})
+        cost_contract = dict(frozen.get("execution_cost_contract") or {})
+        budgets = dict(cost_contract.get("budgets_bps") or {})
+        blockers = []
+        if not budgets.get("MAKER") or not budgets.get("TAKER"):
+            blockers.append("STYLE_SPECIFIC_FROZEN_COSTS_MISSING")
+        if not cf.get("quantity_btc"):
+            blockers.append("QUANTITY_MISSING")
+        blockers.extend((
+            "SEALED_WAL_IDENTITY_PENDING",
+            "CURRENT_GUARDIAN_CANONICAL_REPLAY_PENDING",
+        ))
+        body = {
+            "version": "EXECUTION_TWIN_MANIFEST_V1",
+            "authority": False,
+            "selection": None,
+            "status": "EXECUTION_URGENCY_UNVERIFIED",
+            "causal_episode_id": tracker.get("causal_episode_id"),
+            "economic_wave_id": tracker.get("economic_wave_id"),
+            "side": tracker.get("counterfactual_side") or tracker.get("side"),
+            "decision_available_time_ms": int(
+                record.get("available_time_ms")
+                or record.get("receive_time_ms")
+                or record.get("event_time_ms") or 0
+            ),
+            "reference_price": tracker.get("reference_price"),
+            "quantity_btc": cf.get("quantity_btc"),
+            "maker_ttl_ms": cf.get("maker_ttl_ms"),
+            "branches": [
+                "TAKER_NOW", "WAIT100", "WAIT300", "WAIT500", "WAIT600",
+                "MAKER_IF_EXECUTABLE",
+            ],
+            "frozen_cost_contract": cost_contract,
+            "strategy_code_version": tracker.get("strategy_code_version"),
+            "strategy_config_version": tracker.get("strategy_config_version"),
+            "blockers": blockers,
+            "policy": (
+                "OFFLINE_SAME_WAL_CURRENT_GUARDIAN_FROZEN_COST_NO_SELECTION"
+            ),
+        }
+        encoded = json.dumps(
+            body, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
+        body["manifest_hash"] = hashlib.sha256(encoded).hexdigest()
+        self.emit(
+            "execution_twin_manifest", body,
+            event_time_ms=int(record.get("event_time_ms", 0) or 0),
+        )
+        self.twin_manifest_ids[identity] = body["manifest_hash"]
+        self.twin_manifest_ids.move_to_end(identity)
+        while len(self.twin_manifest_ids) > MAX_CLOSED:
+            self.twin_manifest_ids.popitem(last=False)
 
     def _register(self, record):
         candidate = self._candidate(record)
