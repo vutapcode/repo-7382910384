@@ -75,6 +75,45 @@ class CashWaveObservationTests(unittest.TestCase):
         self.assertEqual(result["raw_side"], "SHORT")
         self.assertTrue(result["control_transfer_confirmed"])
 
+    def test_opposite_conversion_plus_neutral_previous_cannot_transfer(self):
+        result = wave.infer([
+            _segment(0, 15, "SHORT", "SHORT"),
+            _segment(15, 60, "ABSTAIN", "ABSTAIN"),
+        ], previous_side="LONG")
+        self.assertEqual(result["wave_state"], "TRANSITION")
+        self.assertEqual(result["raw_side"], "ABSTAIN")
+        self.assertEqual(result["candidate_side"], "SHORT")
+        self.assertFalse(result["control_transfer_confirmed"])
+
+    def test_opposite_conversion_plus_unknown_previous_cannot_transfer(self):
+        unknown = _segment(15, 60, "ABSTAIN", "ABSTAIN")
+        unknown["flow"]["reason"] = "DUAL_CASH_FLOW_EPOCH_MISMATCH"
+        result = wave.infer([
+            _segment(0, 15, "SHORT", "SHORT"),
+            unknown,
+        ], previous_side="LONG")
+        self.assertEqual(result["wave_state"], "TRANSITION")
+        self.assertEqual(result["raw_side"], "ABSTAIN")
+        self.assertFalse(result["control_transfer_confirmed"])
+
+    def test_explicit_old_side_nonconversion_allows_fast_transfer(self):
+        result = wave.infer([
+            _segment(0, 15, "SHORT", "SHORT"),
+            _segment(15, 60, "ABSTAIN", "LONG"),
+        ], previous_side="LONG")
+        self.assertEqual(result["wave_state"], "CONTROL_TRANSFER")
+        self.assertEqual(result["raw_side"], "SHORT")
+        self.assertTrue(result["control_transfer_confirmed"])
+
+    def test_old_side_still_converting_blocks_opposite_transfer(self):
+        result = wave.infer([
+            _segment(0, 15, "SHORT", "SHORT"),
+            _segment(15, 60, "LONG", "LONG"),
+        ], previous_side="LONG")
+        self.assertEqual(result["wave_state"], "TRANSITION")
+        self.assertEqual(result["raw_side"], "ABSTAIN")
+        self.assertFalse(result["control_transfer_confirmed"])
+
     def test_flow_price_conflict_releases_direction(self):
         result = wave.infer([
             _segment(0, 15, "LONG", "SHORT"),

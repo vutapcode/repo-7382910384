@@ -172,6 +172,66 @@ class BiasCouncilTests(unittest.TestCase):
         self.assertEqual(side, "LONG")
         self.assertEqual(reason, "HOLD_CONTEXT_PULLBACK")
 
+    def test_emerging_cash_control_cannot_acquire_bias_from_abstain(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        raw = {
+            "ts": 100.0, "bias": "LONG", "confidence": 0.52,
+            "knowledge_state": "SUPPORTED",
+            "direction_memory": {
+                "context_side": "LONG", "phase": "CONTEXT_WITHOUT_CONFIRMATION",
+            },
+            "cash_control": {
+                "wave_state": "EMERGING_CONTROL",
+                "meaningful_for_action": False,
+                "control_transfer_confirmed": False,
+            },
+        }
+        side, confidence, reason = council._hyst(s, raw)
+        self.assertEqual(side, "ABSTAIN")
+        self.assertEqual(confidence, 0.0)
+        self.assertEqual(reason, "OBSERVE_EMERGING_CASH_CONTROL")
+
+    def test_controlled_cash_wave_can_acquire_bias_from_abstain(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        raw = {
+            "ts": 100.0, "bias": "LONG", "confidence": 0.70,
+            "knowledge_state": "SUPPORTED",
+            "direction_memory": {
+                "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+            },
+            "cash_control": {
+                "wave_state": "CONTROLLED",
+                "meaningful_for_action": True,
+                "control_transfer_confirmed": False,
+            },
+        }
+        side, confidence, reason = council._hyst(s, raw)
+        self.assertEqual(side, "LONG")
+        self.assertEqual(confidence, 0.70)
+        self.assertEqual(reason, "ACQUIRE_CASH_REGIME")
+
+    def test_controlled_label_without_actionable_maturity_cannot_acquire(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        raw = {
+            "ts": 100.0, "bias": "LONG", "confidence": 0.70,
+            "knowledge_state": "SUPPORTED",
+            "direction_memory": {
+                "context_side": "LONG", "phase": "ESTABLISHED_TREND",
+            },
+            "cash_control": {
+                "wave_state": "CONTROLLED",
+                "meaningful_for_action": False,
+                "control_transfer_confirmed": False,
+            },
+        }
+        side, confidence, reason = council._hyst(s, raw)
+        self.assertEqual(side, "ABSTAIN")
+        self.assertEqual(confidence, 0.0)
+        self.assertEqual(reason, "NO_ACTIONABLE_CASH_REGIME")
+
     def test_established_context_survives_raw_abstain_compatibility(self):
         s = state()
         s.bias_state, s.bias_confidence = "LONG", 0.8

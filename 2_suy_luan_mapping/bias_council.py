@@ -522,7 +522,19 @@ def _hyst(state, report):
     if source == "DIVERGING":
         return "ABSTAIN", 0.0, "INDEPENDENT_CASH_EVIDENCE_DIVERGING"
     if old not in ("LONG", "SHORT"):
-        return (raw, raw_conf, "ACQUIRE_CASH_REGIME") if raw in ("LONG", "SHORT") else ("ABSTAIN", 0.0, "NO_CASH_REGIME")
+        wave_state = str(
+            cash.get("wave_state") or cash.get("regime_state") or "UNKNOWN"
+        ).upper()
+        meaningful = bool(cash.get("meaningful_for_action"))
+        if (
+            raw in ("LONG", "SHORT")
+            and wave_state == "CONTROLLED"
+            and meaningful
+        ):
+            return raw, raw_conf, "ACQUIRE_CASH_REGIME"
+        if raw in ("LONG", "SHORT") and wave_state == "EMERGING_CONTROL":
+            return "ABSTAIN", 0.0, "OBSERVE_EMERGING_CASH_CONTROL"
+        return "ABSTAIN", 0.0, "NO_ACTIONABLE_CASH_REGIME"
     if phase == "PULLBACK_AGAINST_CONTEXT" and context == old and raw == old:
         return old, max(0.55, min(old_conf, raw_conf or old_conf)), "HOLD_CONTEXT_PULLBACK"
     if phase == "REVERSAL_CANDIDATE":

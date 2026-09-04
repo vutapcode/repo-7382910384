@@ -165,7 +165,7 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
             )
             transfer = bool(
                 not old_still_converts
-                and (new_recent_support or old_failure_seen or immediate_previous)
+                and (new_recent_support or old_failure_seen)
             )
             if transfer:
                 return {
