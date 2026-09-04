@@ -468,6 +468,10 @@ def _ensure_clone():
         _run("git", "clone", "--no-checkout", REMOTE, str(CLONE))
     _run("git", "config", "user.name", "WStrade Recorder", cwd=CLONE)
     _run("git", "config", "user.email", "wstrade-recorder@localhost", cwd=CLONE)
+    # This rolling branch is amended every three minutes.  Git's heuristic
+    # auto-GC otherwise launches an expensive repack from the timer hot path.
+    # Maintenance can still be run explicitly during a bot maintenance window.
+    _run("git", "config", "gc.auto", "0", cwd=CLONE)
     remote = _run(
         "git", "ls-remote", "--heads", "origin", BRANCH,
         cwd=CLONE, check=False,
