@@ -21,6 +21,7 @@ class HealthState:
         self.last_event_ms = {}
         self.last_available_ms = {}
         self.connections = {}
+        self.optional_connections = {}
         self.reconnects = Counter()
         self.errors = Counter()
         self.dropped = 0
@@ -86,6 +87,19 @@ class HealthState:
                 or any(not value for value in self.connections.values())
             ) else 'OK'
         )
+
+    def optional_connection(self, name, connected):
+        """Track research feeds without degrading canonical recorder health."""
+        self.optional_connections[str(name)] = bool(connected)
+
+    def optional_error(self, name, error):
+        self.errors[str(name)] += 1
+        self.last_error = {
+            'component': str(name),
+            'message': str(error),
+            'at_ms': time.time_ns() // 1_000_000,
+            'optional': True,
+        }
 
     def error(self, name, error):
         self.errors[name] += 1
@@ -159,6 +173,7 @@ class HealthState:
             'updated_at_ms': now_ms,
             'uptime_seconds': max(0.0, (now_ms - self.started_at_ms) / 1000.0),
             'connections': dict(self.connections),
+            'optional_connections': dict(self.optional_connections),
             'reconnects': dict(self.reconnects),
             'received': dict(self.received),
             'written': dict(self.written),

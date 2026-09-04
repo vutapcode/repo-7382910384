@@ -56,7 +56,6 @@ These sources are started by the current Tier-S runtime:
 - `tai_bitvavo` — EUR cash primary.
 - `tai_kraken` — EUR cash secondary; same EUR evidence family by default.
 - `tai_upbit` — KRW local-fiat cash.
-- `tai_bybit` — derivative stress/liquidation cross-check.
 - `tai_cme` — institutional derivatives; requires official entitlement.
 - `tai_eur_usd` — EUR/USD normalization; provider unset.
 - `tai_krw_usd` — KRW/USD normalization; provider unset.
@@ -163,6 +162,11 @@ Role: `DERIVATIVE_STRESS_DATA_ONLY`.
 Question: `IS_A_BINANCE_DERIVATIVE_EVENT_VENUE_LOCAL_OR_CROSS_DERIVATIVE_STRESS?`
 
 Bybit is derivative, never cash. Liquidation cannot create direction.
+
+Collection status: `ACTIVE_RECORDER_RESEARCH_ONLY`. The optional public linear
+socket records ticker/OI context and complete liquidation rows. These streams
+are deliberately excluded from FeatureEngine, Bias, Ignition, Entry, Guardian
+and Hard Risk until matched same-WAL ablation proves a named benefit.
 
 ### CME
 

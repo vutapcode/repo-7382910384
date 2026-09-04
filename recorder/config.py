@@ -47,6 +47,12 @@ class RecorderConfig:
     coinbase_product: str = os.getenv(
         'SMC_RECORDER_COINBASE_PRODUCT', 'BTC-USD'
     ).upper()
+    bybit_research_enabled: bool = os.getenv(
+        'WSTRADE_BYBIT_RESEARCH', '1'
+    ).strip().lower() not in ('0', 'false', 'no', 'off')
+    bybit_symbol: str = os.getenv(
+        'WSTRADE_BYBIT_SYMBOL', 'BTCUSDT'
+    ).upper()
     bot_runtime_path: Path = Path(os.getenv(
         'WSTRADE_BOT_HEALTH_PATH',
         '/home/ubuntu/smc2026_data/health/bot_runtime.json',
@@ -63,6 +69,7 @@ class RecorderConfig:
     market_ws_base: str = 'wss://fstream.binance.com/market/stream?streams='
     spot_ws_base: str = 'wss://stream.binance.com:9443/stream?streams='
     coinbase_ws_url: str = 'wss://ws-feed.exchange.coinbase.com'
+    bybit_linear_ws_url: str = 'wss://stream.bybit.com/v5/public/linear'
     journal_events_path: Path = Path(
         os.getenv(
             'SMC_JOURNAL_EVENTS_PATH',

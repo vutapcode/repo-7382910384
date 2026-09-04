@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import signal
+import importlib
 from collections import OrderedDict, deque
 
 from loi_he_thong.runtime_lock import DuplicateInstanceError, acquire_runtime_lock
@@ -596,6 +597,13 @@ async def run():
         asyncio.create_task(collector.macro_poll_loop(), name='macro_rest'),
         asyncio.create_task(tap.loop(), name='decision_tap'),
     ]
+    if config.bybit_research_enabled:
+        bybit = importlib.import_module(
+            '1_tai_du_lieu.tai_bybit.collector'
+        )
+        tasks.append(asyncio.create_task(
+            bybit.run(collector), name='bybit_research_ws',
+        ))
     logging.info(
         '[RECORDER] started symbol=%s root=%s public-only=true retention=%sh '
         'startup_deleted=%s startup_freed_bytes=%s',

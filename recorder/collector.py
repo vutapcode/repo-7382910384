@@ -81,7 +81,10 @@ class BinanceRecorder:
             else 'binance_usdm'
         )
         if (
-            source in {'binance_usdm', 'binance_spot', 'coinbase_spot'}
+            source in {
+                'binance_usdm', 'binance_spot', 'coinbase_spot',
+                'bybit_linear',
+            }
             and 'clock_uncertainty_ms' not in payload
         ):
             clock = self._causal_clocks.setdefault(

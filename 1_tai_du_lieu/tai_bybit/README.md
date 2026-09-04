@@ -1,12 +1,15 @@
 # tai_bybit
 
-Status: `STAGED_NOT_WIRED`
+Status: `ACTIVE_RECORDER_RESEARCH_ONLY`
 
 Owner: Bybit `BTCUSDT` linear-perpetual public market-data collection only.
 
 Semantic role: `DERIVATIVE_STRESS_DATA_ONLY`
 
-Future collector may expose public trades, BBO/ticker, OI/mark/index/funding fields and all-liquidation data.
+The optional recorder collector exposes linear-perpetual ticker/OI/mark/index/
+funding fields and the all-liquidation stream. It is enabled by
+`WSTRADE_BYBIT_RESEARCH=1` and writes WAL only; it is not passed to features or
+strategy research consumers.
 
 Hard rules:
 - DERIVATIVE, never CASH.
