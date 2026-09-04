@@ -1,9 +1,12 @@
+from importlib import import_module
 from pathlib import Path
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "mainnet_tier_s_shadow_risk_launcher.py"
+bias = import_module("2_suy_luan_mapping.bias_council")
+ignition = import_module("loi_he_thong.ignition_core")
 
 
 class EntryBiasHandoffRegressionTests(unittest.TestCase):
@@ -29,6 +32,24 @@ class EntryBiasHandoffRegressionTests(unittest.TestCase):
             source,
         )
         self.assertIn("base.entry_council.evaluate = _entry_evaluate_context_guard", source)
+
+    def test_emerging_cash_wave_is_early_information_not_entry_handoff(self):
+        emerging = bias._compat_confidence(
+            "EMERGING_CONTROL", "LONG", "LONG"
+        )
+        controlled = bias._compat_confidence(
+            "CONTROLLED", "LONG", "LONG"
+        )
+        self.assertLess(emerging, ignition.BIAS_MIN_CONF)
+        self.assertGreaterEqual(controlled, ignition.BIAS_MIN_CONF)
+
+    def test_fees_remain_entry_economics_not_bias_truth(self):
+        source = (ROOT / "2_suy_luan_mapping" / "bias_council.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("verified_cost_model", source)
+        self.assertNotIn("minimum_net_edge_bps", source)
+        self.assertNotIn("commission_verified", source)
 
 
 if __name__ == "__main__":

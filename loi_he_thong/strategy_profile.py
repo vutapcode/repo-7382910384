@@ -4,7 +4,7 @@ This module contains identity and invariants only. Trading thresholds stay in
 their owning strategy modules so metadata cannot silently override live logic.
 """
 
-PROFILE_VERSION = "IGNITION_CORE_ENTRY_ECONOMICS_V11_SHARED_THESIS_SHADOW"
+PROFILE_VERSION = "IGNITION_CORE_ENTRY_ECONOMICS_V12_CAUSAL_CASH_WAVE_BIAS"
 
 _PROFILE = {
     "name": "IGNITION_CORE_V1",
@@ -13,7 +13,7 @@ _PROFILE = {
     "market": "BTCUSDT",
     "canonical_entrypoint": "mainnet_tier_s_lean_launcher.py",
     "architecture": (
-        "BIAS_COUNCIL",
+        "BIAS_CAUSAL_CASH_WAVE_V12",
         "IGNITION_PREDICT_PROBE_PROVE",
         "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
         "MARKET_THESIS_V3_AUTHORITY_SEPARATED",
@@ -33,8 +33,18 @@ _PROFILE = {
     "invariants": (
         "CAUSAL_ONLY",
         "FROZEN_PRE_IMPULSE_BIAS",
+        "BIAS_DIRECTION_ROOTS_ARE_INDEPENDENT_CASH_ONLY",
+        "BIAS_LIVE_DIRECTION_COMES_FROM_NON_OVERLAPPING_CASH_WAVE_SEGMENTS",
+        "BIAS_HISTORICAL_LENSES_HAVE_ZERO_LIVE_DIRECTION_AUTHORITY",
+        "BIAS_REQUIRES_EXECUTED_FLOW_TO_CONVERT_INTO_DUAL_CASH_PRICE",
+        "BIAS_EMERGING_MICRO_WAVE_HAS_NO_ENTRY_HANDOFF_AUTHORITY",
+        "BIAS_EXHAUSTION_RELEASES_STALE_DIRECTION",
+        "BIAS_CONTROL_TRANSFER_IS_EVIDENCE_DRIVEN_NOT_TIMER_DRIVEN",
         "FUTURES_NEVER_SELF_OPENS",
+        "FUTURES_AND_OI_ARE_CONTEXT_ONLY_FOR_BIAS_DIRECTION",
+        "ONE_CAUSAL_ROOT_COUNTS_ONCE",
         "CASH_PRICE_AND_EXECUTED_FLOW_AUTHORITY",
+        "STATIC_L2_AND_CANCELS_HAVE_ZERO_DIRECTION_AUTHORITY",
         "FAIL_NEUTRAL_ON_STALE_OPTIONAL_EVIDENCE",
         "FROZEN_COST_COUNTED_ONCE",
         "EMPIRICAL_GUARDIAN_NET_NOT_MFE_ALPHA",
@@ -53,7 +63,6 @@ _PROFILE = {
         "NO_DCA_NO_PARTIAL_CLOSE",
     ),
 }
-
 
 def current_profile():
     """Return a detached snapshot suitable for heartbeat/runtime metadata."""

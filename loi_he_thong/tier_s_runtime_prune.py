@@ -4,8 +4,9 @@ import logging
 import time
 from loi_he_thong import tier_s_atr_only
 from loi_he_thong import host_cpu_governor
+from loi_he_thong import liquidation_context
 
-VERSION = "TIER_S_RUNTIME_PRUNE_V6_LIQUIDATION_CONTEXT"
+VERSION = "TIER_S_RUNTIME_PRUNE_V7_SINGLE_FORCEORDER_INGEST"
 SPOT_DRAIN_MAX_EVENTS = 512
 SPOT_DRAIN_BUDGET_SECONDS = 0.002
 
@@ -54,8 +55,15 @@ async def _lean_main(app):
         ("bookTicker", lambda: app.tai_gia_tick.hung_gia_tick_futures("btcusdt", state)),
         ("aggTrade_spot", lambda: app.tai_dong_tien.hung_dong_tien_spot("btcusdt", state)),
         ("coinbase_spot", lambda: app.tai_coinbase.hung_coinbase_spot("BTC-USD", state)),
-        ("aggTrade_futures", lambda: app.tai_dong_tien.hung_dong_tien_futures_real("btcusdt", state)),
-        ("forceOrder", lambda: app.tai_dong_tien.hung_force_order_futures("btcusdt", state)),
+        (
+            "aggTrade_futures",
+            lambda: app.tai_dong_tien.hung_dong_tien_futures_real(
+                "btcusdt",
+                state,
+                force_order_observer=liquidation_context.observe_force_order,
+                force_order_epoch_reset=liquidation_context.reset_epoch,
+            ),
+        ),
         ("executionBookTicker", lambda: app.tai_gia_tick.hung_gia_tick_execution("btcusdt", state)),
         ("spot_cvd", lambda: _spot_flow_loop(app)),
         ("vi_mo_input", lambda: app.tai_vi_mo.tai_du_lieu_vi_mo("BTCUSDT", state)),

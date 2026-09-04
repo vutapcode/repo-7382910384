@@ -17,18 +17,40 @@ def _load():
 council = _load()
 
 
+def _cash(buy, sell):
+    return {
+        "spot": {"buy": float(buy), "sell": float(sell)},
+        "coinbase": {"buy": float(buy), "sell": float(sell)},
+    }
+
+
+def _history_row(ts, price, oi, buy, sell):
+    return {
+        "ts": float(ts), "spot": float(price), "coinbase": float(price),
+        "futures": float(price), "oi": float(oi),
+        "cash_totals": _cash(buy, sell),
+        "venue_epochs": {"spot": 0, "coinbase": 0, "futures": 0},
+    }
+
+
 def state():
     s = SimpleNamespace(
         best_bid=100.0, best_ask=100.1, coinbase_price=100.05,
-        thoi_gian_coinbase_ticker_cuoi=100.0, thoi_gian_tick_cuoi=100.0, open_interest=1000.0, thoi_gian_vi_mo_cuoi=100.0,
+        thoi_gian_coinbase_ticker_cuoi=100.0, thoi_gian_tick_cuoi=100.0,
+        open_interest=1000.0, thoi_gian_vi_mo_cuoi=100.0,
         atr_1m=0.05, funding_rate=0.0, flow_1s_buffer=deque(),
-        danh_sach_khop_lenh_futures=deque(), coinbase_cvd_1m=0.0,
+        futures_flow_1s_buffer=deque(), danh_sach_khop_lenh_futures=deque(),
+        coinbase_cvd_1m=0.0, coinbase_volume_1m=0.0,
+        coinbase_cvd_3s=0.0, coinbase_volume_3s=0.0,
         thoi_gian_coinbase_cuoi=100.0,
+        spot_cvd_buy_total=30.0, spot_cvd_sell_total=3.0,
+        coinbase_cvd_buy_total=30.0, coinbase_cvd_sell_total=3.0,
+        spot_flow_epoch=0, coinbase_flow_epoch=0, futures_flow_epoch=0,
     )
     s.bias_price_history = deque([
-        {"ts": -80.0, "spot": 97.0, "coinbase": 97.0, "futures": 97.0, "oi": 970.0},
-        {"ts": 40.0, "spot": 98.0, "coinbase": 98.0, "futures": 98.0, "oi": 980.0},
-        {"ts": 85.0, "spot": 99.0, "coinbase": 99.0, "futures": 99.0, "oi": 990.0},
+        _history_row(-80.0, 97.0, 970.0, 0.0, 0.0),
+        _history_row(40.0, 98.0, 980.0, 10.0, 1.0),
+        _history_row(85.0, 99.0, 990.0, 20.0, 2.0),
     ], maxlen=1536)
     s.danh_sach_khop_lenh_futures.append(
         {"gia": 100.2, "thoi_gian_ms": 100000.0, "khoi_luong": 1.0, "ban_chu_dong": False}
@@ -61,26 +83,26 @@ class BiasCouncilTests(unittest.TestCase):
         s = SimpleNamespace(
             bias_price_buckets={1: {"ts": 1.0}, 2: {"ts": 2.0}},
             _bias_bucket_last_sample_at=2.0,
-            _bias_bucket_oldest_second=1,
         )
-        council.bias_buckets(s, 6.0, None)
+        council.bias_buckets(s, 8.0, None)
         self.assertEqual(s.bias_history_reset_reason, "BIAS_LOOP_GAP")
-        self.assertEqual(s.bias_history_previous_coverage_seconds, 1)
         self.assertEqual(s.bias_history_reset_count, 1)
 
-    def test_price_and_price_oi_are_not_two_independent_votes(self):
+    def test_oi_is_context_not_second_direction_vote(self):
         s = state()
         r = council.evaluate(s, now=100.0, force_full=False)
         self.assertEqual(r["s_votes"]["S1_cross_price"]["vote"], "LONG")
-        self.assertEqual(r["s_votes"]["S2_price_x_oi"]["vote"], "LONG")
-        self.assertEqual(r["bias"], "ABSTAIN")
-        self.assertEqual(r["reason"], "PRICE_OI_NOT_INDEPENDENT_WITHOUT_FLOW")
-        self.assertGreaterEqual(r["quorum"], 2)
+        self.assertEqual(r["s_votes"]["S2_price_x_oi"]["vote"], "ABSTAIN")
+        self.assertEqual(r["s_votes"]["S2_price_x_oi"]["reason"], "POSITIONING_CONTEXT_ONLY")
+        self.assertEqual(r["bias"], "LONG")
+        self.assertEqual(r["wave_state"], "CONTROLLED")
+        self.assertTrue(r["cash_control"]["flow_price_conversion_required"])
+        self.assertFalse(r["cash_control"]["oi_direction_authority"])
 
     def test_four_second_impulse_cannot_create_bias_without_slow_confirmation(self):
         s = state()
         s.bias_price_history = deque([
-            {"ts": 96.0, "spot": 99.0, "coinbase": 99.0, "futures": 99.0, "oi": 990.0},
+            _history_row(96.0, 99.0, 990.0, 20.0, 2.0),
         ], maxlen=1536)
         r = council.evaluate(s, now=100.0)
         self.assertEqual(r["s_votes"]["S1_cross_price"]["vote"], "ABSTAIN")
@@ -88,12 +110,14 @@ class BiasCouncilTests(unittest.TestCase):
             r["s_votes"]["S1_cross_price"]["metrics"]["fast_policy"],
             "FLIP_TELEMETRY_ONLY_NO_BIAS_ACQUISITION",
         )
+        self.assertEqual(r["bias"], "ABSTAIN")
 
-    def test_falling_oi_abstains_in_price_x_oi(self):
+    def test_falling_oi_never_votes_direction(self):
         s = state()
         s.open_interest = 980.0
         r = council.evaluate(s, now=100.0)
         self.assertEqual(r["s_votes"]["S2_price_x_oi"]["vote"], "ABSTAIN")
+        self.assertFalse(r["derivative_context"]["authority"])
 
     def test_old_structure_fields_do_not_vote(self):
         s = state()
@@ -110,116 +134,153 @@ class BiasCouncilTests(unittest.TestCase):
         self.assertIn(r["bias"], ("LONG", "SHORT", "ABSTAIN"))
         self.assertGreaterEqual(r["confidence"], 0.0)
         self.assertLessEqual(r["confidence"], 1.0)
+        self.assertEqual(r["contract"], "DIRECTION_ONLY_NO_ENTRY_TIMING")
         for forbidden in ("entry", "zone", "setup", "action", "price_entry"):
             self.assertNotIn(forbidden, r)
 
-    def test_direction_memory_labels_short_trigger_inside_long_context_as_pullback(self):
+    def test_direction_memory_labels_short_price_without_short_flow_as_pullback(self):
         s = state()
+        s.bias_state, s.bias_confidence, s.bias_wave_state = "LONG", 0.70, "CONTROLLED"
         s.bias_price_history = deque([
-            {"ts": -80.0, "spot": 98.0, "coinbase": 98.0, "futures": 98.0, "oi": 970.0},
-            {"ts": 40.0, "spot": 99.0, "coinbase": 99.0, "futures": 99.0, "oi": 980.0},
-            {"ts": 85.0, "spot": 101.0, "coinbase": 101.0, "futures": 101.0, "oi": 990.0},
+            _history_row(-80.0, 98.0, 970.0, 0.0, 0.0),
+            _history_row(40.0, 99.0, 980.0, 10.0, 1.0),
+            _history_row(85.0, 101.0, 990.0, 20.0, 2.0),
         ], maxlen=1536)
+        # Balanced latest executed flow: opposite price alone cannot transfer.
+        s.spot_cvd_buy_total = 21.0
+        s.spot_cvd_sell_total = 3.0
+        s.coinbase_cvd_buy_total = 21.0
+        s.coinbase_cvd_sell_total = 3.0
         r = council.evaluate(s, now=100.0)
         self.assertEqual(r["direction_memory"]["context_side"], "LONG")
         self.assertEqual(r["direction_memory"]["phase"], "PULLBACK_AGAINST_CONTEXT")
+        self.assertEqual(r["wave_state"], "PULLBACK")
+        self.assertEqual(r["bias"], "LONG")
 
     def test_context_pullback_cannot_flip_existing_bias(self):
         s = state()
         s.bias_state, s.bias_confidence = "LONG", 0.8
-        s._bias_last_supported_at = 100.0
         raw = {
-            "ts": 100.1, "bias": "SHORT", "confidence": 0.8,
-            "quorum": 3, "story": {"name": "NEW_SHORT_BUILD_CONFIRMED"},
+            "ts": 100.1, "bias": "LONG", "confidence": 0.6,
+            "knowledge_state": "SUPPORTED",
             "direction_memory": {
                 "context_side": "LONG", "phase": "PULLBACK_AGAINST_CONTEXT",
             },
+            "cash_control": {"control_transfer_confirmed": False},
         }
         side, _, reason = council._hyst(s, raw)
         self.assertEqual(side, "LONG")
         self.assertEqual(reason, "HOLD_CONTEXT_PULLBACK")
 
-    def test_established_context_survives_short_raw_abstain_latch(self):
+    def test_established_context_survives_raw_abstain_compatibility(self):
         s = state()
         s.bias_state, s.bias_confidence = "LONG", 0.8
-        s._bias_last_supported_at = 90.0
         raw = {
             "ts": 100.0, "bias": "ABSTAIN", "confidence": 0.0,
-            "quorum": 0, "story": {"name": "MIXED_OR_INCOMPLETE"},
+            "knowledge_state": "UNKNOWN_MARKET",
             "direction_memory": {
                 "context_side": "LONG", "phase": "ESTABLISHED_TREND",
             },
+            "cash_control": {"control_transfer_confirmed": False},
         }
         side, confidence, reason = council._hyst(s, raw)
         self.assertEqual(side, "LONG")
-        self.assertGreaterEqual(confidence, 0.35)
+        self.assertGreaterEqual(confidence, 0.55)
         self.assertEqual(reason, "HOLD_CONTEXT_THROUGH_ABSTAIN")
 
-    def test_confirmed_flip_exports_non_authoritative_reversal_latch(self):
+    def test_exhausted_wave_does_not_use_long_lens_to_hold_bias(self):
+        s = state()
+        s.bias_state, s.bias_confidence, s.bias_wave_state = "LONG", 0.70, "CONTROLLED"
+        # Executed buyers persist but price is flat to the latest cash anchor;
+        # old 60/180s displacement remains LONG and must not keep Bias alive.
+        s.best_bid, s.best_ask, s.coinbase_price = 98.99, 99.01, 99.0
+        s.spot_cvd_buy_total = 30.0
+        s.spot_cvd_sell_total = 2.0
+        s.coinbase_cvd_buy_total = 30.0
+        s.coinbase_cvd_sell_total = 2.0
+        s.bias_price_history = deque([
+            _history_row(-80.0, 97.0, 970.0, 0.0, 0.0),
+            _history_row(40.0, 98.0, 980.0, 10.0, 1.0),
+            _history_row(85.0, 99.0, 990.0, 20.0, 1.0),
+        ], maxlen=1536)
+        r = council.evaluate(s, now=100.0)
+        self.assertEqual(r["wave_state"], "EXHAUSTION")
+        self.assertEqual(r["bias"], "ABSTAIN")
+        self.assertFalse(r["cash_control"]["historical_lens_direction_authority"])
+
+    def test_confirmed_flip_requires_evidence_not_elapsed_timer(self):
         s = state()
         s.bias_state, s.bias_confidence = "LONG", 0.80
-        s._bias_flip_candidate = "SHORT"
-        s._bias_flip_since = 97.0
         raw = {
-            "ts": 100.0, "bias": "SHORT", "confidence": 0.80,
-            "quorum": 3, "story": {"name": "NEW_SHORT_BUILD_CONFIRMED"},
+            "ts": 100.0, "bias": "SHORT", "confidence": 0.72,
+            "knowledge_state": "SUPPORTED",
             "direction_memory": {
                 "context_side": "LONG", "phase": "REVERSAL_CANDIDATE",
             },
+            "cash_control": {"control_transfer_confirmed": True},
+        }
+        side, _, reason = council._hyst(s, raw)
+        self.assertEqual(side, "SHORT")
+        self.assertEqual(reason, "EVIDENCE_CONFIRMED_CONTROL_TRANSFER")
+
+    def test_diverging_cash_evidence_releases_existing_bias(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "LONG", 0.80
+        raw = {
+            "ts": 100.0, "bias": "LONG", "confidence": 0.70,
+            "knowledge_state": "DIVERGING",
+            "direction_memory": {"context_side": "LONG", "phase": "ESTABLISHED_TREND"},
+            "cash_control": {"control_transfer_confirmed": False},
+        }
+        side, confidence, reason = council._hyst(s, raw)
+        self.assertEqual(side, "ABSTAIN")
+        self.assertEqual(confidence, 0.0)
+        self.assertEqual(reason, "INDEPENDENT_CASH_EVIDENCE_DIVERGING")
+
+    def test_update_state_exports_non_authoritative_reversal_latch(self):
+        s = state()
+        raw = {
+            "ts": 100.0, "bias": "SHORT", "confidence": 0.72,
+            "raw_bias": "SHORT", "raw_confidence": 0.72,
+            "wave_state": "CONTROL_TRANSFER",
+            "knowledge_state": "SUPPORTED",
+            "cash_control": {"control_transfer_confirmed": True},
+            "direction_memory": {"context_side": "LONG", "candidate_side": "SHORT", "phase": "REVERSAL_CANDIDATE"},
+            "reversal_latch": {"status": "CONFIRMED", "candidate_side": "SHORT", "authority": False},
         }
         with patch.object(council, "evaluate", return_value=raw):
             report = council.update_state(s, now=100.0)
-        latch = report["reversal_latch"]
-        self.assertEqual(latch["status"], "CONFIRMED")
-        self.assertEqual(latch["candidate_side"], "SHORT")
-        self.assertEqual(latch["started_at"], 97.0)
-        self.assertFalse(latch["authority"])
-
-
+        self.assertFalse(report["reversal_latch"]["authority"])
+        self.assertEqual(s.bias_wave_state, "CONTROL_TRANSFER")
 
     def test_stale_spot_cannot_vote_direction(self):
         s = state()
         s.thoi_gian_tick_cuoi = 90.0
         r = council.evaluate(s, now=100.0)
         self.assertFalse(r["freshness"]["spot"])
-        self.assertEqual(r["s_votes"]["S1_cross_price"]["vote"], "ABSTAIN")
+        self.assertEqual(r["bias"], "ABSTAIN")
+        self.assertEqual(r["knowledge_state"], "UNKNOWN_SOURCE")
 
-    def test_covering_is_story_not_new_long_build(self):
+    def test_covering_is_positioning_context_not_new_long_build(self):
         s = state()
-        # The causal OI seat now compares the 60-second base (980), not the old
-        # 15-second trigger (990).
         s.open_interest = 970.0
         r = council.evaluate(s, now=100.0)
         metrics = r["s_votes"]["S2_price_x_oi"]["metrics"]
         self.assertEqual(metrics["regime"], "PRICE_UP_OI_CONTRACTION")
-        self.assertEqual(
-            metrics["mechanism_hypothesis"], "SHORT_COVERING_CANDIDATE"
-        )
+        self.assertEqual(metrics["mechanism_hypothesis"], "SHORT_COVERING_CANDIDATE")
         self.assertFalse(metrics["mechanism_confirmed"])
-        self.assertNotEqual(r["s_votes"]["S2_price_x_oi"]["vote"], "LONG")
+        self.assertEqual(r["s_votes"]["S2_price_x_oi"]["vote"], "ABSTAIN")
 
-    def test_contract_remains_direction_only(self):
-        r = council.evaluate(state(), now=100.0)
-        self.assertEqual(r["contract"], "DIRECTION_ONLY_NO_ENTRY_TIMING")
-        self.assertIn("story", r)
-        for forbidden in ("entry", "zone", "setup", "action", "price_entry", "stop_loss", "take_profit"):
-            self.assertNotIn(forbidden, r)
-
-    def test_futures_bias_flow_uses_60s_aggregate_not_20s_raw_ring(self):
+    def test_futures_flow_is_diagnostic_not_direction_authority(self):
         s = state()
         s.futures_flow_1s_buffer = deque(
             {"second": sec, "ts": float(sec), "buy": 1.0, "sell": 0.0}
             for sec in range(41, 101)
         )
-        # Raw retention can contain a short opposing tail; it must not replace
-        # the declared 60s Bias aggregate.
-        s.danh_sach_khop_lenh_futures = deque([
-            {"thoi_gian_ms": 100000.0, "khoi_luong": 5.0,
-             "ban_chu_dong": True, "gia": 100.0},
-        ])
         imbalance, volume = council.flow_imb(s, 100.0, fut=True)
         self.assertAlmostEqual(imbalance, 1.0)
         self.assertAlmostEqual(volume, 60.0)
+        self.assertFalse(council.evaluate(s, now=100.0)["cash_control"]["futures_direction_authority"])
 
     def test_background_pressure_and_marginal_control_are_separate_questions(self):
         s = state()
@@ -233,23 +294,11 @@ class BiasCouncilTests(unittest.TestCase):
         )
         s.coinbase_cvd_3s = -1.0
         s.coinbase_volume_3s = 1.0
-        s.coinbase_flow_3s_ts = 100.0
         report = council.evaluate(s, now=100.0)
         context = report["flow_question_context"]
-        self.assertIn(
-            context["background_pressure_60s"]["side"],
-            ("LONG", "SHORT", "ABSTAIN"),
-        )
-        self.assertFalse(
-            context["marginal_control_1_5s"]["authority"]
-        )
-        self.assertTrue(
-            context["causal_families"]["binance_complex_echo"]
-        )
-        self.assertEqual(
-            context["causal_families"]["cash_family"]["dual_cash_side"],
-            "UNKNOWN",
-        )
+        self.assertIn(context["background_pressure_60s"]["side"], ("LONG", "SHORT", "ABSTAIN"))
+        self.assertFalse(context["marginal_control_1_5s"]["authority"])
+        self.assertTrue(context["causal_families"]["binance_complex_echo"])
 
     def test_spot_futures_echo_does_not_form_independent_s3_quorum(self):
         agreed, reason = council.flow_family_consensus([
@@ -259,13 +308,30 @@ class BiasCouncilTests(unittest.TestCase):
         self.assertEqual(agreed, [])
         self.assertEqual(reason, "BINANCE_COMPLEX_ECHO_UNCORROBORATED")
 
-    def test_coinbase_futures_can_form_cross_family_s3_quorum(self):
+    def test_coinbase_futures_do_not_form_direction_quorum(self):
         agreed, reason = council.flow_family_consensus([
             ("coinbase", "SHORT", 0.8),
             ("futures", "SHORT", 0.9),
         ])
-        self.assertEqual([row[0] for row in agreed], ["coinbase", "futures"])
-        self.assertEqual(reason, "CASH_DERIVATIVE_FLOW")
+        self.assertEqual(agreed, [])
+        self.assertEqual(reason, "CASH_DERIVATIVE_NOT_DIRECTION_QUORUM")
+
+    def test_only_dual_independent_cash_forms_flow_support(self):
+        agreed, reason = council.flow_family_consensus([
+            ("spot", "LONG", 0.6),
+            ("coinbase", "LONG", 0.7),
+            ("futures", "LONG", 0.9),
+        ])
+        self.assertEqual([row[0] for row in agreed], ["spot", "coinbase"])
+        self.assertEqual(reason, "DUAL_CASH_FLOW")
+
+    def test_one_hour_is_observation_lens_not_fixed_rule(self):
+        self.assertIn(3600.0, council.OBSERVATION_LENSES)
+        self.assertEqual(
+            council.FORECAST_SCOPE,
+            "MEANINGFUL_DIRECTIONAL_REGIME_NOT_FIXED_TIME_TARGET",
+        )
+        self.assertFalse(council.evaluate(state(), now=100.0)["cash_control"]["historical_lens_direction_authority"])
 
 
 if __name__ == "__main__":
