@@ -15,9 +15,9 @@ MAX_PENDING = 512
 MAX_CLOSED = 2_048
 DIAGNOSTIC_WAVE_GAP_MS = 5_000
 DIAGNOSTIC_WAVE_PRICE_BPS = 3.0
-VERSION = "DECISION_COUNTERFACTUAL_V7_EXPLICIT_SIDE_TRUTH"
-ADJUDICATION_VERSION = "ECONOMIC_MISS_ADJUDICATION_V3_EXPLICIT_SIDE_TRUTH"
-DOSSIER_VERSION = "OPPORTUNITY_DOSSIER_V2_EXPLICIT_SIDE_TRUTH"
+VERSION = "DECISION_COUNTERFACTUAL_V8_SEPARATE_SIDE_AUTHORITIES"
+ADJUDICATION_VERSION = "ECONOMIC_MISS_ADJUDICATION_V4_SEPARATE_SIDE_AUTHORITIES"
+DOSSIER_VERSION = "OPPORTUNITY_DOSSIER_V3_SEPARATE_SIDE_AUTHORITIES"
 MAX_DECISION_TRACE = 32
 
 
@@ -113,6 +113,9 @@ class DecisionOutcomeTracker:
                 "decision_side": decision.get("decision_side") or output.get(
                     "side"
                 ),
+                "counterfactual_side": counterfactual.get(
+                    "counterfactual_side"
+                ) or counterfactual.get("side"),
                 "frozen_economics": dict(
                     counterfactual.get("frozen_economics") or {}
                 ),
@@ -186,6 +189,15 @@ class DecisionOutcomeTracker:
                 "decision": (
                     "ABORTED_EXECUTION"
                     if event == "ENTRY_FILLED_THEN_FLATTENED" else "SKIP"
+                ),
+                "background_bias_side": payload.get("background_bias_side"),
+                "causal_episode_side": payload.get("causal_episode_side"),
+                "decision_side": payload.get("decision_side"),
+                "counterfactual_side": (
+                    (payload.get("counterfactual") or {}).get(
+                        "counterfactual_side"
+                    )
+                    or (payload.get("counterfactual") or {}).get("side")
                 ),
                 "reason": payload.get("reason"),
                 "taxonomy_version": payload.get("taxonomy_version"),
@@ -404,6 +416,7 @@ class DecisionOutcomeTracker:
                 ),
                 "causal_episode_side": tracker.get("causal_episode_side"),
                 "decision_side": tracker.get("decision_side"),
+                "counterfactual_side": tracker.get("counterfactual_side"),
                 "research_only_reason": tracker.get(
                     "research_only_reason"
                 ),
@@ -580,7 +593,10 @@ class DecisionOutcomeTracker:
     def _register_candidate(self, record, candidate):
         cf = candidate.get("counterfactual") or {}
         cycle_id = str(candidate.get("cycle_id") or "")
-        side = str(cf.get("side") or "").upper()
+        side = str(
+            candidate.get("counterfactual_side")
+            or cf.get("counterfactual_side") or cf.get("side") or ""
+        ).upper()
         reference = _f(cf.get("reference_price"))
         if (
             not cycle_id or not cf.get("eligible")
@@ -675,6 +691,7 @@ class DecisionOutcomeTracker:
                 candidate.get("causal_episode_side") or side
             ),
             "decision_side": candidate.get("decision_side"),
+            "counterfactual_side": side,
             "research_only_reason": cf.get("research_only_reason"),
             "reference_price": reference,
             "hard_sl_bps": _f(cf.get("hard_sl_bps"), None),

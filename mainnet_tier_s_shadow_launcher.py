@@ -1020,6 +1020,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
                 if research_origin_valid else "DECISION_TIME_ORIGIN"
             ),
             "side": causal_episode_side,
+            "counterfactual_side": causal_episode_side,
             "background_bias_side": background_bias_side,
             "causal_episode_side": causal_episode_side,
             "decision_side": decision_side,

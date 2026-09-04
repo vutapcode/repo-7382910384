@@ -225,6 +225,9 @@ class MissTaxonomyTests(unittest.TestCase):
         self.assertEqual(snapshot["decision_side"], "SHORT")
         self.assertEqual(snapshot["causal_episode_side"], "LONG")
         self.assertEqual(snapshot["counterfactual"]["side"], "LONG")
+        self.assertEqual(
+            snapshot["counterfactual"]["counterfactual_side"], "LONG"
+        )
         self.assertFalse(snapshot["counterfactual"]["economic_miss_eligible"])
         self.assertEqual(
             snapshot["counterfactual"]["research_only_reason"],

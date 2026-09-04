@@ -484,6 +484,7 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertEqual(tracker["background_bias_side"], "SHORT")
         self.assertEqual(tracker["causal_episode_side"], "LONG")
         self.assertEqual(tracker["side"], "LONG")
+        self.assertEqual(tracker["counterfactual_side"], "LONG")
 
     def test_full_counterfactual_can_confirm_good_reject(self):
         event = decision_event(episode_id="episode-good-reject")
