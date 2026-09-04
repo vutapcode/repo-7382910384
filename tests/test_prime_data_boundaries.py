@@ -53,6 +53,7 @@ def test_coinbase_l2_is_namespaced_and_authority_false():
         "prime_test_tai_coinbase",
         "1_tai_du_lieu/tai_coinbase/tai_coinbase.py",
     )
+    assert cb.COINBASE_WS_MAX_SIZE >= 2 * 1024 * 1024
     book = cb.CoinbaseL2Book()
     assert book.snapshot({
         "bids": [["100", "1.0"], ["99", "2.0"]],

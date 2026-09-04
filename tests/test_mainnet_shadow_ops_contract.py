@@ -9,7 +9,8 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         path = ROOT / "1_tai_du_lieu" / "tai_coinbase" / "tai_coinbase.py"
         text = path.read_text(encoding="utf-8")
         self.assertIn("COINBASE_WS_URL =", text)
-        self.assertIn("COINBASE_WS_URL, ping_interval=20", text)
+        self.assertIn("COINBASE_WS_URL,", text)
+        self.assertIn("max_size=COINBASE_WS_MAX_SIZE", text)
         self.assertNotIn("COINBASEE_WS_URL", text)
 
     def test_mainnet_service_runs_unprivileged_with_stable_state_paths(self):
@@ -113,7 +114,8 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         self.assertIn('async def liquidations', text)
         self.assertIn('@forceOrder', text)
         self.assertIn('mod.hung_force_order_futures = liquidations', text)
-        self.assertIn('subscribe to aggTrade only (never forceOrder here)', text)
+        self.assertIn('one liquidation ingest path', text)
+        self.assertIn('force_order_observer=None', text)
         self.assertNotIn('WhaleIntent', text)
         self.assertIn("state.system_ready = False", text)
 

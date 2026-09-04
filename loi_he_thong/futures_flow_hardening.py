@@ -112,6 +112,21 @@ def _unwrap_combined_stream(payload):
     return data if isinstance(data, dict) else payload
 
 
+def _dispatch_futures_payload(
+    state, data, recv_ms, recv_mono_ns=None, force_order_observer=None,
+):
+    """Route one combined-stream event to exactly one causal owner."""
+    event = _unwrap_combined_stream(data)
+    if str(event.get("e", "")) == "forceOrder":
+        observer = (
+            force_order_observer
+            if callable(force_order_observer)
+            else liquidation_context.observe_force_order
+        )
+        return observer(state, event, recv_ms)
+    return _apply_futures_event(state, event, recv_ms, recv_mono_ns)
+
+
 def _ensure_ring(state):
     ring = getattr(state, "danh_sach_khop_lenh_futures", None)
     maxlen = getattr(ring, "maxlen", None) if ring is not None else None
@@ -243,25 +258,42 @@ def install(base):
                 logging.exception("[SPOT FLOW] hardened collector failure")
                 await asyncio.sleep(3)
 
-    async def hardened(symbol: str, state):
+    async def hardened(
+        symbol: str,
+        state,
+        force_order_observer=None,
+        force_order_epoch_reset=None,
+    ):
         # The direct /ws endpoint can complete the handshake yet deliver no
-        # Futures events from some Lightsail routes.  The combined market
-        # endpoint is the same canonical aggTrade source and is also used by
-        # the recorder; subscribe to aggTrade only (never forceOrder here).
-        stream = f"{symbol.lower()}@aggTrade"
-        url = f"wss://fstream.binance.com/market/stream?streams={stream}"
+        # Futures events from some Lightsail routes.  Keep aggTrade and
+        # forceOrder on one combined socket so the active runtime has exactly
+        # one liquidation ingest path and one reconnect/epoch boundary.
+        streams = f"{symbol.lower()}@aggTrade/{symbol.lower()}@forceOrder"
+        url = f"wss://fstream.binance.com/market/stream?streams={streams}"
         _ensure_ring(state)
         while True:
             try:
                 async with mod.websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
                     reset_futures_epoch(state)
+                    reset_liquidation = (
+                        force_order_epoch_reset
+                        if callable(force_order_epoch_reset)
+                        else liquidation_context.reset_epoch
+                    )
+                    reset_liquidation(state)
                     last_agg_id = None
-                    logging.info("[FUTURES FLOW] hardened Mainnet local-time collector epoch=%s: %s", state.futures_flow_epoch, symbol.upper())
+                    logging.info("[FUTURES FLOW] hardened aggTrade+forceOrder collector epoch=%s: %s", state.futures_flow_epoch, symbol.upper())
                     async for raw in ws:
                         try:
                             data = _unwrap_combined_stream(mod.orjson.loads(raw))
                             recv_ms = time.time() * 1000.0
                             recv_mono_ns = time.monotonic_ns()
+                            if str(data.get("e", "")) == "forceOrder":
+                                _dispatch_futures_payload(
+                                    state, data, recv_ms, recv_mono_ns,
+                                    force_order_observer,
+                                )
+                                continue
                             agg_id = int(data.get("a", 0) or 0)
                             if (
                                 last_agg_id is not None and agg_id > 0
@@ -272,8 +304,9 @@ def install(base):
                                     last_agg_id + 1, agg_id,
                                 )
                                 reset_futures_epoch(state)
-                            if _apply_futures_event(
-                                state, data, recv_ms, recv_mono_ns
+                            if _dispatch_futures_payload(
+                                state, data, recv_ms, recv_mono_ns,
+                                force_order_observer,
                             ) == "TRADE" and agg_id > 0:
                                 last_agg_id = agg_id
                         except (KeyError, TypeError, ValueError):

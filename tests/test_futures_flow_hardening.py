@@ -1,4 +1,5 @@
 from collections import deque
+import inspect
 from types import SimpleNamespace
 import unittest
 
@@ -14,6 +15,15 @@ def state():
 
 
 class FuturesFlowHardeningTests(unittest.TestCase):
+    def test_installed_runtime_accepts_single_socket_force_order_callbacks(self):
+        from importlib import import_module
+        module = import_module("1_tai_du_lieu.tai_dong_tien.tai_dong_tien")
+        base = SimpleNamespace(app=SimpleNamespace(tai_dong_tien=module))
+        installed = hardening.install(base)
+        signature = inspect.signature(installed)
+        self.assertIn("force_order_observer", signature.parameters)
+        self.assertIn("force_order_epoch_reset", signature.parameters)
+
     def test_combined_stream_envelope_is_unwrapped_without_changing_event(self):
         event = {"e": "aggTrade", "p": "100", "q": "0.1", "m": False}
         self.assertIs(hardening._unwrap_combined_stream({
@@ -93,6 +103,30 @@ class FuturesFlowHardeningTests(unittest.TestCase):
             "LIQUIDATION",
         )
         self.assertGreater(s.long_liquidation_quote_total, 0.0)
+        self.assertEqual(len(s.danh_sach_khop_lenh_futures), 0)
+
+    def test_combined_force_order_dispatches_once_without_flow_contamination(self):
+        s = state()
+        calls = []
+
+        def observer(received_state, payload, receive_ms):
+            calls.append((received_state, payload, receive_ms))
+            return "LIQUIDATION"
+
+        result = hardening._dispatch_futures_payload(
+            s,
+            {
+                "stream": "btcusdt@forceOrder",
+                "data": {
+                    "e": "forceOrder", "E": 2_000,
+                    "o": {"S": "SELL", "q": "2", "ap": "100"},
+                },
+            },
+            2_100.0,
+            force_order_observer=observer,
+        )
+        self.assertEqual(result, "LIQUIDATION")
+        self.assertEqual(len(calls), 1)
         self.assertEqual(len(s.danh_sach_khop_lenh_futures), 0)
 
     def test_unrelated_event_does_not_mark_flow_fresh(self):

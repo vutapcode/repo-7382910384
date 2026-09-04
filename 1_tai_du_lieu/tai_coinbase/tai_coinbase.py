@@ -20,6 +20,7 @@ COINBASE_WS_URL = "wss://ws-feed.exchange.coinbase.com"
 L2_PUBLISH_INTERVAL_MS = 100.0
 L2_BATCH_RETENTION = 64
 L2_TOP_LEVELS = 20
+COINBASE_WS_MAX_SIZE = 8 * 1024 * 1024
 
 
 def _subscribe_message(product_id):
@@ -276,7 +277,10 @@ async def hung_coinbase_spot(product_id: str, bo_nho_ram):
     while True:
         try:
             async with websockets.connect(
-                COINBASE_WS_URL, ping_interval=20, ping_timeout=20
+                COINBASE_WS_URL,
+                ping_interval=20,
+                ping_timeout=20,
+                max_size=COINBASE_WS_MAX_SIZE,
             ) as ws:
                 await ws.send(subscribe_msg)
                 # Reconnect is a hard causal boundary for both flow and L2.
