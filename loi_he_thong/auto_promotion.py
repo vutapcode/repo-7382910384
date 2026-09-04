@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from recorder.metadata import code_version as current_code_version
 from recorder.metadata import strategy_config_version as current_config_version
+from loi_he_thong import shadow_ledger_metrics
 
 
 VERSION = "WSTRADE_AUTO_PROMOTION_V1"
@@ -213,7 +214,7 @@ class PromotionController:
 
     @staticmethod
     def _totals(state):
-        return {
+        totals = {
             "opportunities": int(
                 getattr(state, "canonical_opportunity_count", 0) or 0
             ),
@@ -243,6 +244,10 @@ class PromotionController:
                 getattr(state, "mainnet_shadow_stress_25bps_pnl", 0.0) or 0.0
             ),
         }
+        live_like = shadow_ledger_metrics.promotion_totals(state)
+        if live_like is not None:
+            totals.update(live_like)
+        return totals
 
     @staticmethod
     def _deltas(totals, persisted):

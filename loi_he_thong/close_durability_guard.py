@@ -4,6 +4,7 @@ import os
 import time
 
 from loi_he_thong import journal_segments
+from loi_he_thong import shadow_ledger_metrics
 
 _STATE_FIELDS = (
     "mainnet_shadow_balance_usdt",
@@ -22,7 +23,7 @@ _STATE_FIELDS = (
     "mainnet_shadow_daily_lock_reason",
     "mainnet_shadow_daily_lock_at",
     "mainnet_shadow_event_seq",
-)
+) + shadow_ledger_metrics.state_fields()
 _MISSING = object()
 
 

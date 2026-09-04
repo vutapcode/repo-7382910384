@@ -5,9 +5,9 @@ from pathlib import Path
 import tempfile
 import time
 
-from loi_he_thong import execution_transaction
+from loi_he_thong import execution_transaction, shadow_ledger_metrics
 
-VERSION = "SHADOW_RUNTIME_STATE_V14_AUTHORITY_CONTRACTS"
+VERSION = "SHADOW_RUNTIME_STATE_V15_SPLIT_DEMO_LEDGERS"
 SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V1",
     "SHADOW_RUNTIME_STATE_V2",
@@ -22,6 +22,7 @@ SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V11_ENTRY_ECONOMICS_V7_CAUSAL_PROOF_SEMANTICS",
     "SHADOW_RUNTIME_STATE_V12_ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
     "SHADOW_RUNTIME_STATE_V13_EXECUTION_PROTECTION_TRANSACTION",
+    "SHADOW_RUNTIME_STATE_V14_AUTHORITY_CONTRACTS",
     VERSION,
 }
 
@@ -158,6 +159,7 @@ def snapshot(base):
         "breakevens": int(getattr(state, "mainnet_shadow_breakevens", 0) or 0),
         "gross_profit": float(getattr(state, "mainnet_shadow_gross_profit", 0.0) or 0.0),
         "gross_loss": float(getattr(state, "mainnet_shadow_gross_loss", 0.0) or 0.0),
+        "shadow_ledgers": shadow_ledger_metrics.snapshot(state),
         "stress_25bps_pnl": float(
             getattr(state, "mainnet_shadow_stress_25bps_pnl", 0.0) or 0.0
         ),
@@ -305,6 +307,7 @@ def restore(base):
     ):
         if key in raw:
             setattr(state, attr, raw[key])
+    shadow_ledger_metrics.restore(state, raw.get("shadow_ledgers"))
     calibration_rows = raw.get("edge_calibration_rows", [])
     saved_code = str(raw.get("edge_calibration_code_version", "") or "")
     saved_config = str(raw.get("edge_calibration_config_version", "") or "")

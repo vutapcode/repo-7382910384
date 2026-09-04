@@ -13,7 +13,7 @@ import time
 from dotenv import load_dotenv
 from recorder.metadata import code_version, strategy_config_version
 from loi_he_thong.runtime_lock import DuplicateInstanceError, acquire_runtime_lock
-from loi_he_thong import mainnet_safety, strategy_profile
+from loi_he_thong import mainnet_safety, strategy_profile, shadow_ledger_metrics
 from loi_he_thong import tier_s_bootstrap_modules as m
 
 try:
@@ -151,6 +151,7 @@ async def vong_lap_runtime_heartbeat():
             "lightsail_cpu_last_seen": getattr(state, "lightsail_cpu_last_seen", None),
             "metric_age_seconds": getattr(state, "lightsail_metric_age_seconds", None),
             "wstrade_promotion_status": getattr(state, "wstrade_promotion_status", None),
+            "shadow_ledgers": shadow_ledger_metrics.snapshot(state),
             "wstrade_live_armed": bool(getattr(state, "wstrade_live_armed", False)),
             "wstrade_user_stream_ready": bool(
                 getattr(state, "wstrade_user_stream_ready", False)

@@ -4,6 +4,7 @@ import logging
 import time
 
 import mainnet_tier_s_shadow_launcher as base
+from loi_he_thong import shadow_ledger_metrics
 
 risk = base.app.load_module(
     "shadow_risk_guard_runtime",
@@ -194,6 +195,7 @@ async def _account_init():
     ):
         if not hasattr(state, name):
             setattr(state, name, default)
+    shadow_ledger_metrics.initialize(state)
     state.mainnet_shadow_restore_ok = bool(restored)
     base.shadow_daily_loss.initialize(
         state,
@@ -297,6 +299,9 @@ def _close_and_persist(pos, result, now):
     state = base.app.state
     was_active = bool(getattr(pos, "active", False))
     before = float(getattr(state, "mainnet_shadow_balance_usdt", 0.0) or 0.0)
+    stress_before = float(
+        getattr(state, "mainnet_shadow_stress_25bps_pnl", 0.0) or 0.0
+    )
     out = _cost_close(pos, result, now)
     closed = was_active and not bool(getattr(pos, "active", False))
     if closed:
@@ -322,6 +327,16 @@ def _close_and_persist(pos, result, now):
             ) + 1
         state.mainnet_shadow_last_net_pnl = net
         state.mainnet_shadow_last_closed_at = float(now)
+        stress_after = float(
+            getattr(state, "mainnet_shadow_stress_25bps_pnl", stress_before)
+            or stress_before
+        )
+        shadow_ledger_metrics.record_close(
+            state,
+            getattr(pos, "shadow_ledger_type", "RESEARCH_PROBE"),
+            net,
+            stress_delta=stress_after - stress_before,
+        )
         base.shadow_daily_loss.record_close(
             state, net, now=now, limit=base.DAILY_LOSS_USDT,
             enforce=base.SHADOW_DAILY_LOSS_ENFORCED,
