@@ -101,6 +101,15 @@ async def vong_lap_runtime_heartbeat():
             "execution_venue": "BINANCE_FUTURES_MAINNET",
             "system_ready": bool(getattr(state, "system_ready", False)),
             "trading_enabled": bool(getattr(state, "trading_enabled", False)),
+            "runtime_execution_mode": getattr(
+                state, "runtime_execution_mode", "OBSERVE_ONLY"
+            ),
+            "shadow_demo_enabled": bool(
+                getattr(state, "shadow_demo_enabled", False)
+            ),
+            "live_exchange_mutations_enabled": bool(
+                getattr(state, "live_exchange_mutations_enabled", False)
+            ),
             "readiness_reason": getattr(state, "last_readiness_reason", None),
             "position_status": getattr(state, "position_status", None),
             "decision_revision": int(getattr(state, "decision_revision", 0) or 0),

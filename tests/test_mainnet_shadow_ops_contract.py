@@ -88,6 +88,16 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertIn("shadow_readiness_authoritative", text)
         self.assertIn("mainnet_shadow_health", text)
+        self.assertIn("readiness_execution_mode", text)
+        self.assertIn("SHADOW DEMO", text)
+        self.assertIn("shadow_demo_enabled", text)
+
+    def test_heartbeat_distinguishes_shadow_demo_from_live_mutation(self):
+        path = ROOT / "loi_he_thong" / "tier_s_bootstrap_runtime.py"
+        text = path.read_text(encoding="utf-8")
+        self.assertIn('"runtime_execution_mode"', text)
+        self.assertIn('"shadow_demo_enabled"', text)
+        self.assertIn('"live_exchange_mutations_enabled"', text)
 
     def test_shadow_state_persists_ratchet_and_resets_short_term_pressure(self):
         path = ROOT / "loi_he_thong" / "shadow_runtime_state.py"

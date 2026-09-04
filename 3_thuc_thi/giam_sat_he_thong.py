@@ -38,6 +38,25 @@ RECORDER_HEALTH_PATH = Path(os.getenv(
 RECORDER_DISABLED = os.getenv('SMC_RECORDER_POLICY', 'ENABLED').upper() == 'DISABLED'
 
 
+def readiness_execution_mode(state, ready):
+    """Describe which execution lane is usable without conflating demo/live."""
+    live_enabled = bool(
+        ready
+        and getattr(state, 'execution_allowed', True)
+        and getattr(state, 'trading_enabled', False)
+    )
+    shadow_enabled = bool(
+        ready
+        and getattr(state, 'shadow_readiness_authoritative', False)
+        and not live_enabled
+    )
+    if live_enabled:
+        return 'LIVE', True, False
+    if shadow_enabled:
+        return 'SHADOW_DEMO', False, True
+    return 'OBSERVE_ONLY', False, False
+
+
 def _write_json_atomic(path, payload):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -361,19 +380,31 @@ async def vong_lap_giam_sat(state):
             state.trading_enabled = (
                 ready and getattr(state, 'execution_allowed', True)
             )
+            execution_mode, live_enabled, shadow_enabled = (
+                readiness_execution_mode(state, ready)
+            )
+            state.runtime_execution_mode = execution_mode
+            state.live_exchange_mutations_enabled = live_enabled
+            state.shadow_demo_enabled = shadow_enabled
             state.last_readiness_reason = reason
             published_ready = ready
             published_reason = reason
 
             if reason != previous_reason:
                 if ready:
-                    if state.trading_enabled:
+                    if live_enabled:
                         logging.info(
                             '✅ [WATCHDOG] SYSTEM READY — cho phép nhận entry.'
                         )
+                    elif shadow_enabled:
+                        logging.info(
+                            '✅ [WATCHDOG] SYSTEM READY — SHADOW DEMO '
+                            'nhận entry; lệnh thật bị khóa.'
+                        )
                     else:
                         logging.info(
-                            '✅ [WATCHDOG] SYSTEM READY — DRY RUN, entry đang bị khóa.'
+                            '✅ [WATCHDOG] SYSTEM READY — OBSERVE ONLY, '
+                            'không có execution lane.'
                         )
                 else:
                     logging.warning('⛔ [WATCHDOG] Khóa entry: %s', reason)
@@ -381,5 +412,8 @@ async def vong_lap_giam_sat(state):
         except Exception as exc:
             state.system_ready = False
             state.trading_enabled = False
+            state.runtime_execution_mode = 'OBSERVE_ONLY'
+            state.live_exchange_mutations_enabled = False
+            state.shadow_demo_enabled = False
             logging.exception('❌ [WATCHDOG] Lỗi readiness: %s', exc)
         await asyncio.sleep(1)
