@@ -70,7 +70,233 @@ def evidence_row(receive_ms, side, price, *, strong=True, material=True):
     }
 
 
+def acquisition_handoff(
+    side="LONG", *, completed_ms=99_500, epoch=1, segments=2,
+):
+    evidence = []
+    for index in range(segments):
+        evidence.append({
+            "state": "CONVERTING", "side": side,
+            "reason": "DUAL_CASH_FLOW_CONVERTS_TO_PRICE",
+            "start_age_seconds": 15.0 if index == 0 else 0.0,
+            "end_age_seconds": 60.0 if index == 0 else 15.0,
+            "newer_ts": 85.0 if index == 0 else 100.0,
+            "older_ts": 40.0 if index == 0 else 85.0,
+            "newer_epochs": {
+                "spot": epoch, "coinbase": epoch, "futures": epoch,
+            },
+            "older_epochs": {
+                "spot": epoch, "coinbase": epoch, "futures": epoch,
+            },
+            "price": {
+                "vote": side,
+                "metrics": {
+                    "moves": {
+                        "spot": 0.01 if side == "LONG" else -0.01,
+                        "coinbase": 0.01 if side == "LONG" else -0.01,
+                    },
+                },
+            },
+            "flow": {"vote": side, "metrics": {}},
+        })
+    sealed = {
+        "version": ignition_core.ACQUISITION_HANDOFF_VERSION,
+        "side": side,
+        "first_converting_segment_onset_ms": completed_ms - 60_000,
+        "ownership_completed_ms": completed_ms,
+        "venue_epochs": {"spot": epoch, "coinbase": epoch},
+        "directional_cash_roots": [
+            "BINANCE_SPOT_CASH", "COINBASE_USD_CASH",
+        ],
+        "temporal_persistence_segments": segments,
+        "segment_evidence": evidence,
+        "bias_version": "TEST",
+        "bias_confidence": 0.72,
+        "bias_hysteresis": "ACQUIRE_CASH_REGIME",
+    }
+    digest = ignition_core._canonical_json_hash(sealed)
+    return {
+        **sealed,
+        "causal_wave_id": "cash-acquisition:%s" % digest[:20],
+        "handoff_hash": digest,
+        "sealed_payload": sealed,
+        "status": "SEALED", "sealed": True,
+        "authority": False, "entry_authority": False,
+    }
+
+
 class IgnitionCoreTests(unittest.TestCase):
+    @staticmethod
+    def _acquisition_histories(side="LONG", epoch=1, include_coinbase=True):
+        first = evidence_row(99_550, side, 100.001)
+        second = evidence_row(99_650, side, 100.003)
+        coinbase = evidence_row(99_600, side, 100.002)
+        coinbase["venue"] = "coinbase_spot"
+        futures = evidence_row(99_700, side, 100.003)
+        futures.update({"venue": "futures", "total_qty": 0.20})
+        for row in (first, second, coinbase, futures):
+            row["epoch"] = epoch
+        return {
+            "binance_spot": (first, second),
+            "coinbase_spot": (coinbase,) if include_coinbase else (),
+            "futures": (futures,),
+        }
+
+    def test_acquisition_handoff_reuses_same_wave_without_third_impulse(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff()
+        histories = self._acquisition_histories()
+
+        episode = ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        )
+
+        self.assertIsNotNone(episode)
+        self.assertEqual(
+            episode["causal_episode_id"],
+            s.bias_acquisition_handoff["causal_wave_id"],
+        )
+        self.assertEqual(episode["causal_wave_started_receive_ms"], 39_500)
+        self.assertEqual(episode["cash_ownership_completed_ms"], 99_500)
+        self.assertEqual(
+            {row["venue"] for row in episode["signals"]},
+            {"binance_spot", "coinbase_spot", "futures"},
+        )
+        proof_type, _proof, venue = ignition_core._proof(episode, histories)
+        self.assertEqual(proof_type, "METAORDER_CONTINUATION")
+        self.assertEqual(venue, "binance_spot")
+
+    def test_acquisition_handoff_never_works_from_one_segment_or_one_cash(self):
+        for handoff, histories in (
+            (
+                acquisition_handoff(segments=1),
+                self._acquisition_histories(),
+            ),
+            (
+                acquisition_handoff(),
+                self._acquisition_histories(include_coinbase=False),
+            ),
+        ):
+            s = state(now=100.0)
+            s.bias_version = "TEST"
+            s.bias_acquisition_handoff = handoff
+            episode = ignition_core._start_acquisition_handoff_episode(
+                s, histories, 100_000, "LONG",
+            )
+            self.assertIsNone(episode)
+
+    def test_acquisition_handoff_fails_closed_across_epoch_or_cash_stop(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(epoch=1)
+        epoch_changed = self._acquisition_histories(epoch=2)
+        self.assertIsNone(ignition_core._start_acquisition_handoff_episode(
+            s, epoch_changed, 100_000, "LONG",
+        ))
+        self.assertEqual(
+            s._ignition_acquisition_handoff_observation["status"],
+            "ACQUISITION_HANDOFF_EPOCH_CHANGED",
+        )
+
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff()
+        stopped = self._acquisition_histories()
+        stopped["coinbase_spot"][0]["price_conversion_bps"] = 0.01
+        self.assertIsNone(ignition_core._start_acquisition_handoff_episode(
+            s, stopped, 100_000, "LONG",
+        ))
+        self.assertEqual(
+            s._ignition_acquisition_handoff_observation["status"],
+            "WAIT_ACQUISITION_CURRENT_DUAL_CASH",
+        )
+
+    def test_acquisition_handoff_is_shadow_only_after_full_ignition_proof(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff()
+        histories = self._acquisition_histories()
+        episode = ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        )
+        freshness = {
+            "coinbase_mode": "FRESH", "binance_spot_ready": True,
+            "futures_ready": True,
+        }
+        phase = {
+            "valid": True, "source": "TEST", "phase_scale_bps": 20.0,
+            "cash_displacement_bps": 2.0,
+            "episode_cash_displacement_bps": 0.3,
+            "precursor_cash_displacement_bps": 0.0,
+            "acquisition_cash_displacement_bps": 2.0,
+            "consumed_fraction": 0.10,
+        }
+        with patch.object(
+            ignition_core, "_phase_measurement", return_value=phase,
+        ), patch.object(
+            ignition_core, "_oi_verification",
+            return_value={"status": "UNCHANGED_UNKNOWN", "intent": "NEUTRAL"},
+        ):
+            result = ignition_core._result_from_episode(
+                s, episode, histories, freshness, 100.0,
+            )
+        self.assertEqual(result["decision"], "GO")
+        self.assertEqual(result["authority_basis"], "BIAS_ALIGNED")
+        self.assertIn(
+            "acquisition_handoff", result["authority_dependencies"],
+        )
+        valid, reason, detail = ignition_core.validate_frozen_entry_contract(
+            result, authority_scope="SHADOW",
+        )
+        self.assertTrue(valid, reason)
+        self.assertTrue(detail["shadow_bootstrap_authority"])
+        valid, reason, detail = ignition_core.validate_frozen_entry_contract(
+            result, authority_scope="LIVE",
+        )
+        self.assertFalse(valid)
+        self.assertEqual(
+            reason, "ACQUISITION_HANDOFF_LIVE_AUTHORITY_DISABLED",
+        )
+        self.assertFalse(detail["live_authority"])
+
+    def test_evaluate_claims_acquisition_without_waiting_for_new_signal(self):
+        """The evaluator consumes already-available cash proof exactly once."""
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff()
+        histories = self._acquisition_histories()
+        for venue in ignition_signals.engine(s).venues.values():
+            venue.epoch = 1
+        with patch.object(
+            ignition_signals, "snapshot", return_value=histories,
+        ), patch.object(
+            ignition_core, "_new_signals", return_value=[],
+        ), patch.object(
+            ignition_core, "_phase_measurement", return_value={
+                "valid": True, "source": "TEST", "phase_scale_bps": 20.0,
+                "cash_displacement_bps": 2.0,
+                "episode_cash_displacement_bps": 0.3,
+                "precursor_cash_displacement_bps": 0.0,
+                "acquisition_cash_displacement_bps": 2.0,
+                "consumed_fraction": 0.10,
+            },
+        ), patch.object(
+            ignition_core, "_oi_verification",
+            return_value={"status": "UNCHANGED_UNKNOWN", "intent": "NEUTRAL"},
+        ):
+            result = ignition_core.evaluate(s, now=100.0)
+
+        self.assertEqual(result["decision"], "GO")
+        self.assertEqual(
+            result["causal_episode_id"],
+            s.bias_acquisition_handoff["causal_wave_id"],
+        )
+        self.assertEqual(
+            s._ignition_acquisition_handoff_observation["status"],
+            "CLAIMED_BY_IGNITION_TIMING",
+        )
+
     def test_bucket_availability_is_when_finalize_due_observes_it(self):
         venue = ignition_signals._Venue("binance_spot")
         venue.push(1_001, 991, 100.0, 0.01, True)

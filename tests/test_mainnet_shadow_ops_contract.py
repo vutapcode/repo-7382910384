@@ -54,6 +54,14 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         self.assertIn('request_oi_refresh(s, "ENTRY_CAUSAL_PHASE")', text)
         self.assertIn("previous_oi_interval > 5.0", text)
 
+    def test_bias_runtime_uses_owner_update_and_records_acquisition_handoff(self):
+        text = (ROOT / "mainnet_tier_s_shadow_launcher.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("bias_council.update_state(s, now=now)", text)
+        self.assertNotIn("result = bias_council.evaluate(s, now=now)", text)
+        self.assertIn('"bias_acquisition_handoff": acquisition_handoff', text)
+
     def test_coinbase_rolling_flow_is_incremental(self):
         path = ROOT / "1_tai_du_lieu" / "tai_coinbase" / "tai_coinbase.py"
         text = path.read_text(encoding="utf-8")

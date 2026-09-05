@@ -17,9 +17,9 @@ MAX_PENDING = 512
 MAX_CLOSED = 2_048
 DIAGNOSTIC_WAVE_GAP_MS = 5_000
 DIAGNOSTIC_WAVE_PRICE_BPS = 3.0
-VERSION = "DECISION_COUNTERFACTUAL_V8_SEPARATE_SIDE_AUTHORITIES"
+VERSION = "DECISION_COUNTERFACTUAL_V9_ACQUISITION_COHORT"
 ADJUDICATION_VERSION = "ECONOMIC_MISS_ADJUDICATION_V4_SEPARATE_SIDE_AUTHORITIES"
-DOSSIER_VERSION = "OPPORTUNITY_DOSSIER_V3_SEPARATE_SIDE_AUTHORITIES"
+DOSSIER_VERSION = "OPPORTUNITY_DOSSIER_V4_ACQUISITION_COHORT"
 MAX_DECISION_TRACE = 32
 
 
@@ -419,6 +419,15 @@ class DecisionOutcomeTracker:
                 "persistent_metaorder_candidate_id": tracker.get(
                     "persistent_metaorder_candidate_id"
                 ),
+                "acquisition_candidate_id": tracker.get(
+                    "acquisition_candidate_id"
+                ),
+                "acquisition_wave_onset_ms": tracker.get(
+                    "acquisition_wave_onset_ms"
+                ),
+                "acquisition_ownership_completed_ms": tracker.get(
+                    "acquisition_ownership_completed_ms"
+                ),
                 "sample_scope": tracker.get("sample_scope"),
                 "anchor_role": tracker.get("anchor_role"),
                 "side": tracker.get("side"),
@@ -603,6 +612,96 @@ class DecisionOutcomeTracker:
             },
         }
 
+    @staticmethod
+    def _acquisition_candidate(record):
+        """Open a research cohort even when Ignition never creates a candidate."""
+        if str(record.get("stream", "")) != "bot_event":
+            return None
+        payload = record.get("payload") or {}
+        if str(payload.get("event", "")) != "DECISION_EVALUATED":
+            return None
+        handoff = dict(payload.get("bias_acquisition_handoff") or {})
+        if not (
+            str(handoff.get("status") or "") == "SEALED"
+            and handoff.get("sealed") is True
+            and handoff.get("authority") is False
+            and handoff.get("entry_authority") is False
+        ):
+            return None
+        side = str(handoff.get("side") or "ABSTAIN").upper()
+        candidate_id = str(handoff.get("causal_wave_id") or "")
+        decision = payload.get("decision_record") or {}
+        source_cf = decision.get("counterfactual") or {}
+        reference = _f(source_cf.get("decision_reference_price")) or _f(
+            source_cf.get("reference_price")
+        )
+        availability_ms = int(record.get("event_time_ms", 0) or 0)
+        completed_ms = int(handoff.get("ownership_completed_ms", 0) or 0)
+        if (
+            side not in ("LONG", "SHORT") or not candidate_id
+            or reference <= 0.0 or availability_ms <= 0
+            or completed_ms <= 0 or completed_ms > availability_ms
+        ):
+            return None
+        counterfactual = dict(source_cf)
+        counterfactual.update({
+            "eligible": True,
+            "economic_miss_eligible": False,
+            "research_only_reason": "CASH_ACQUISITION_REQUIRES_CANONICAL_REPLAY",
+            "side": side,
+            "counterfactual_side": side,
+            "reference_price": reference,
+            # Availability time is the earliest lawful counterfactual decision;
+            # the older cash-wave onset remains provenance, never a fake fill.
+            "origin_receive_time_ms": availability_ms,
+            "origin_candidate_id": candidate_id,
+            "origin_link_status": "OWNERSHIP_COMPLETION_AVAILABILITY_TIME",
+        })
+        return {
+            "cycle_id": decision.get("cycle_id") or payload.get("cycle_id"),
+            "causal_episode_id": None,
+            "acquisition_candidate_id": candidate_id,
+            "acquisition_wave_onset_ms": int(
+                handoff.get("first_converting_segment_onset_ms", 0) or 0
+            ),
+            "acquisition_ownership_completed_ms": completed_ms,
+            "acquisition_handoff_evidence": handoff,
+            "counterfactual_side": side,
+            "miss_taxonomy": "CASH_CONTROL_ACQUISITION_SHADOW_CANDIDATE",
+            "failed_gates": [],
+            "counterfactual": counterfactual,
+            "frozen_economics": dict(
+                counterfactual.get("frozen_economics") or {}
+            ),
+            "decision": "SHADOW_OBSERVATION",
+            "reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+            "taxonomy_version": decision.get("taxonomy_version"),
+            "strategy_code_version": decision.get("strategy_code_version"),
+            "strategy_config_version": decision.get(
+                "strategy_config_version"
+            ),
+            "anchor_rank": 0,
+            "anchor_role": "CASH_ACQUISITION_CANDIDATE",
+            "qualified_now": False,
+            "authority": False,
+            "decision_evidence": {
+                "event_time_ms": availability_ms,
+                "cycle_id": decision.get("cycle_id") or payload.get("cycle_id"),
+                "decision": "SHADOW_OBSERVATION",
+                "reason": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+                "blocking_stage": "RESEARCH_ONLY",
+                "blocking_reason": None,
+                "blocking_reasons": [],
+                "diagnostic_reasons": [],
+                "failed_gates": [],
+                "miss_taxonomy": (
+                    "CASH_CONTROL_ACQUISITION_SHADOW_CANDIDATE"
+                ),
+                "entry_mode": None,
+                "qualified_now": False,
+            },
+        }
+
     def _register_candidate(self, record, candidate):
         cf = candidate.get("counterfactual") or {}
         cycle_id = str(candidate.get("cycle_id") or "")
@@ -633,12 +732,16 @@ class DecisionOutcomeTracker:
         persistent_id = str(
             candidate.get("persistent_metaorder_candidate_id") or ""
         )
+        acquisition_id = str(candidate.get("acquisition_candidate_id") or "")
         suffix = (
             "::EXECUTION" if episode_id and anchor_role == "EXECUTION"
             else "::GO" if episode_id and anchor_role in ("QUALIFIED", "GO_CANDIDATE")
             else ""
         )
-        if persistent_id:
+        if acquisition_id:
+            sample_scope = "CASH_ACQUISITION_SHADOW"
+            tracking_key = acquisition_id
+        elif persistent_id:
             sample_scope = "PERSISTENT_METAORDER_SHADOW"
             tracking_key = persistent_id
         elif episode_id:
@@ -721,13 +824,47 @@ class DecisionOutcomeTracker:
             # ordinary decision-cycle noise still closes at 60 seconds.
             "windows_ms": (
                 PERSISTENT_WINDOWS_MS
-                if sample_scope == "PERSISTENT_METAORDER_SHADOW"
+                if sample_scope in {
+                    "PERSISTENT_METAORDER_SHADOW",
+                    "CASH_ACQUISITION_SHADOW",
+                }
                 else CAUSAL_WINDOWS_MS
                 if economic_miss_eligible
                 else WINDOWS_MS
             ),
         }
         self._append_decision_evidence(self.pending[tracking_key], candidate)
+        if acquisition_id:
+            self.emit(
+                "cash_acquisition_candidate",
+                {
+                    "version": "CASH_ACQUISITION_RESEARCH_V1",
+                    "authority": False,
+                    "entry_authority": False,
+                    "economic_miss_eligible": False,
+                    "acquisition_candidate_id": acquisition_id,
+                    "side": side,
+                    "wave_onset_ms": candidate.get(
+                        "acquisition_wave_onset_ms"
+                    ),
+                    "ownership_completed_ms": candidate.get(
+                        "acquisition_ownership_completed_ms"
+                    ),
+                    "observation_available_ms": decision_ms,
+                    "reference_price": reference,
+                    "strategy_code_version": candidate.get(
+                        "strategy_code_version"
+                    ),
+                    "strategy_config_version": candidate.get(
+                        "strategy_config_version"
+                    ),
+                    "policy": (
+                        "MEASURE_FROM_AVAILABILITY_TIME_NO_LOOKAHEAD_"
+                        "CANONICAL_REPLAY_REQUIRED"
+                    ),
+                },
+                event_time_ms=decision_ms,
+            )
         if economic_miss_eligible:
             self._emit_execution_twin_manifest(
                 record, self.pending[tracking_key]
@@ -822,6 +959,9 @@ class DecisionOutcomeTracker:
         persistent = self._persistent_candidate(record)
         if persistent is not None:
             self._register_candidate(record, persistent)
+        acquisition = self._acquisition_candidate(record)
+        if acquisition is not None:
+            self._register_candidate(record, acquisition)
 
     def _close_key(self, tracking_key):
         self.closed[str(tracking_key)] = True
@@ -841,6 +981,15 @@ class DecisionOutcomeTracker:
                 "diagnostic_wave_id": tracker.get("diagnostic_wave_id"),
                 "persistent_metaorder_candidate_id": tracker.get(
                     "persistent_metaorder_candidate_id"
+                ),
+                "acquisition_candidate_id": tracker.get(
+                    "acquisition_candidate_id"
+                ),
+                "acquisition_wave_onset_ms": tracker.get(
+                    "acquisition_wave_onset_ms"
+                ),
+                "acquisition_ownership_completed_ms": tracker.get(
+                    "acquisition_ownership_completed_ms"
                 ),
                 "sample_scope": tracker.get("sample_scope"),
                 "episode_anchor_rank": tracker.get("anchor_rank"),
@@ -949,6 +1098,18 @@ class DecisionOutcomeTracker:
                         "diagnostic_wave_id": tracker.get("diagnostic_wave_id"),
                         "persistent_metaorder_candidate_id": tracker.get(
                             "persistent_metaorder_candidate_id"
+                        ),
+                        "acquisition_candidate_id": tracker.get(
+                            "acquisition_candidate_id"
+                        ),
+                        "acquisition_wave_onset_ms": tracker.get(
+                            "acquisition_wave_onset_ms"
+                        ),
+                        "acquisition_ownership_completed_ms": tracker.get(
+                            "acquisition_ownership_completed_ms"
+                        ),
+                        "acquisition_handoff_evidence": tracker.get(
+                            "acquisition_handoff_evidence"
                         ),
                         "persistent_candidate_started_at_ms": tracker.get(
                             "persistent_candidate_started_at_ms"

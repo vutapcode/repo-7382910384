@@ -967,6 +967,12 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "persistent_metaorder_shadow": dict(
                 (result or {}).get("persistent_metaorder_shadow") or {}
             ),
+            "bias_acquisition_handoff": dict(
+                (result or {}).get("bias_acquisition_handoff") or {}
+            ),
+            "acquisition_handoff_observation": dict(
+                (result or {}).get("acquisition_handoff_observation") or {}
+            ),
             "opportunity_research": dict(
                 (result or {}).get("opportunity_research") or {}
             ),
@@ -1024,6 +1030,11 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             ),
             "side": causal_episode_side,
             "counterfactual_side": causal_episode_side,
+            "acquisition_candidate_id": (
+                ((result or {}).get("bias_acquisition_handoff") or {}).get(
+                    "causal_wave_id"
+                )
+            ),
             "quantity_btc": QTY_BTC,
             "maker_ttl_ms": int(live_execution.MAKER_TTL_SECONDS * 1000),
             "background_bias_side": background_bias_side,
@@ -1930,13 +1941,10 @@ async def _bias_loop():
                 await asyncio.sleep(1.0)
                 continue
             now = time.time()
-            result = bias_council.evaluate(s, now=now)
-            s.bias_state = result["bias"]
-            s.bias_confidence = result["confidence"]
-            s.bias_council = result
-            s.bias_updated_at = now
-            s.bias_version = result.get("version")
-            s.macro_bias = "NEUTRAL"
+            # The canonical owner also seals provenance when independent cash
+            # control moves ABSTAIN -> directional. Calling evaluate() directly
+            # would update Bias while silently dropping that handoff.
+            bias_council.update_state(s, now=now)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1949,6 +1957,7 @@ async def _entry_loop():
     last_eval_at = 0.0
     last_decision_identity = None
     last_decision_event_at = 0.0
+    last_acquisition_handoff_identity = None
     while True:
         try:
             s = app.state
@@ -2072,8 +2081,20 @@ async def _entry_loop():
             persistent_shadow = dict(
                 getattr(s, "persistent_metaorder_shadow", {}) or {}
             )
+            acquisition_handoff = dict(
+                getattr(s, "bias_acquisition_handoff", {}) or {}
+            )
+            acquisition_observation = dict(
+                getattr(
+                    s, "_ignition_acquisition_handoff_observation", {}
+                ) or {}
+            )
             result = dict(result)
             result["persistent_metaorder_shadow"] = persistent_shadow
+            result["bias_acquisition_handoff"] = acquisition_handoff
+            result["acquisition_handoff_observation"] = (
+                acquisition_observation
+            )
             urgent_oi_phase = str(result.get("phase", "")).upper() in {
                 "PRESSURE_BUILDING", "ACCEPTANCE", "RELEASE",
             }
@@ -2176,6 +2197,8 @@ async def _entry_loop():
                 str((opportunity_research.get("pre_bias") or {}).get("band", "UNOBSERVED")),
                 str(opportunity_research.get("simultaneous_cash_acceptance", "NOT_OBSERVED")),
                 str(opportunity_research.get("research_candidate_id") or ""),
+                str(acquisition_handoff.get("causal_wave_id") or ""),
+                str(acquisition_handoff.get("status") or "INACTIVE"),
             )
             decision_changed = decision_identity != last_decision_identity
             # A qualified GO can exist for less than the telemetry debounce.
@@ -2186,6 +2209,13 @@ async def _entry_loop():
                 or opportunity.get("qualification_transition")
                 or persistent_shadow.get("transition")
                 or opportunity_research.get("transition")
+                or (
+                    acquisition_handoff.get("causal_wave_id")
+                    and (
+                        str(acquisition_handoff.get("causal_wave_id")),
+                        str(acquisition_handoff.get("status") or ""),
+                    ) != last_acquisition_handoff_identity
+                )
             )
             decision_event_emitted = False
             recorder_snapshot = None
@@ -2196,6 +2226,11 @@ async def _entry_loop():
             ):
                 last_decision_identity = decision_identity
                 last_decision_event_at = now
+                if acquisition_handoff.get("causal_wave_id"):
+                    last_acquisition_handoff_identity = (
+                        str(acquisition_handoff.get("causal_wave_id")),
+                        str(acquisition_handoff.get("status") or ""),
+                    )
                 votes = result.get("s_votes") or {}
                 price_quality = dict(
                     (votes.get("S1_cross_venue_price_acceptance") or {}).get(
@@ -2248,6 +2283,10 @@ async def _entry_loop():
                     ),
                     "ignition": dict(result.get("ignition") or {}),
                     "persistent_metaorder_shadow": persistent_shadow,
+                    "bias_acquisition_handoff": acquisition_handoff,
+                    "acquisition_handoff_observation": (
+                        acquisition_observation
+                    ),
                     "opportunity_research": opportunity_research,
                     "ignition_state": (result.get("ignition") or {}).get("state"),
                     "ignition_proposer": (result.get("ignition") or {}).get("proposer"),

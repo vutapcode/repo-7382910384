@@ -45,8 +45,9 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-INFERENCE_VERSION = "IGNITION_INFERENCE_V7_CONTROL_OWNERSHIP_HANDOFF"
+INFERENCE_VERSION = "IGNITION_INFERENCE_V8_NEUTRAL_ACQUISITION_HANDOFF"
 ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
+ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
 PERSISTENT_AUTHORITY_SCOPE = {
     "shadow_bootstrap_authority": True,
     "live_authority": False,
@@ -2220,6 +2221,285 @@ def _current_cash_conversion(histories, side, now_ms):
     }
 
 
+def _canonical_json_hash(payload):
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_sealed_acquisition_handoff(handoff, expected_side=None):
+    """Validate Bias provenance without granting Entry timing authority."""
+    handoff = dict(handoff or {})
+    sealed = dict(handoff.get("sealed_payload") or {})
+    side = str(sealed.get("side") or "ABSTAIN").upper()
+    if not handoff:
+        return False, "ACQUISITION_HANDOFF_MISSING", {}
+    if not (
+        handoff.get("sealed") is True
+        and str(handoff.get("status") or "") == "SEALED"
+        and handoff.get("authority") is False
+        and handoff.get("entry_authority") is False
+    ):
+        return False, "ACQUISITION_HANDOFF_NOT_SEALED", {}
+    if str(sealed.get("version") or "") != ACQUISITION_HANDOFF_VERSION:
+        return False, "ACQUISITION_HANDOFF_VERSION_INVALID", {}
+    digest = _canonical_json_hash(sealed)
+    if str(handoff.get("handoff_hash") or "") != digest:
+        return False, "ACQUISITION_HANDOFF_HASH_INVALID", {}
+    if str(handoff.get("causal_wave_id") or "") != (
+        "cash-acquisition:%s" % digest[:20]
+    ):
+        return False, "ACQUISITION_HANDOFF_WAVE_ID_INVALID", {}
+    if side not in ("LONG", "SHORT") or (
+        expected_side is not None
+        and side != str(expected_side or "ABSTAIN").upper()
+    ):
+        return False, "ACQUISITION_HANDOFF_SIDE_INVALID", {}
+    roots = set(sealed.get("directional_cash_roots") or ())
+    if roots != {"BINANCE_SPOT_CASH", "COINBASE_USD_CASH"}:
+        return False, "ACQUISITION_HANDOFF_CASH_ROOTS_INVALID", {}
+    evidence = list(sealed.get("segment_evidence") or ())
+    if int(sealed.get("temporal_persistence_segments", 0) or 0) < 2 or len(
+        evidence
+    ) < 2:
+        return False, "ACQUISITION_HANDOFF_PERSISTENCE_MISSING", {}
+    for segment in evidence[:2]:
+        segment = dict(segment or {})
+        if not (
+            str(segment.get("state") or "").upper() == "CONVERTING"
+            and str(segment.get("side") or "ABSTAIN").upper() == side
+            and str((segment.get("price") or {}).get("vote") or "").upper()
+                == side
+            and str((segment.get("flow") or {}).get("vote") or "").upper()
+                == side
+        ):
+            return False, "ACQUISITION_HANDOFF_SEGMENT_INVALID", {}
+    onset_ms = int(sealed.get("first_converting_segment_onset_ms", 0) or 0)
+    completed_ms = int(sealed.get("ownership_completed_ms", 0) or 0)
+    if onset_ms <= 0 or completed_ms <= onset_ms:
+        return False, "ACQUISITION_HANDOFF_TIME_INVALID", {}
+    epochs = dict(sealed.get("venue_epochs") or {})
+    if not all(name in epochs for name in ("spot", "coinbase")):
+        return False, "ACQUISITION_HANDOFF_EPOCHS_MISSING", {}
+    # Outer fields are convenient telemetry only; they may not contradict the
+    # immutable payload that owns the seal.
+    for name in (
+        "side", "first_converting_segment_onset_ms",
+        "ownership_completed_ms", "bias_version",
+    ):
+        if handoff.get(name) != sealed.get(name):
+            return False, "ACQUISITION_HANDOFF_OUTER_FIELD_CHANGED", {}
+    return True, "PASS", {
+        **sealed,
+        "handoff_hash": digest,
+        "causal_wave_id": handoff["causal_wave_id"],
+        "sealed_payload": sealed,
+        "status": "SEALED",
+        "sealed": True,
+        "authority": False,
+        "entry_authority": False,
+    }
+
+
+def _acquisition_displacement_bps(handoff, side):
+    """Measure already-consumed same-wave cash distance from sealed segments."""
+    sign = _sign(side)
+    total = 0.0
+    for segment in list((handoff or {}).get("segment_evidence") or ())[:2]:
+        moves = dict(
+            (((segment or {}).get("price") or {}).get("metrics") or {}).get(
+                "moves"
+            ) or {}
+        )
+        directional = [
+            max(0.0, sign * _f(moves.get(name)) * 100.0)
+            for name in ("spot", "coinbase") if name in moves
+        ]
+        if len(directional) != len(CASH):
+            return 0.0
+        total += sum(directional) / len(directional)
+    return max(0.0, total)
+
+
+def _acquisition_handoff_observation(state, histories, now_ms, side=None):
+    """Join sealed Market Truth to present cash timing, still authority-free."""
+    raw = dict(getattr(state, "bias_acquisition_handoff", {}) or {})
+    valid, reason, sealed = _validate_sealed_acquisition_handoff(raw, side)
+    observation = {
+        "version": "ACQUISITION_HANDOFF_OBSERVATION_V1",
+        "authority": False,
+        "entry_authority": False,
+        "status": reason,
+        "causal_wave_id": raw.get("causal_wave_id"),
+    }
+    if not valid:
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
+    resolved_side = str(sealed.get("side") or "ABSTAIN").upper()
+    completed_ms = int(sealed.get("ownership_completed_ms", 0) or 0)
+    age_ms = int(now_ms) - completed_ms
+    if age_ms < 0 or age_ms > EPISODE_MAX_MS:
+        observation.update(status="ACQUISITION_HANDOFF_EXPIRED", age_ms=age_ms)
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
+    if (
+        str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
+            != resolved_side
+        or _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF
+        or str(getattr(state, "bias_version", "") or "")
+            != str(sealed.get("bias_version") or "")
+    ):
+        observation.update(status="ACQUISITION_BIAS_OWNERSHIP_CHANGED")
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
+    current = _current_cash_conversion(histories, resolved_side, now_ms)
+    if not current.get("dual_cash_synchronous_acceptance"):
+        observation.update(
+            status="WAIT_ACQUISITION_CURRENT_DUAL_CASH",
+            current_cash_conversion=current,
+        )
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
+    opposite = "SHORT" if resolved_side == "LONG" else "LONG"
+    opposing = _current_cash_conversion(histories, opposite, now_ms)
+    if opposing.get("confirmed"):
+        observation.update(
+            status="ACQUISITION_CURRENT_CASH_CONTRADICTION",
+            current_cash_conversion=current,
+            opposing_cash_conversion=opposing,
+        )
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
+    sealed_epochs = dict(sealed.get("venue_epochs") or {})
+    epoch_names = {"binance_spot": "spot", "coinbase_spot": "coinbase"}
+    for venue, bias_name in epoch_names.items():
+        current_epoch = int(
+            ((current.get("venues") or {}).get(venue) or {}).get("epoch", -1)
+        )
+        if current_epoch != int(sealed_epochs.get(bias_name, -2)):
+            observation.update(
+                status="ACQUISITION_HANDOFF_EPOCH_CHANGED",
+                failed_venue=venue,
+                current_epoch=current_epoch,
+                sealed_epoch=sealed_epochs.get(bias_name),
+            )
+            state._ignition_acquisition_handoff_observation = observation
+            return False, observation
+    claimed = str(
+        getattr(state, "_ignition_acquisition_claimed_id", "") or ""
+    )
+    if claimed == str(sealed.get("causal_wave_id") or ""):
+        observation.update(status="ACQUISITION_HANDOFF_ALREADY_CLAIMED")
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
+    observation.update(
+        status="ELIGIBLE_SAME_WAVE_CURRENT_CASH_CONFIRMED",
+        side=resolved_side,
+        age_ms=age_ms,
+        handoff=sealed,
+        current_cash_conversion=current,
+        acquisition_cash_displacement_bps=round(
+            _acquisition_displacement_bps(sealed, resolved_side), 6
+        ),
+    )
+    state._ignition_acquisition_handoff_observation = observation
+    return True, observation
+
+
+def _start_acquisition_handoff_episode(state, histories, now_ms, side=None):
+    """Start timing on the same sealed wave without inventing a third impulse."""
+    eligible, observation = _acquisition_handoff_observation(
+        state, histories, now_ms, side,
+    )
+    if not eligible:
+        return None
+    handoff = dict(observation.get("handoff") or {})
+    resolved_side = str(handoff.get("side") or "ABSTAIN").upper()
+    epochs = dict(handoff.get("venue_epochs") or {})
+    epoch_names = {"binance_spot": "spot", "coinbase_spot": "coinbase"}
+    signals = []
+    for venue in sorted(CASH):
+        expected_epoch = int(epochs.get(epoch_names[venue], -1))
+        signals.extend(
+            dict(row) for row in histories.get(venue, ())
+            if 0 <= int(now_ms) - int(row.get("receive_time_ms", 0) or 0)
+                <= FOLLOW_MAX_MS
+            and int(row.get("epoch", -2)) == expected_epoch
+            and _directional_material_flow(row, resolved_side)
+        )
+    if {str(row.get("venue")) for row in signals} != CASH:
+        return None
+    signals.sort(key=lambda row: (
+        int(row.get("receive_time_ms", 0) or 0), str(row.get("venue") or ""),
+    ))
+    started_ms = int(signals[0].get("receive_time_ms", 0) or 0)
+    for row in histories.get("futures", ()):
+        receive_ms = int(row.get("receive_time_ms", 0) or 0)
+        if (
+            started_ms <= receive_ms <= int(now_ms)
+            and receive_ms - started_ms <= FOLLOW_MAX_MS
+            and _directional_material_flow(row, resolved_side)
+        ):
+            signals.append(dict(row))
+    signals.sort(key=lambda row: (
+        int(row.get("receive_time_ms", 0) or 0), str(row.get("venue") or ""),
+    ))
+    council = dict(getattr(state, "bias_council", {}) or {})
+    bias = {
+        "direction": resolved_side,
+        "confidence": _f(handoff.get("bias_confidence")),
+        "updated_at": _f(handoff.get("ownership_completed_ms")) / 1000.0,
+        "version": handoff.get("bias_version"),
+        "captured_at": _f(handoff.get("ownership_completed_ms")) / 1000.0,
+        "direction_context": {
+            **dict(council.get("direction_memory") or {}),
+            "hysteresis": str(handoff.get("bias_hysteresis") or "UNKNOWN"),
+            "story": "SEALED_NEUTRAL_CASH_CONTROL_ACQUISITION",
+            "flow_price_trap": False,
+        },
+        "acquisition_handoff_hash": handoff.get("handoff_hash"),
+    }
+    first = signals[0]
+    episode = {
+        "causal_episode_id": handoff["causal_wave_id"],
+        "side": resolved_side,
+        "proposer": first.get("venue"),
+        "leader": first.get("venue"),
+        "started_receive_ms": started_ms,
+        "causal_wave_started_receive_ms": int(
+            handoff.get("first_converting_segment_onset_ms", 0) or 0
+        ),
+        "cash_ownership_completed_ms": int(
+            handoff.get("ownership_completed_ms", 0) or 0
+        ),
+        "last_evidence_ms": max(
+            int(row.get("receive_time_ms", 0) or 0) for row in signals
+        ),
+        "current_segment_started_ms": started_ms,
+        "evidence_segment_count": 1,
+        "bias_snapshot": bias,
+        "signals": signals,
+        "epochs": {
+            str(row.get("venue")): int(row.get("epoch", 0) or 0)
+            for row in signals
+        },
+        "precursor_measurement": _precursor_cash_progress(state, first),
+        "oi_before_snapshot": _oi_state_snapshot(state),
+        "acquisition_handoff": handoff,
+        "acquisition_cash_displacement_bps": _f(
+            observation.get("acquisition_cash_displacement_bps")
+        ),
+        "acquisition_handoff_authority": False,
+    }
+    state._ignition_acquisition_claimed_id = handoff["causal_wave_id"]
+    observation["status"] = "CLAIMED_BY_IGNITION_TIMING"
+    observation["timing_started_at_ms"] = started_ms
+    state._ignition_acquisition_handoff_observation = observation
+    state._ignition_episode = episode
+    return episode
+
+
 def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
     """Freeze the exact causal dependencies that granted one GO decision.
 
@@ -2235,6 +2515,10 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
     transition_cash = {
         str(value) for value in transition.get("accepted_cash_venues") or ()
     }
+    acquisition = dict(payload.get("acquisition_handoff") or {})
+    acquisition_valid, _acquisition_reason, sealed_acquisition = (
+        _validate_sealed_acquisition_handoff(acquisition, side)
+    )
     fallback_proof = _proof_descriptor((
         str(proof_type or ""),
         {
@@ -2289,7 +2573,7 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
         }
     frozen_bias = dict(payload.get("bias_snapshot") or {})
     dependencies = {
-        "version": "ENTRY_AUTHORITY_DEPENDENCIES_V3_ORIGIN_EXECUTION_PROOF",
+        "version": "ENTRY_AUTHORITY_DEPENDENCIES_V4_ACQUISITION_PROVENANCE",
         "causal_episode_id": str(causal_episode_id or ""),
         "side": side,
         "proof_type": str(proof_type or ""),
@@ -2314,7 +2598,9 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
         },
         "current_cash_conversion": {
             "accepted_cash_venues": sorted(accepted),
-            "minimum_fresh_venues": 2 if transition_confirmed else 1,
+            "minimum_fresh_venues": (
+                2 if transition_confirmed or acquisition_valid else 1
+            ),
             "qualified_acceptances": accepted,
             "max_age_ms": FOLLOW_MAX_MS,
         },
@@ -2350,6 +2636,26 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
             ),
             "accepted_cash_venues": sorted(
                 transition.get("accepted_cash_venues") or ()
+            ),
+        }
+    if acquisition_valid:
+        dependencies["acquisition_handoff"] = {
+            "sealed": True,
+            "status": "SEALED",
+            "authority": False,
+            "entry_authority": False,
+            "side": sealed_acquisition.get("side"),
+            "first_converting_segment_onset_ms": sealed_acquisition.get(
+                "first_converting_segment_onset_ms"
+            ),
+            "ownership_completed_ms": sealed_acquisition.get(
+                "ownership_completed_ms"
+            ),
+            "bias_version": sealed_acquisition.get("bias_version"),
+            "causal_wave_id": sealed_acquisition.get("causal_wave_id"),
+            "handoff_hash": sealed_acquisition.get("handoff_hash"),
+            "sealed_payload": dict(
+                sealed_acquisition.get("sealed_payload") or {}
             ),
         }
     encoded = json.dumps(
@@ -2420,6 +2726,24 @@ def validate_frozen_authority(result):
             and str(transition.get("new_side") or "").upper() == side
         ):
             return False, "TRANSITION_AUTHORITY_DEPENDENCY_INVALID", {}
+    acquisition = dict(dependencies.get("acquisition_handoff") or {})
+    if acquisition:
+        valid, reason, sealed = _validate_sealed_acquisition_handoff(
+            acquisition, side,
+        )
+        accepted = set(
+            (dependencies.get("current_cash_conversion") or {}).get(
+                "accepted_cash_venues", ()
+            )
+        )
+        if not valid:
+            return False, reason, {}
+        if basis != "BIAS_ALIGNED":
+            return False, "ACQUISITION_AUTHORITY_BASIS_INVALID", {}
+        if str(sealed.get("causal_wave_id") or "") != episode_id:
+            return False, "ACQUISITION_AUTHORITY_EPISODE_CHANGED", {}
+        if not CASH.issubset(accepted):
+            return False, "ACQUISITION_CURRENT_DUAL_CASH_MISSING", {}
     return True, "PASS", {
         "authority_basis": basis,
         "authority_proof_hash": proof_hash,
@@ -2467,11 +2791,25 @@ def validate_frozen_entry_contract(
             "shadow_bootstrap_authority": True,
             "live_authority": False,
         }
+    acquisition = dict(
+        (result.get("authority_dependencies") or {}).get(
+            "acquisition_handoff"
+        ) or {}
+    )
+    if acquisition and scope == "LIVE":
+        return False, "ACQUISITION_HANDOFF_LIVE_AUTHORITY_DISABLED", {
+            "shadow_bootstrap_authority": True,
+            "live_authority": False,
+        }
     if not ignition.get("cash_venues"):
         return False, "CASH_EVIDENCE_MISSING", {}
     current_cash = dict(ignition.get("current_cash_conversion") or {})
     if not current_cash.get("confirmed"):
         return False, "CURRENT_CASH_CONVERSION_MISSING", {}
+    if acquisition and not current_cash.get(
+        "dual_cash_synchronous_acceptance"
+    ):
+        return False, "ACQUISITION_CURRENT_DUAL_CASH_MISSING", {}
     if _f(ignition.get("consumed_fraction"), 1.0) > MAX_CONSUMED_FRACTION:
         return False, "IMPULSE_ALREADY_CONSUMED", {}
     if mode == "PERSISTENT_METAORDER" and proposer not in CASH:
@@ -2498,8 +2836,12 @@ def validate_frozen_entry_contract(
         "proof_type": proof_type,
         "execution_policy": execution_policy,
         "authority_scope": scope,
-        "shadow_bootstrap_authority": mode == "PERSISTENT_METAORDER",
-        "live_authority": mode != "PERSISTENT_METAORDER",
+        "shadow_bootstrap_authority": bool(
+            mode == "PERSISTENT_METAORDER" or acquisition
+        ),
+        "live_authority": bool(
+            mode != "PERSISTENT_METAORDER" and not acquisition
+        ),
     }
 
 
@@ -3708,7 +4050,15 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
         # rather than silently resetting maturity from incomplete cash data.
         effective_precursor_progress = precursor_progress
         precursor_relation = "UNKNOWN_KEEP_CONSERVATIVE"
-    progress = max(episode_progress, effective_precursor_progress)
+    acquisition_progress = max(
+        0.0, _f((episode or {}).get("acquisition_cash_displacement_bps"))
+    )
+    # A sealed neutral acquisition explicitly proves that both segments belong
+    # to the same cash-control wave.  Retain its already-travelled distance so
+    # the handoff cannot reset a mature move to EARLY and manufacture edge.
+    progress = max(
+        episode_progress, effective_precursor_progress, acquisition_progress,
+    )
     if (
         atr_bps <= 0.0 or atr_updated_at <= 0.0
         # The latest completed 100ms bucket can precede the ATR assignment by
@@ -3731,6 +4081,9 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
                 effective_precursor_progress, 6
             ),
             "precursor_causal_relation": precursor_relation,
+            "acquisition_cash_displacement_bps": round(
+                acquisition_progress, 6
+            ),
             "precursor_measurement": precursor,
             "phase_scale_bps": None, "consumed_fraction": 1.0,
         }
@@ -3745,6 +4098,9 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
             effective_precursor_progress, 6
         ),
         "precursor_causal_relation": precursor_relation,
+        "acquisition_cash_displacement_bps": round(
+            acquisition_progress, 6
+        ),
         "precursor_measurement": precursor,
         "phase_scale_bps": round(atr_bps, 6),
         "atr_updated_at": atr_updated_at,
@@ -3875,6 +4231,16 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "spot_price_discovery": cash_discovery,
         "persistent_metaorder_shadow": persistent_shadow,
         "bias_snapshot": dict(episode["bias_snapshot"]), "proof_type": proof_type,
+        "acquisition_handoff": dict(
+            episode.get("acquisition_handoff") or {}
+        ),
+        "acquisition_handoff_authority": False,
+        "causal_wave_started_receive_ms": episode.get(
+            "causal_wave_started_receive_ms"
+        ),
+        "cash_ownership_completed_ms": episode.get(
+            "cash_ownership_completed_ms"
+        ),
         "proof_venue": proof_venue,
         "causal_origin_proof": dict(
             episode.get("causal_origin_proof") or {}
@@ -3907,6 +4273,12 @@ def _result_from_episode(state, episode, histories, freshness, now):
             "causal_wave_id": episode.get("causal_episode_id"),
             "side": side,
             "wave_started_at_ms": episode.get("started_receive_ms"),
+            "causal_cash_wave_started_at_ms": episode.get(
+                "causal_wave_started_receive_ms"
+            ),
+            "cash_ownership_completed_ms": episode.get(
+                "cash_ownership_completed_ms"
+            ),
             "last_evidence_ms": episode.get("last_evidence_ms"),
             "evidence_segment_count": int(
                 episode.get("evidence_segment_count", 1) or 1
@@ -4221,6 +4593,15 @@ def evaluate(state, now=None, side=None):
         else:
             side = frozen_episode_side
 
+    if episode is None:
+        acquired = _start_acquisition_handoff_episode(
+            state, histories, now_ms, side,
+        )
+        if acquired is not None:
+            episode = acquired
+            frozen_episode_side = _strict_frozen_episode_side(episode)
+            side = str(episode.get("side") or side).upper()
+
     if episode is not None:
         live_venues = ignition_signals.engine(state).venues
         epoch_changed = any(
@@ -4287,6 +4668,16 @@ def evaluate(state, now=None, side=None):
         )
         if token in pending_handled:
             continue
+        if episode is not None and episode.get("acquisition_handoff"):
+            existing_tokens = {
+                (
+                    str(value.get("venue") or ""),
+                    int(value.get("bucket_start_ms", -1)),
+                )
+                for value in episode.get("signals") or ()
+            }
+            if token in existing_tokens:
+                continue
         if not row.get("clock_valid"):
             state._ignition_episode = None
             episode = None

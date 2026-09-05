@@ -118,6 +118,31 @@ def persistent_candidate_event(start_ms=1_000, side="SHORT"):
     return row
 
 
+def acquisition_candidate_event(start_ms=100_000, side="LONG"):
+    row = decision_event(start_ms=start_ms)
+    decision = row["payload"]["decision_record"]
+    decision["counterfactual"].update({
+        "eligible": False,
+        "side": "ABSTAIN",
+        "decision_reference_price": 100.0,
+        "frozen_economics": {
+            "execution_style": "TAKER",
+            "cost_budget_bps": 13.0,
+            "minimum_net_edge_bps": 6.0,
+            "commission_verified": True,
+        },
+    })
+    candidate_id = "cash-acquisition:test-wave"
+    row["payload"]["bias_acquisition_handoff"] = {
+        "status": "SEALED", "sealed": True,
+        "authority": False, "entry_authority": False,
+        "side": side, "causal_wave_id": candidate_id,
+        "first_converting_segment_onset_ms": start_ms - 60_000,
+        "ownership_completed_ms": start_ms - 100,
+    }
+    return row
+
+
 class DecisionOutcomeTrackerTests(unittest.TestCase):
     def setUp(self):
         self.rows = []
@@ -220,6 +245,35 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
             stream == "decision_miss_adjudication"
             for stream, _payload, _ in self.rows
         ))
+
+    def test_cash_acquisition_is_recorded_without_ignition_candidate(self):
+        self.tracker.observe(acquisition_candidate_event())
+
+        self.assertEqual(
+            list(self.tracker.pending), ["cash-acquisition:test-wave"],
+        )
+        tracker = self.tracker.pending["cash-acquisition:test-wave"]
+        self.assertEqual(tracker["sample_scope"], "CASH_ACQUISITION_SHADOW")
+        self.assertEqual(tracker["start_ms"], 100_000)
+        self.assertEqual(tracker["acquisition_wave_onset_ms"], 40_000)
+        self.assertFalse(tracker["economic_miss_eligible"])
+        self.assertFalse(tracker["authority"])
+
+        self.tracker.observe(
+            trade(105_000, 10, 100.30, high=100.30, low=100.0)
+        )
+        payload = next(
+            body for stream, body, _when in self.rows
+            if stream == "decision_counterfactual"
+        )
+        self.assertEqual(payload["sample_scope"], "CASH_ACQUISITION_SHADOW")
+        self.assertEqual(
+            payload["acquisition_candidate_id"],
+            "cash-acquisition:test-wave",
+        )
+        self.assertFalse(payload["economic_miss_eligible"])
+        self.assertFalse(payload["economic_miss_screen_passed"])
+        self.assertTrue(payload["diagnostic_move_screen_passed"])
 
     def test_causal_episode_keeps_long_horizon_diagnostics(self):
         self.tracker.observe(decision_event(
