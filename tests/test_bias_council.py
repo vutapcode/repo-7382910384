@@ -59,6 +59,60 @@ def state():
 
 
 class BiasCouncilTests(unittest.TestCase):
+    def test_neutral_acquisition_seals_persistent_cash_origin(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+
+        report = council.update_state(s, now=100.0)
+
+        self.assertEqual(report["bias"], "LONG")
+        handoff = report["acquisition_handoff"]
+        self.assertEqual(handoff["status"], "SEALED")
+        self.assertEqual(handoff["side"], "LONG")
+        self.assertEqual(handoff["temporal_persistence_segments"], 2)
+        self.assertEqual(
+            handoff["directional_cash_roots"],
+            ["BINANCE_SPOT_CASH", "COINBASE_USD_CASH"],
+        )
+        self.assertEqual(handoff["first_converting_segment_onset_ms"], 40_000)
+        self.assertEqual(handoff["ownership_completed_ms"], 100_000)
+        self.assertFalse(handoff["authority"])
+        self.assertFalse(handoff["entry_authority"])
+        self.assertEqual(
+            handoff["handoff_hash"],
+            council._canonical_hash(handoff["sealed_payload"]),
+        )
+
+    def test_emerging_cash_control_does_not_seal_acquisition(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        s.bias_price_history = deque([
+            _history_row(85.0, 99.0, 990.0, 20.0, 2.0),
+        ], maxlen=1536)
+
+        report = council.update_state(s, now=100.0)
+
+        self.assertEqual(report["bias"], "ABSTAIN")
+        self.assertFalse(hasattr(s, "bias_acquisition_handoff"))
+        self.assertNotIn("acquisition_handoff", report)
+
+    def test_acquisition_handoff_is_invalidated_on_cash_epoch_change(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        council.update_state(s, now=100.0)
+        sealed_hash = s.bias_acquisition_handoff["handoff_hash"]
+
+        s.spot_flow_epoch = 1
+        report = council.update_state(s, now=100.25)
+
+        self.assertEqual(
+            report["acquisition_handoff"]["status"],
+            "INVALIDATED_EPOCH_CHANGE",
+        )
+        self.assertEqual(
+            report["acquisition_handoff"]["handoff_hash"], sealed_hash,
+        )
+
     def test_price_memory_does_not_bridge_venue_epoch(self):
         old = {
             "spot": 100.0, "coinbase": 100.0, "futures": 100.0,

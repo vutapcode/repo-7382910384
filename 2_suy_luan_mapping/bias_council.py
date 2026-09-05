@@ -26,15 +26,18 @@ persistent cash control.
 """
 
 from collections import deque
+import hashlib
 from importlib import import_module
+import json
 import time
 
 
 cash_wave_observation = import_module("2_suy_luan_mapping.cash_wave_observation")
 
-VERSION = "BIAS_COUNCIL_V12_CAUSAL_CASH_WAVE"
+VERSION = "BIAS_COUNCIL_V13_ACQUISITION_HANDOFF"
 CONTRACT = "DIRECTION_ONLY_NO_ENTRY_TIMING"
 FORECAST_SCOPE = "MEANINGFUL_DIRECTIONAL_REGIME_NOT_FIXED_TIME_TARGET"
+ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
 
 # Long lenses are historical diagnostics only. They never own live direction.
 OBSERVATION_LENSES = (15.0, 60.0, 180.0, 600.0, 1800.0, 3600.0)
@@ -404,10 +407,110 @@ def _segment_reports(current, buckets, now, threshold):
             "flow": cash_flow_vote(newer, older),
             "newer_ts": newer.get("ts"),
             "older_ts": older.get("ts"),
+            "newer_epochs": _epochs(newer),
+            "older_epochs": _epochs(older),
+            "newer_prices": {
+                name: float(newer.get(name, 0.0) or 0.0)
+                for name in ("spot", "coinbase", "futures")
+            },
+            "older_prices": {
+                name: float(older.get(name, 0.0) or 0.0)
+                for name in ("spot", "coinbase", "futures")
+            },
         })
         newer = older
         start_age = end_age
     return segments
+
+
+def _canonical_hash(payload):
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _compact_acquisition_segment(segment):
+    """Freeze only evidence that established temporal cash persistence."""
+    segment = dict(segment or {})
+    return {
+        "state": str(segment.get("state") or "UNKNOWN"),
+        "side": str(segment.get("side") or "ABSTAIN").upper(),
+        "reason": str(segment.get("reason") or "UNKNOWN"),
+        "start_age_seconds": segment.get("start_age_seconds"),
+        "end_age_seconds": segment.get("end_age_seconds"),
+        "newer_ts": segment.get("newer_ts"),
+        "older_ts": segment.get("older_ts"),
+        "newer_epochs": dict(segment.get("newer_epochs") or {}),
+        "older_epochs": dict(segment.get("older_epochs") or {}),
+        "price": dict(segment.get("price") or {}),
+        "flow": dict(segment.get("flow") or {}),
+    }
+
+
+def _seal_acquisition_handoff(report, completed_at):
+    """Seal one neutral-to-owned cash wave; never grant Entry by itself."""
+    report = dict(report or {})
+    cash = dict(report.get("cash_control") or {})
+    side = str(report.get("bias") or "ABSTAIN").upper()
+    segments = [
+        dict(row) for row in cash.get("segments") or ()
+        if str((row or {}).get("state") or "").upper() == "CONVERTING"
+        and str((row or {}).get("side") or "").upper() == side
+    ][:2]
+    if (
+        side not in ("LONG", "SHORT")
+        or str(report.get("hysteresis") or "") != "ACQUIRE_CASH_REGIME"
+        or str(cash.get("wave_state") or "").upper() != "CONTROLLED"
+        or not bool(cash.get("meaningful_for_action"))
+        or len(segments) < 2
+    ):
+        return None
+    latest, previous = segments[0], segments[1]
+    epochs = dict(latest.get("newer_epochs") or {})
+    if not all(name in epochs for name in ("spot", "coinbase")):
+        return None
+    onset_s = float(previous.get("older_ts") or 0.0)
+    completed_s = float(completed_at or 0.0)
+    if onset_s <= 0.0 or completed_s <= onset_s:
+        return None
+    evidence = [
+        _compact_acquisition_segment(previous),
+        _compact_acquisition_segment(latest),
+    ]
+    sealed_payload = {
+        "version": ACQUISITION_HANDOFF_VERSION,
+        "side": side,
+        "first_converting_segment_onset_ms": int(onset_s * 1000.0),
+        "ownership_completed_ms": int(completed_s * 1000.0),
+        "venue_epochs": {
+            "spot": int(epochs.get("spot", 0) or 0),
+            "coinbase": int(epochs.get("coinbase", 0) or 0),
+        },
+        "directional_cash_roots": [
+            "BINANCE_SPOT_CASH", "COINBASE_USD_CASH",
+        ],
+        "temporal_persistence_segments": 2,
+        "segment_evidence": evidence,
+        "bias_version": VERSION,
+        "bias_confidence": float(report.get("confidence", 0.0) or 0.0),
+        "bias_hysteresis": str(report.get("hysteresis") or "UNKNOWN"),
+    }
+    seal = _canonical_hash(sealed_payload)
+    return {
+        **sealed_payload,
+        "causal_wave_id": "cash-acquisition:%s" % seal[:20],
+        "handoff_hash": seal,
+        "sealed_payload": sealed_payload,
+        "status": "SEALED",
+        "sealed": True,
+        "authority": False,
+        "entry_authority": False,
+        "policy": (
+            "BIAS_OWNS_DIRECTION_IGNITION_MUST_REPROVE_CURRENT_TIMING_"
+            "TEMPORAL_PERSISTENCE_IS_NOT_A_NEW_INDEPENDENT_ROOT"
+        ),
+    }
 
 
 def _adaptive_cash_regime(reports):
@@ -719,7 +822,36 @@ def evaluate(state, now=None, force_full=False):
 
 
 def update_state(state, now=None, force_full=False):
+    previous_side = str(
+        getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN"
+    ).upper()
     out = evaluate(state, now=now, force_full=force_full)
+    completed_at = float(out.get("ts", time.time()) or time.time())
+    handoff = None
+    if previous_side not in ("LONG", "SHORT") and out.get("bias") in (
+        "LONG", "SHORT",
+    ):
+        handoff = _seal_acquisition_handoff(out, completed_at)
+        if handoff is not None:
+            state.bias_acquisition_handoff = handoff
+    existing = dict(
+        handoff or getattr(state, "bias_acquisition_handoff", {}) or {}
+    )
+    if existing:
+        current_epochs = {
+            "spot": int(getattr(state, "spot_flow_epoch", 0) or 0),
+            "coinbase": int(getattr(state, "coinbase_flow_epoch", 0) or 0),
+        }
+        epoch_changed = any(
+            int((existing.get("venue_epochs") or {}).get(name, 0) or 0)
+            != int(current_epochs.get(name, 0) or 0)
+            for name in ("spot", "coinbase")
+        )
+        if epoch_changed:
+            existing["status"] = "INVALIDATED_EPOCH_CHANGE"
+            existing["invalidated_at_ms"] = int(completed_at * 1000.0)
+            state.bias_acquisition_handoff = existing
+        out["acquisition_handoff"] = dict(existing)
     state.bias_state = out["bias"]
     state.bias_confidence = out["confidence"]
     state.bias_wave_state = out.get("wave_state", "UNKNOWN")

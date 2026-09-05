@@ -9,7 +9,7 @@ by dual-cash executed flow and the price response that flow actually achieved,
 not by a fixed elapsed window or a static volume/price profile.
 """
 
-VERSION = "CASH_WAVE_OBSERVATION_V1"
+VERSION = "CASH_WAVE_OBSERVATION_V2_PROVENANCE"
 AUTHORITY = False
 VALID_SIDES = frozenset(("LONG", "SHORT"))
 
@@ -68,6 +68,12 @@ def classify_segment(segment):
         "reason": reason,
         "price": source.get("price"),
         "flow": source.get("flow"),
+        "newer_ts": source.get("newer_ts"),
+        "older_ts": source.get("older_ts"),
+        "newer_epochs": dict(source.get("newer_epochs") or {}),
+        "older_epochs": dict(source.get("older_epochs") or {}),
+        "newer_prices": dict(source.get("newer_prices") or {}),
+        "older_prices": dict(source.get("older_prices") or {}),
     }
 
 
