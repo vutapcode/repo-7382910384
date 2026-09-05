@@ -59,7 +59,14 @@ class TierSKernelContractTests(unittest.TestCase):
         self.assertEqual(profile["name"], "IGNITION_CORE_V1")
         self.assertEqual(profile["mode"], "MAINNET_SHADOW")
         self.assertEqual(profile["market"], "BTCUSDT")
-        self.assertIn("IGNITION_PREDICT_PROBE_PROVE", profile["architecture"])
+        self.assertIn(
+            "IGNITION_PREDICT_PROBE_PROVE_V8_ACQUISITION_HANDOFF",
+            profile["architecture"],
+        )
+        self.assertIn(
+            "ACQUISITION_HANDOFF_LIVE_AUTHORITY_DISABLED",
+            profile["invariants"],
+        )
         self.assertIn("FUTURES_NEVER_SELF_OPENS", profile["invariants"])
         self.assertIn("NO_LEGACY_SMC_AUTHORITY", profile["invariants"])
 
