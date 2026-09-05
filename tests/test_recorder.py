@@ -384,6 +384,45 @@ class CashRecorderTests(unittest.TestCase):
             with mock.patch.object(recorder, 'now_ms', return_value=116_001):
                 self.assertEqual(recorder._oi_poll_interval(), 15)
 
+    def test_macro_rest_calls_keep_independent_receipt_times(self):
+        config = RecorderConfig()
+        recorder = BinanceRecorder(
+            config, mock.Mock(), HealthState(config)
+        )
+        release_oi = asyncio.Event()
+        release_premium = asyncio.Event()
+
+        async def fake_get(path, params=None):
+            if path.endswith('/openInterest'):
+                await release_oi.wait()
+                return {'time': 900, 'openInterest': '10'}
+            await release_premium.wait()
+            return {'time': 950, 'markPrice': '100'}
+
+        observed_times = iter((1_000, 1_200))
+        recorder._get_json = fake_get
+        recorder.now_ms = lambda: next(observed_times)
+
+        async def exercise():
+            oi_task = asyncio.create_task(recorder._get_json_observed(
+                '/fapi/v1/openInterest', {'symbol': 'BTCUSDT'}
+            ))
+            premium_task = asyncio.create_task(recorder._get_json_observed(
+                '/fapi/v1/premiumIndex', {'symbol': 'BTCUSDT'}
+            ))
+            await asyncio.sleep(0)
+            release_oi.set()
+            oi = await oi_task
+            release_premium.set()
+            premium = await premium_task
+            return oi, premium
+
+        oi, premium = asyncio.run(exercise())
+        self.assertEqual(oi[1], 1_000)
+        self.assertEqual(premium[1], 1_200)
+        self.assertEqual(oi[0]['openInterest'], '10')
+        self.assertEqual(premium[0]['markPrice'], '100')
+
     def test_micro_batch_preserves_exact_side_totals(self):
         batcher = CashTradeBatcher(100)
         self.assertIsNone(batcher.push(

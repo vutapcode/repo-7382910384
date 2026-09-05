@@ -832,33 +832,47 @@ class BinanceRecorder:
         while not self._shutdown_requested:
             started = time.monotonic()
             try:
-                oi, premium = await asyncio.gather(
-                    self._get_json(
+                (oi, oi_receive_ms, oi_receive_mono_ns), (
+                    premium, premium_receive_ms, premium_receive_mono_ns,
+                ) = await asyncio.gather(
+                    self._get_json_observed(
                         '/fapi/v1/openInterest', {'symbol': self.config.symbol}
                     ),
-                    self._get_json(
+                    self._get_json_observed(
                         '/fapi/v1/premiumIndex', {'symbol': self.config.symbol}
                     ),
                 )
-                receive_ms = self.now_ms()
-                receive_mono_ns = time.monotonic_ns()
+                # Both records become available to downstream consumers only
+                # after gather completes, but each HTTP response has its own
+                # receipt time.  Sharing the slower response timestamp made a
+                # healthy OI reply appear several seconds late in canonical
+                # replay and distorted cross-stream causal ordering.
+                available_ms = self.now_ms()
+                available_mono_ns = time.monotonic_ns()
                 if not connected:
                     self._advance_epoch('open_interest', 'premium_index')
-                oi_event_ms = int(oi.get('time', receive_ms) or receive_ms)
+                oi_event_ms = int(
+                    oi.get('time', oi_receive_ms) or oi_receive_ms
+                )
                 premium_event_ms = int(
-                    premium.get('time', receive_ms) or receive_ms
+                    premium.get('time', premium_receive_ms)
+                    or premium_receive_ms
                 )
                 self.emit(
                     'open_interest', oi,
                     event_time_ms=oi_event_ms,
-                    receive_time_ms=receive_ms,
-                    receive_time_monotonic_ns=receive_mono_ns,
+                    receive_time_ms=oi_receive_ms,
+                    available_time_ms=available_ms,
+                    receive_time_monotonic_ns=oi_receive_mono_ns,
+                    available_time_monotonic_ns=available_mono_ns,
                 )
                 self.emit(
                     'premium_index', premium,
                     event_time_ms=premium_event_ms,
-                    receive_time_ms=receive_ms,
-                    receive_time_monotonic_ns=receive_mono_ns,
+                    receive_time_ms=premium_receive_ms,
+                    available_time_ms=available_ms,
+                    receive_time_monotonic_ns=premium_receive_mono_ns,
+                    available_time_monotonic_ns=available_mono_ns,
                 )
                 self.health.connection(name, True)
                 connected = True
@@ -871,3 +885,8 @@ class BinanceRecorder:
                 self.health.error(name, exc)
             elapsed = time.monotonic() - started
             await asyncio.sleep(max(1.0, self._oi_poll_interval() - elapsed))
+
+    async def _get_json_observed(self, path, params=None):
+        """Return payload plus the exact local receipt clocks for one REST call."""
+        payload = await self._get_json(path, params)
+        return payload, self.now_ms(), time.monotonic_ns()
