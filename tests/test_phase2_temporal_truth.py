@@ -185,6 +185,40 @@ class CanonicalTemporalContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "STALE_UNKNOWN")
         self.assertFalse(result["same_epoch"])
 
+    def test_oi_received_in_episode_but_measured_before_it_is_unknown(self):
+        before = {
+            "value": 100.0, "updated_at": 10.1,
+            "exchange_time_ms": 9_000, "epoch": 4,
+        }
+        after = {
+            "value": 101.0, "updated_at": 10.4,
+            "exchange_time_ms": 9_500, "epoch": 4,
+        }
+        result = ignition_core._oi_verification(
+            {"intent": "POSITION_BUILD", "aligned_with_entry": True},
+            before, after, episode_started_ms=10_000, decision_time=10.5,
+        )
+        self.assertEqual(result["status"], "STALE_UNKNOWN")
+        self.assertTrue(result["refresh_observed"])
+        self.assertFalse(result["inside_causal_window"])
+
+    def test_oi_measured_and_received_in_episode_can_confirm(self):
+        before = {
+            "value": 100.0, "updated_at": 10.1,
+            "exchange_time_ms": 10_050, "epoch": 4,
+        }
+        after = {
+            "value": 101.0, "updated_at": 10.4,
+            "exchange_time_ms": 10_350, "epoch": 4,
+        }
+        result = ignition_core._oi_verification(
+            {"intent": "POSITION_BUILD", "aligned_with_entry": True},
+            before, after, episode_started_ms=10_000, decision_time=10.5,
+        )
+        self.assertEqual(result["status"], "FRESH_POSITION_BUILD")
+        self.assertTrue(result["inside_causal_window"])
+        self.assertEqual(result["measurement_time_ms"], 10_350)
+
 
 if __name__ == "__main__":
     unittest.main()

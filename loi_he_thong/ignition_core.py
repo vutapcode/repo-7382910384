@@ -535,15 +535,37 @@ def _oi_verification(
         available and after_ts > before_ts and no_lookahead
         and same_epoch and exchange_ordered
     )
+    # Availability answers when the process could use the REST response;
+    # exchange time answers when Binance actually measured the OI snapshot.
+    # A response received after ignition must not make a pre-ignition
+    # measurement causal.  Older payloads without exchange clocks retain the
+    # availability-time fallback for schema compatibility.
+    measurement_s = (
+        after_exchange_ms / 1000.0
+        if explicit_exchange_clock and after_exchange_ms > 0 else after_ts
+    )
     inside_episode = bool(
         refreshed
-        and (started_s <= 0.0 or after_ts >= started_s)
-        and (started_s <= 0.0 or after_ts - started_s <= OI_SAMPLE_MAX_SECONDS)
+        and (started_s <= 0.0 or measurement_s >= started_s)
+        and (
+            started_s <= 0.0
+            or measurement_s - started_s <= OI_SAMPLE_MAX_SECONDS
+        )
     )
-    age = decision_s - after_ts if decision_s > 0.0 and after_ts > 0.0 else None
+    availability_age = (
+        decision_s - after_ts
+        if decision_s > 0.0 and after_ts > 0.0 else None
+    )
+    measurement_age = (
+        decision_s - measurement_s
+        if decision_s > 0.0 and measurement_s > 0.0 else None
+    )
     timely = bool(
-        inside_episode and age is not None
-        and 0.0 <= age <= OI_SAMPLE_MAX_SECONDS
+        inside_episode
+        and availability_age is not None
+        and measurement_age is not None
+        and 0.0 <= availability_age <= OI_SAMPLE_MAX_SECONDS
+        and 0.0 <= measurement_age <= OI_SAMPLE_MAX_SECONDS
     )
     aligned = bool(oi.get("aligned_with_entry", True))
     if not available or not no_lookahead:
@@ -567,7 +589,7 @@ def _oi_verification(
         status = "UNCHANGED_UNKNOWN"
     verified = status.startswith("FRESH_")
     return {
-        "version": "OI_EPISODE_VERIFICATION_V3_EXCHANGE_ORDERED_EPOCH",
+        "version": "OI_EPISODE_VERIFICATION_V4_MEASUREMENT_TIME",
         "status": status,
         "fresh": verified,
         "market_snapshot_fresh": bool(oi.get("fresh")),
@@ -583,6 +605,11 @@ def _oi_verification(
         "episode_after": after,
         "refresh_observed": refreshed,
         "inside_causal_window": inside_episode,
+        "measurement_time_ms": (
+            after_exchange_ms if explicit_exchange_clock else int(after_ts * 1000.0)
+        ),
+        "availability_age_seconds": availability_age,
+        "measurement_age_seconds": measurement_age,
         "no_lookahead": no_lookahead,
         "same_snapshot": bool(
             available and (
