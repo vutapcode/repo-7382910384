@@ -34,7 +34,7 @@ import time
 
 cash_wave_observation = import_module("2_suy_luan_mapping.cash_wave_observation")
 
-VERSION = "BIAS_COUNCIL_V13_ACQUISITION_HANDOFF"
+VERSION = "BIAS_COUNCIL_V14_STABLE_ACQUISITION_WAVE"
 CONTRACT = "DIRECTION_ONLY_NO_ENTRY_TIMING"
 FORECAST_SCOPE = "MEANINGFUL_DIRECTIONAL_REGIME_NOT_FIXED_TIME_TARGET"
 ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
@@ -513,6 +513,56 @@ def _seal_acquisition_handoff(report, completed_at):
     }
 
 
+def _same_acquisition_wave(existing, candidate):
+    """Same cash roots, epochs and overlapping evidence interval means one wave."""
+    existing = dict(existing or {})
+    candidate = dict(candidate or {})
+    if str(existing.get("status") or "") != "SEALED":
+        return False
+    if str(existing.get("side") or "") != str(candidate.get("side") or ""):
+        return False
+    if dict(existing.get("venue_epochs") or {}) != dict(
+        candidate.get("venue_epochs") or {}
+    ):
+        return False
+    old_start = int(existing.get("first_converting_segment_onset_ms", 0) or 0)
+    old_end = int(existing.get("ownership_completed_ms", 0) or 0)
+    new_start = int(candidate.get("first_converting_segment_onset_ms", 0) or 0)
+    new_end = int(candidate.get("ownership_completed_ms", 0) or 0)
+    return bool(
+        old_start > 0 and new_start > 0
+        and max(old_start, new_start) <= min(old_end, new_end)
+    )
+
+
+def _terminate_acquisition_wave(existing, report, completed_at):
+    """Terminate only on an observed causal falsifier, never on mere UNKNOWN."""
+    existing = dict(existing or {})
+    if str(existing.get("status") or "") != "SEALED":
+        return existing
+    cash = dict((report or {}).get("cash_control") or {})
+    wave_state = str(
+        cash.get("wave_state") or cash.get("regime_state") or "UNKNOWN"
+    ).upper()
+    current_side = str((report or {}).get("bias") or "ABSTAIN").upper()
+    old_side = str(existing.get("side") or "ABSTAIN").upper()
+    reason = None
+    if wave_state in {"CONTRADICTED", "ABSORPTION", "EXHAUSTION"}:
+        reason = str(cash.get("falsifier") or wave_state)
+    elif wave_state == "CONTROL_TRANSFER" and current_side in {
+        "LONG", "SHORT",
+    } and current_side != old_side:
+        reason = "OPPOSITE_CASH_CONTROL_TRANSFER"
+    if reason is None:
+        return existing
+    existing.update({
+        "status": "TERMINATED_CAUSAL_FALSIFIER",
+        "terminated_at_ms": int(float(completed_at) * 1000.0),
+        "termination_reason": reason,
+    })
+    return existing
+
+
 def _adaptive_cash_regime(reports):
     """Legacy lens decoder retained for replay/tests; not used by live evaluate."""
     valid = [row for row in reports if (row.get("price") or {}).get("vote") in ("LONG", "SHORT")]
@@ -827,12 +877,25 @@ def update_state(state, now=None, force_full=False):
     ).upper()
     out = evaluate(state, now=now, force_full=force_full)
     completed_at = float(out.get("ts", time.time()) or time.time())
+    existing = _terminate_acquisition_wave(
+        getattr(state, "bias_acquisition_handoff", {}), out, completed_at,
+    )
+    if existing:
+        state.bias_acquisition_handoff = existing
     handoff = None
     if previous_side not in ("LONG", "SHORT") and out.get("bias") in (
         "LONG", "SHORT",
     ):
-        handoff = _seal_acquisition_handoff(out, completed_at)
-        if handoff is not None:
+        candidate = _seal_acquisition_handoff(out, completed_at)
+        if candidate is not None:
+            if _same_acquisition_wave(existing, candidate):
+                handoff = dict(existing)
+                handoff["last_observed_at_ms"] = int(completed_at * 1000.0)
+                handoff["reacquisition_observations"] = int(
+                    handoff.get("reacquisition_observations", 0) or 0
+                ) + 1
+            else:
+                handoff = candidate
             state.bias_acquisition_handoff = handoff
     existing = dict(
         handoff or getattr(state, "bias_acquisition_handoff", {}) or {}

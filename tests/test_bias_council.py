@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
@@ -59,6 +60,63 @@ def state():
 
 
 class BiasCouncilTests(unittest.TestCase):
+    def test_overlapping_reacquisition_reuses_one_causal_wave(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        first = council.update_state(s, now=100.0)
+        first_id = first["acquisition_handoff"]["causal_wave_id"]
+
+        reacquired = copy.deepcopy(first)
+        reacquired.update({
+            "ts": 104.0,
+            "bias": "LONG",
+            "confidence": 0.70,
+            "hysteresis": "ACQUIRE_CASH_REGIME",
+        })
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        with patch.object(council, "evaluate", return_value=reacquired):
+            report = council.update_state(s, now=104.0)
+
+        self.assertEqual(
+            report["acquisition_handoff"]["causal_wave_id"], first_id,
+        )
+        self.assertEqual(
+            report["acquisition_handoff"]["reacquisition_observations"], 1,
+        )
+
+    def test_causal_falsifier_allows_new_acquisition_wave(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        first = council.update_state(s, now=100.0)
+        first_id = first["acquisition_handoff"]["causal_wave_id"]
+
+        failed = copy.deepcopy(first)
+        failed.update({"ts": 102.0, "bias": "ABSTAIN", "confidence": 0.0})
+        failed["cash_control"].update({
+            "wave_state": "EXHAUSTION",
+            "falsifier": "EXECUTED_FLOW_STOPPED_CONVERTING",
+        })
+        with patch.object(council, "evaluate", return_value=failed):
+            failed_report = council.update_state(s, now=102.0)
+        self.assertEqual(
+            failed_report["acquisition_handoff"]["status"],
+            "TERMINATED_CAUSAL_FALSIFIER",
+        )
+
+        reacquired = copy.deepcopy(first)
+        reacquired.update({
+            "ts": 104.0,
+            "bias": "LONG",
+            "confidence": 0.70,
+            "hysteresis": "ACQUIRE_CASH_REGIME",
+        })
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        with patch.object(council, "evaluate", return_value=reacquired):
+            report = council.update_state(s, now=104.0)
+        self.assertNotEqual(
+            report["acquisition_handoff"]["causal_wave_id"], first_id,
+        )
+
     def test_neutral_acquisition_seals_persistent_cash_origin(self):
         s = state()
         s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
