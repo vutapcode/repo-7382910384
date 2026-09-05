@@ -326,7 +326,8 @@ def _opportunity_history(cutoff):
                     "decision_count": payload.get("decision_count"),
                     "why_no_entry": {
                         key: why.get(key) for key in (
-                            "primary_reason", "all_reasons", "failed_gates",
+                            "primary_reason", "origin_reason",
+                            "terminal_reason", "all_reasons", "failed_gates",
                             "diagnostic_reasons", "miss_taxonomy",
                         ) if why.get(key) is not None
                     },

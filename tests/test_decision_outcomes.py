@@ -304,6 +304,14 @@ class DecisionOutcomeTrackerTests(unittest.TestCase):
         self.assertEqual(dossier["decision_count"], 2)
         self.assertEqual(
             dossier["why_no_entry"]["primary_reason"],
+            "WAIT_CHASE_PERP_AHEAD_OF_SPOT",
+        )
+        self.assertEqual(
+            dossier["why_no_entry"]["origin_reason"],
+            "WAIT_CHASE_PERP_AHEAD_OF_SPOT",
+        )
+        self.assertEqual(
+            dossier["why_no_entry"]["terminal_reason"],
             "WAIT_CURRENT_CASH_CONVERSION",
         )
         self.assertIn(

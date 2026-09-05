@@ -389,6 +389,14 @@ class DecisionOutcomeTracker:
         diagnostics = self._unique_trace_values(trace, "diagnostic_reasons")
         first = trace[0] if trace else {}
         last = trace[-1] if trace else {}
+        origin_reason = (
+            first.get("blocking_reason") or first.get("reason")
+            or tracker.get("reason")
+        )
+        terminal_reason = (
+            last.get("blocking_reason") or last.get("reason")
+            or origin_reason
+        )
         max_favorable = max(
             (_f(row.get("max_favorable_excursion_bps")) for row in outcomes),
             default=0.0,
@@ -433,10 +441,12 @@ class DecisionOutcomeTracker:
                 "decision_count": len(trace),
                 "decision_trace": trace,
                 "why_no_entry": {
-                    "primary_reason": (
-                        last.get("blocking_reason") or last.get("reason")
-                        or tracker.get("reason")
-                    ),
+                    # The causal origin owns miss attribution.  Later WAIT
+                    # states explain how the episode evolved but must not
+                    # rewrite why the original opportunity failed to enter.
+                    "primary_reason": origin_reason,
+                    "origin_reason": origin_reason,
+                    "terminal_reason": terminal_reason,
                     "all_reasons": reasons,
                     "failed_gates": failed_gates,
                     "diagnostic_reasons": diagnostics,

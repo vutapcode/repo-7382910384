@@ -108,6 +108,8 @@ class ResearchPublisherTests(unittest.TestCase):
                     "side": "LONG", "decision_count": 3,
                     "why_no_entry": {
                         "primary_reason": "WAIT_CURRENT_CASH_CONVERSION",
+                        "origin_reason": "WAIT_OI_REFRESH",
+                        "terminal_reason": "WAIT_CURRENT_CASH_CONVERSION",
                         "all_reasons": ["BIAS_NOT_READY"],
                         "private_account": "must-not-leak",
                     },
@@ -131,6 +133,13 @@ class ResearchPublisherTests(unittest.TestCase):
         self.assertEqual(rows[0]["causal_episode_id"], "episode-1")
         self.assertEqual(
             rows[0]["why_no_entry"]["primary_reason"],
+            "WAIT_CURRENT_CASH_CONVERSION",
+        )
+        self.assertEqual(
+            rows[0]["why_no_entry"]["origin_reason"], "WAIT_OI_REFRESH",
+        )
+        self.assertEqual(
+            rows[0]["why_no_entry"]["terminal_reason"],
             "WAIT_CURRENT_CASH_CONVERSION",
         )
         self.assertEqual(
