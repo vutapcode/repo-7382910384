@@ -186,9 +186,13 @@ class HostCpuGovernor:
             return False
         try:
             age = max(0.0, time.time() - float(raw.get('saved_at', 0.0)))
-            # A long unsampled gap cannot be placed accurately inside both
-            # rolling windows. Restart warmup is safer than inventing coverage.
-            if age > 30.0:
+            # Startup integrity and journal-consistency checks can legitimately
+            # take about a minute before this object is constructed.  /proc
+            # counters remain cumulative across that same-boot gap, so the
+            # first sample bridges it without inventing utilization.  Still
+            # reject a genuinely long shutdown: it cannot be placed accurately
+            # inside the rolling windows.
+            if age > 120.0:
                 return False
             now_mono = time.monotonic()
             rows = []

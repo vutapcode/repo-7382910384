@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -85,6 +86,66 @@ class HostCpuGovernorTests(unittest.TestCase):
                 self.assertAlmostEqual(
                     snap['post_start_coverage_1h_seconds'], 10.0
                 )
+
+    def test_same_boot_history_survives_realistic_startup_checks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            history = Path(temp) / "history.json"
+            external = Path(temp) / "external.json"
+            with patch.dict("os.environ", {
+                "WSTRADE_LIGHTSAIL_CPU_PATH": str(external),
+                "WSTRADE_CPU_HISTORY_PATH": str(history),
+            }):
+                first = HostCpuGovernor(cpu_count=2)
+                first.sample(
+                    now_mono=100.0, now_wall=1000.0,
+                    counters=(100, 80), scan_processes=False,
+                )
+                first.sample(
+                    now_mono=110.0, now_wall=1010.0,
+                    counters=(300, 240), scan_processes=False,
+                )
+                with patch(
+                    'loi_he_thong.host_cpu_governor.time.time',
+                    return_value=1065.0,
+                ), patch(
+                    'loi_he_thong.host_cpu_governor.time.monotonic',
+                    return_value=165.0,
+                ):
+                    first.checkpoint()
+                    # Preserve the checkpoint's original save time to model
+                    # startup checks occurring after the old process stopped.
+                    payload = json.loads(history.read_text())
+                    payload['saved_at'] = 1010.0
+                    history.write_text(json.dumps(payload))
+                    second = HostCpuGovernor(cpu_count=2)
+                self.assertTrue(second.history_restored)
+
+    def test_long_shutdown_does_not_claim_rolling_coverage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            history = Path(temp) / "history.json"
+            external = Path(temp) / "external.json"
+            with patch.dict("os.environ", {
+                "WSTRADE_LIGHTSAIL_CPU_PATH": str(external),
+                "WSTRADE_CPU_HISTORY_PATH": str(history),
+            }):
+                first = HostCpuGovernor(cpu_count=2)
+                first.sample(
+                    now_mono=100.0, now_wall=1000.0,
+                    counters=(100, 80), scan_processes=False,
+                )
+                first.checkpoint()
+                payload = json.loads(history.read_text())
+                payload['saved_at'] = 1000.0
+                history.write_text(json.dumps(payload))
+                with patch(
+                    'loi_he_thong.host_cpu_governor.time.time',
+                    return_value=1121.0,
+                ), patch(
+                    'loi_he_thong.host_cpu_governor.time.monotonic',
+                    return_value=221.0,
+                ):
+                    second = HostCpuGovernor(cpu_count=2)
+                self.assertFalse(second.history_restored)
 
     def test_incomplete_rolling_history_blocks_live_but_not_shadow(self):
         with tempfile.TemporaryDirectory() as temp:
