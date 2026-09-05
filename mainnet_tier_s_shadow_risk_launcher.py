@@ -119,6 +119,22 @@ def _flow_volume_quorum_required(state, now, required=2):
     return len(venues) >= required
 
 def _entry_quorum_ok(result, state, now):
+    scope = "LIVE" if bool(getattr(state, "wstrade_live_armed", False)) else "SHADOW"
+    valid, contract_reason, contract_detail = (
+        base.entry_council.validate_frozen_entry_contract(
+            result,
+            authority_scope=scope,
+            require_authority=True,
+        )
+    )
+    state.entry_structural_contract = {
+        "valid": bool(valid),
+        "reason": str(contract_reason),
+        "detail": dict(contract_detail or {}),
+        "authority_scope": scope,
+    }
+    if not valid:
+        return False
     allowed, report = edge.authorize(result, state)
     state.entry_edge_tier = report
     state.entry_edge_class = report.get("edge_class")

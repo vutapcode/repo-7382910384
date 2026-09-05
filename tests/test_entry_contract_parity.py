@@ -1,7 +1,10 @@
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import mainnet_tier_s_shadow_launcher as launcher
+_base_entry_quorum_ok = launcher._entry_quorum_ok
+import mainnet_tier_s_shadow_risk_launcher as active_launcher
 from loi_he_thong import entry_edge_tier
 from loi_he_thong import ignition_core
 
@@ -56,10 +59,35 @@ def frozen_result(mode="IGNITION", proof="METAORDER_CONTINUATION"):
 
 
 class EntryContractParityTests(unittest.TestCase):
+    def test_active_runtime_enforces_live_contract_before_economics(self):
+        result = frozen_result()
+        state = SimpleNamespace(wstrade_live_armed=True)
+        with patch.object(
+            active_launcher.base.entry_council,
+            "validate_frozen_entry_contract",
+            return_value=(
+                False,
+                "ACQUISITION_HANDOFF_LIVE_AUTHORITY_DISABLED",
+                {"entry_mode": "ACQUISITION_HANDOFF"},
+            ),
+        ) as validator, patch.object(
+            active_launcher.edge, "authorize",
+        ) as authorize:
+            self.assertFalse(active_launcher._entry_quorum_ok(result, state, 1.0))
+
+        validator.assert_called_once_with(
+            result, authority_scope="LIVE", require_authority=True,
+        )
+        authorize.assert_not_called()
+        self.assertEqual(
+            state.entry_structural_contract["reason"],
+            "ACQUISITION_HANDOFF_LIVE_AUTHORITY_DISABLED",
+        )
+
     def test_launcher_and_edge_accept_same_frozen_ignition_proof(self):
         result = frozen_result()
         state = SimpleNamespace(wstrade_live_armed=False)
-        self.assertTrue(launcher._entry_quorum_ok(result, state, 1.0))
+        self.assertTrue(_base_entry_quorum_ok(result, state, 1.0))
         self.assertTrue(entry_edge_tier.normal_contract_ok(result))
         self.assertEqual(state.entry_structural_contract["reason"], "PASS")
 
@@ -69,9 +97,9 @@ class EntryContractParityTests(unittest.TestCase):
         )
         shadow = SimpleNamespace(wstrade_live_armed=False)
         live = SimpleNamespace(wstrade_live_armed=True)
-        self.assertTrue(launcher._entry_quorum_ok(result, shadow, 1.0))
+        self.assertTrue(_base_entry_quorum_ok(result, shadow, 1.0))
         self.assertTrue(entry_edge_tier.normal_contract_ok(result))
-        self.assertFalse(launcher._entry_quorum_ok(result, live, 1.0))
+        self.assertFalse(_base_entry_quorum_ok(result, live, 1.0))
         self.assertEqual(
             live.entry_structural_contract["reason"],
             "PERSISTENT_METAORDER_LIVE_AUTHORITY_DISABLED",
@@ -82,7 +110,7 @@ class EntryContractParityTests(unittest.TestCase):
         result["ignition"] = dict(result["ignition"])
         result["ignition"]["proof_type"] = "PERSISTENT_METAORDER"
         state = SimpleNamespace(wstrade_live_armed=False)
-        self.assertFalse(launcher._entry_quorum_ok(result, state, 1.0))
+        self.assertFalse(_base_entry_quorum_ok(result, state, 1.0))
         self.assertFalse(entry_edge_tier.normal_contract_ok(result))
 
     def test_frozen_execution_policy_is_not_inferred_from_phase(self):
