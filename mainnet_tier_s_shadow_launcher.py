@@ -2148,6 +2148,9 @@ async def _entry_loop():
             result["acquisition_handoff_observation"] = (
                 acquisition_observation
             )
+            result["cross_cash_causal_wave"] = dict(
+                getattr(s, "cross_cash_causal_wave_shadow", {}) or {}
+            )
             urgent_oi_phase = str(result.get("phase", "")).upper() in {
                 "PRESSURE_BUILDING", "ACCEPTANCE", "RELEASE",
             }
@@ -2196,6 +2199,15 @@ async def _entry_loop():
             decision_cycle_id = _decision_cycle_id(s, now)
             result = dict(result)
             result["decision_cycle_id"] = decision_cycle_id
+            for wave_event, wave_payload in tuple(
+                getattr(s, "_cross_cash_causal_wave_events", ()) or ()
+            ):
+                _append_event(wave_event, {
+                    "schema_version": "CROSS_CASH_CAUSAL_WAVE_RECORD_V1",
+                    "cycle_id": decision_cycle_id,
+                    **dict(wave_payload or {}),
+                })
+            s._cross_cash_causal_wave_events = []
             opportunity_research = opportunity_research_matrix.build(
                 s, result, edge_report
             )

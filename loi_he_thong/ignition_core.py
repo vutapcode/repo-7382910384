@@ -10,6 +10,7 @@ import hashlib
 import json
 import time
 
+from loi_he_thong import cross_cash_causal_wave
 from loi_he_thong import ignition_signals
 
 
@@ -4543,6 +4544,10 @@ def evaluate(state, now=None, side=None):
     side = str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
     freshness = _freshness(state, now)
     histories = ignition_signals.snapshot(state, now_ms)
+    # Research-only market-process identity.  This cannot create Bias, Entry,
+    # or execution authority; it records whether cash flow led a surviving
+    # price response instead of inferring sameness from a 600 ms coincidence.
+    cross_cash_causal_wave.observe(state, histories, now_ms)
     previous_persistent = getattr(state, "persistent_metaorder_shadow", None)
     persistent_snapshot = _persistent_metaorder_snapshot(
         histories, now_ms, previous_persistent
