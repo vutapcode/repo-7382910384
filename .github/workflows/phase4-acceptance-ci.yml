@@ -18,8 +18,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install runtime dependencies
-        run: python -m pip install --disable-pip-version-check -q -r requirements.txt
+      - name: Install test/runtime dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -q -r requirements.txt pytest
+          mkdir -p .venv/bin
+          ln -sf "$(command -v python)" .venv/bin/python
 
       - name: Compile Phase 4 owners
         continue-on-error: true
@@ -41,9 +44,7 @@ jobs:
           from pathlib import Path
           src = Path('loi_he_thong/ignition_core.py').read_text()
           forbidden = '_ignition_acquisition_claimed_id'
-          assert forbidden not in src, (
-              'FAIL: Ignition still owns one-shot causal-wave claim via ' + forbidden
-          )
+          assert forbidden not in src, 'FAIL: Ignition still owns one-shot causal-wave claim via ' + forbidden
           PY
 
       - name: Authority invariant - maturity cannot hard-veto before Economics
@@ -53,9 +54,7 @@ jobs:
           from pathlib import Path
           src = Path('loi_he_thong/ignition_core.py').read_text()
           forbidden = 'consumed > MAX_CONSUMED_FRACTION'
-          assert forbidden not in src, (
-              'FAIL: consumed_fraction still has structural Entry veto authority'
-          )
+          assert forbidden not in src, 'FAIL: consumed_fraction still has structural Entry veto authority'
           PY
 
       - name: Lifecycle invariant - explicit consumed and invalidated semantics
@@ -81,33 +80,31 @@ jobs:
 
       - name: Causal mechanism contract
         continue-on-error: true
-        run: python -m unittest discover -s tests -p 'test_causal_mechanism.py' -v
+        run: python -m pytest -q tests/test_causal_mechanism.py
       - name: Timing to Economics handoff contract
         continue-on-error: true
-        run: python -m unittest discover -s tests -p 'test_timing_economics_handoff.py' -v
+        run: python -m pytest -q tests/test_timing_economics_handoff.py
       - name: Frozen physical cost contract
         continue-on-error: true
-        run: python -m unittest discover -s tests -p 'test_verified_cost_model.py' -v
+        run: python -m pytest -q tests/test_verified_cost_model.py
       - name: Empirical Economics contract
         continue-on-error: true
-        run: python -m unittest discover -s tests -p 'test_entry_economics_v2.py' -v
+        run: python -m pytest -q tests/test_entry_economics_v2.py
       - name: Opportunity lifecycle contract
         continue-on-error: true
-        run: python -m unittest discover -s tests -p 'test_entry_lifecycle.py' -v
+        run: python -m pytest -q tests/test_entry_lifecycle.py
       - name: Canonical opportunity reservation and capture contract
         continue-on-error: true
-        run: python -m unittest discover -s tests -p 'test_canonical_opportunity.py' -v
+        run: python -m pytest -q tests/test_canonical_opportunity.py
       - name: Ignition regression contract
         continue-on-error: true
-        run: python -m unittest discover -s tests -p 'test_ignition_core.py' -v
+        run: python -m pytest -q tests/test_ignition_core.py
       - name: Replay validation contract
         continue-on-error: true
-        run: python -m unittest discover -s tests -p 'test_wstrade_replay_validation.py' -v
+        run: python -m pytest -q tests/test_wstrade_replay_validation.py
       - name: Mainnet remains locked
         continue-on-error: true
-        run: |
-          python -m unittest discover -s tests -p 'test_mainnet_safety.py' -v
-          python -m unittest discover -s tests -p 'test_direct_live_mode.py' -v
+        run: python -m pytest -q tests/test_mainnet_safety.py tests/test_direct_live_mode.py
 
       - name: Strict Phase 4 acceptance summary
         run: |
