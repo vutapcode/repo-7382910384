@@ -1,0 +1,42 @@
+name: Codespace Capability Probe
+
+on:
+  push:
+    paths:
+      - '.github/workflows/codespace-capability-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.CODESPACE_PAT || github.token }}
+    steps:
+      - name: Runner and GitHub CLI
+        run: |
+          echo "runner=$RUNNER_OS repo=$GITHUB_REPOSITORY"
+          gh --version | head -n 1
+
+      - name: Probe Codespaces API read access
+        shell: bash
+        run: |
+          set +e
+          gh api -H "Accept: application/vnd.github+json" /user/codespaces > /tmp/codespaces.json 2> /tmp/codespaces.err
+          rc=$?
+          echo "codespaces_api_rc=$rc"
+          if [ "$rc" -eq 0 ]; then
+            python3 - <<'PY'
+          import json
+          d=json.load(open('/tmp/codespaces.json'))
+          print('codespaces_api=OK')
+          print('total_count=', d.get('total_count'))
+          for c in d.get('codespaces', []):
+              print('codespace=', c.get('name'), 'state=', c.get('state'), 'repo=', (c.get('repository') or {}).get('full_name'))
+          PY
+          else
+            echo "codespaces_api=DENIED"
+            cat /tmp/codespaces.err
+          fi
+          exit 0
