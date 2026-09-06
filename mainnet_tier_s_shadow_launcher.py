@@ -2403,6 +2403,9 @@ async def _entry_loop():
                     "acquisition_handoff_observation": (
                         acquisition_observation
                     ),
+                    "cross_cash_causal_wave": dict(
+                        result.get("cross_cash_causal_wave") or {}
+                    ),
                     "opportunity_research": opportunity_research,
                     "ignition_state": (result.get("ignition") or {}).get("state"),
                     "ignition_proposer": (result.get("ignition") or {}).get("proposer"),
