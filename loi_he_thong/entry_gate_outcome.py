@@ -30,6 +30,11 @@ _THESIS_MARKERS = (
     "UNWIND", "OPPOSITE", "CONTRADICTION", "CROSS_VENUE",
 )
 
+_MARKET_TRUTH_MARKERS = (
+    "BIAS", "ALIGN", "CONTRADICTION", "OPPOSITE", "ABSOR", "EXHAUST",
+    "NONCONVERSION", "PERP_LED", "LIQUIDATION", "UNWIND",
+)
+
 
 def outcome(allowed, owner, stage, reason, detail=None):
     owner = str(owner or "ACTION").upper()
@@ -53,6 +58,21 @@ def structural(allowed, reason, detail=None):
         allowed, "ACTION" if allowed else "STRUCTURAL",
         "AUTHORIZED" if allowed else "FROZEN_ENTRY_CONTRACT",
         reason, detail,
+    )
+
+
+def from_entry_decision(result):
+    """Attribute an Ignition/Council WAIT before structural validation."""
+    result = dict(result or {})
+    reason = str(result.get("reason") or "ENTRY_NOT_PROPOSED").upper()
+    owner = (
+        "THESIS" if any(marker in reason for marker in _MARKET_TRUTH_MARKERS)
+        else "TIMING"
+    )
+    return outcome(
+        False, owner,
+        "MARKET_TRUTH" if owner == "THESIS" else "TIMING_NOW",
+        reason, {"entry_decision": result.get("decision", "WAIT")},
     )
 
 

@@ -121,6 +121,19 @@ def _flow_volume_quorum_required(state, now, required=2):
 
 def _entry_quorum_outcome(result, state, now):
     """Evaluate each existing owner once and preserve the real blocker."""
+    if (result or {}).get("decision") != "GO":
+        gate = entry_gate_outcome.from_entry_decision(result)
+        state.entry_gate_outcome = gate
+        state.entry_structural_contract = {
+            "valid": None,
+            "reason": "NOT_APPLICABLE_UNTIL_GO",
+            "detail": {},
+            "authority_scope": (
+                "LIVE" if bool(getattr(state, "wstrade_live_armed", False))
+                else "SHADOW"
+            ),
+        }
+        return gate
     scope = "LIVE" if bool(getattr(state, "wstrade_live_armed", False)) else "SHADOW"
     valid, contract_reason, contract_detail = (
         base.entry_council.validate_frozen_entry_contract(

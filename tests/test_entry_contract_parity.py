@@ -59,6 +59,26 @@ def frozen_result(mode="IGNITION", proof="METAORDER_CONTINUATION"):
 
 
 class EntryContractParityTests(unittest.TestCase):
+    def test_non_go_wait_never_enters_structural_validator(self):
+        result = {"decision": "WAIT", "reason": "BIAS_NOT_READY"}
+        state = SimpleNamespace(wstrade_live_armed=False)
+        with patch.object(
+            active_launcher.base.entry_council,
+            "validate_frozen_entry_contract",
+        ) as validator, patch.object(
+            active_launcher.edge, "authorize",
+        ) as authorize:
+            self.assertFalse(
+                active_launcher._entry_quorum_ok(result, state, 1.0)
+            )
+        validator.assert_not_called()
+        authorize.assert_not_called()
+        self.assertEqual(state.entry_gate_outcome["owner"], "THESIS")
+        self.assertEqual(
+            state.entry_structural_contract["reason"],
+            "NOT_APPLICABLE_UNTIL_GO",
+        )
+
     def test_active_runtime_does_not_reinterpret_validated_ignition(self):
         result = {"decision": "GO", "ignition": {}}
         state = SimpleNamespace(wstrade_live_armed=False)

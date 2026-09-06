@@ -44,6 +44,20 @@ class EntryGateOutcomeTests(unittest.TestCase):
         )
         self.assertEqual(row["reason"], "UNATTRIBUTED_REJECT")
 
+    def test_bias_wait_is_market_truth_not_structural(self):
+        row = entry_gate_outcome.from_entry_decision({
+            "decision": "WAIT", "reason": "BIAS_NOT_READY",
+        })
+        self.assertEqual(row["owner"], "THESIS")
+        self.assertEqual(row["stage"], "MARKET_TRUTH")
+
+    def test_stale_wait_is_timing_not_structural(self):
+        row = entry_gate_outcome.from_entry_decision({
+            "decision": "WAIT", "reason": "WAIT_STALE_DATA",
+        })
+        self.assertEqual(row["owner"], "TIMING")
+        self.assertEqual(row["stage"], "TIMING_NOW")
+
 
 if __name__ == "__main__":
     unittest.main()
