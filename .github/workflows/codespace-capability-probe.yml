@@ -11,32 +11,72 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ secrets.CODESPACE_PAT || github.token }}
     steps:
-      - name: Runner and GitHub CLI
+      - name: Prove Codespaces lifecycle
+        shell: bash
         run: |
+          set -euo pipefail
           echo "runner=$RUNNER_OS repo=$GITHUB_REPOSITORY"
           gh --version | head -n 1
 
-      - name: Probe Codespaces API read access
-        shell: bash
-        run: |
-          set +e
-          gh api -H "Accept: application/vnd.github+json" /user/codespaces > /tmp/codespaces.json 2> /tmp/codespaces.err
-          rc=$?
-          echo "codespaces_api_rc=$rc"
-          if [ "$rc" -eq 0 ]; then
-            python3 - <<'PY'
+          gh api "/repos/$GITHUB_REPOSITORY/codespaces/machines" > /tmp/machines.json
+          MACHINE=$(python3 - <<'PY'
           import json
-          d=json.load(open('/tmp/codespaces.json'))
-          print('codespaces_api=OK')
-          print('total_count=', d.get('total_count'))
-          for c in d.get('codespaces', []):
-              print('codespace=', c.get('name'), 'state=', c.get('state'), 'repo=', (c.get('repository') or {}).get('full_name'))
+          d=json.load(open('/tmp/machines.json'))
+          ms=d.get('machines', [])
+          if not ms:
+              raise SystemExit('NO_CODESPACE_MACHINE')
+          print(ms[0]['name'])
           PY
-          else
-            echo "codespaces_api=DENIED"
-            cat /tmp/codespaces.err
+          )
+          echo "machine=$MACHINE"
+
+          python3 - "$MACHINE" <<'PY' > /tmp/create.json
+          import json,sys
+          print(json.dumps({
+              'ref':'refs/heads/main',
+              'machine':sys.argv[1],
+              'idle_timeout_minutes':10,
+              'display_name':'chatgpt-capability-probe'
+          }))
+          PY
+
+          gh api -X POST "/repos/$GITHUB_REPOSITORY/codespaces" --input /tmp/create.json > /tmp/created.json
+          CS=$(python3 - <<'PY'
+          import json
+          print(json.load(open('/tmp/created.json'))['name'])
+          PY
+          )
+          echo "codespace_created=$CS"
+
+          cleanup() {
+            echo "cleanup_delete=$CS"
+            gh api -X DELETE "/user/codespaces/$CS" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          READY=0
+          for i in $(seq 1 36); do
+            gh api "/user/codespaces/$CS" > /tmp/state.json
+            STATE=$(python3 - <<'PY'
+          import json
+          print(json.load(open('/tmp/state.json')).get('state'))
+          PY
+            )
+            echo "poll=$i state=$STATE"
+            if [ "$STATE" = "Available" ]; then READY=1; break; fi
+            if [ "$STATE" = "Shutdown" ] || [ "$STATE" = "Failed" ]; then break; fi
+            sleep 5
+          done
+
+          if [ "$READY" -ne 1 ]; then
+            echo "codespace_ready=NO"
+            exit 1
           fi
-          exit 0
+
+          echo "codespace_ready=YES"
+          gh codespace ssh -c "$CS" -- bash -lc 'echo CODE_EXEC_OK; git -C "$CODESPACE_VSCODE_FOLDER" rev-parse HEAD; uname -srm'
+          echo "codespace_exec=OK"
