@@ -8,14 +8,53 @@ Entry, Execution, Guardian or Risk authority.
 import hashlib
 import json
 
-VERSION = "ENTRY_LIFECYCLE_V1"
+VERSION = "ENTRY_LIFECYCLE_V2_RETRYABLE_TIMING_ATTEMPTS"
+
+_EXPIRING_TIMING_REASONS = frozenset({
+    "WAIT_CASH_IGNITION_FUTURES_RESPONSE",
+    "WAIT_FUTURES_ALERT_CASH_RESPONSE",
+    "WAIT_STALE_COINBASE",
+    "WAIT_FEED_GROUP_NOT_READY",
+    "WAIT_CURRENT_CASH_CONVERSION",
+    "WAIT_CAUSAL_LEADER_UNCERTAIN",
+    "IGNITION_EVIDENCE_DECAYED",
+    "IGNITION_EPISODE_SAFETY_EXPIRED",
+    "CLOCK_OR_EVENT_TIME_INVALID",
+    "EXECUTED_FLOW_EPOCH_RESET",
+})
+
+
+def _proof_and_epochs(result):
+    result = dict(result or {})
+    ignition = dict(result.get("ignition") or {})
+    dependencies = dict(result.get("authority_dependencies") or {})
+    proof = dict(
+        dependencies.get("current_execution_proof")
+        or ignition.get("current_execution_proof")
+        or {}
+    )
+    epochs = dict(dependencies.get("causal_epochs") or {})
+    if not epochs:
+        epochs = {
+            str(name): int((row or {}).get("epoch", 0) or 0)
+            for name, row in dict(ignition.get("clock_quality") or {}).items()
+            if isinstance(row, dict) and int((row or {}).get("epoch", 0) or 0) > 0
+        }
+    if not epochs:
+        epochs = dict(
+            (ignition.get("causal_wave_snapshot") or {}).get("epochs") or {}
+        )
+    return proof, {
+        str(name): int(value or 0)
+        for name, value in sorted(epochs.items())
+        if int(value or 0) > 0
+    }
 
 
 def _timing_payload(result):
     result = dict(result or {})
     ignition = dict(result.get("ignition") or {})
-    dependencies = dict(result.get("authority_dependencies") or {})
-    proof = dict(dependencies.get("current_execution_proof") or {})
+    proof, epochs = _proof_and_epochs(result)
     episode_id = str(
         result.get("causal_episode_id")
         or ignition.get("causal_episode_id") or ignition.get("episode_id") or ""
@@ -24,12 +63,6 @@ def _timing_payload(result):
     proof_identity = str(
         proof.get("proof_hash") or proof.get("evidence_id") or ""
     )
-    epochs = {
-        str(name): int(value or 0)
-        for name, value in sorted(
-            dict(dependencies.get("causal_epochs") or {}).items()
-        )
-    }
     if not episode_id or side not in {"LONG", "SHORT"} or not proof_identity:
         return None
     return {
@@ -52,15 +85,75 @@ def timing_attempt_id(result):
 
 
 def observe(state, result, gate_outcome, *, economic_opportunity_id=None):
-    """Return recorder events for one GO proof without changing authorization."""
+    """Observe sequential timing attempts without changing authorization."""
     result = dict(result or {})
     gate = dict(gate_outcome or {})
-    attempt_id = timing_attempt_id(result) if result.get("decision") == "GO" else None
+    attempt_id = timing_attempt_id(result)
+    attempt_identity = _timing_payload(result)
+    reason = str(gate.get("reason") or result.get("reason") or "UNKNOWN").upper()
+    expiring = reason in _EXPIRING_TIMING_REASONS
     previous_id = str(getattr(state, "entry_timing_attempt_id", "") or "")
+    previous_identity = dict(
+        getattr(state, "entry_timing_attempt_identity", {}) or {}
+    )
     previous_terminal = bool(
         getattr(state, "entry_timing_attempt_terminal", False)
     )
+    expired_ids = list(
+        getattr(state, "entry_timing_expired_attempt_ids", ()) or ()
+    )
     events = []
+
+    epoch_cross = bool(
+        attempt_identity and previous_identity
+        and attempt_identity.get("causal_wave_id")
+        == previous_identity.get("causal_wave_id")
+        and dict(attempt_identity.get("venue_epochs") or {})
+        != dict(previous_identity.get("venue_epochs") or {})
+    )
+    if epoch_cross:
+        expiring = True
+        reason = "CAUSAL_EPOCH_CHANGED_WITHIN_WAVE"
+        # An epoch change must produce a new causal wave, not merely a new
+        # timing proof under the old identity.
+        attempt_id = None
+        attempt_identity = None
+
+    def expire(active_id, expiry_reason):
+        nonlocal previous_terminal
+        if not active_id or active_id in expired_ids:
+            return
+        expired_ids.append(active_id)
+        del expired_ids[:-64]
+        state.entry_timing_expired_attempt_ids = list(expired_ids)
+        state.entry_timing_attempt_terminal = True
+        state.entry_timing_attempt_status = "EXPIRED"
+        previous_terminal = True
+        events.append(("TIMING_ATTEMPT_EXPIRED", {
+            "timing_attempt_id": active_id,
+            "result": expiry_reason,
+            "gate_outcome": gate,
+        }))
+
+    if expiring and previous_id and not previous_terminal and (
+        attempt_id in {None, previous_id}
+    ):
+        expire(previous_id, reason)
+
+    stale_reuse = bool(attempt_id and attempt_id in expired_ids)
+    if stale_reuse:
+        reuse_identity = (attempt_id, reason)
+        if reuse_identity != getattr(
+            state, "entry_timing_attempt_last_reuse_identity", None
+        ):
+            state.entry_timing_attempt_last_reuse_identity = reuse_identity
+            events.append(("TIMING_ATTEMPT_REUSE_REJECTED", {
+                "timing_attempt_id": attempt_id,
+                "result": "EXPIRED_PROOF_CANNOT_REOPEN_ATTEMPT",
+                "gate_outcome": gate,
+            }))
+        attempt_id = None
+        attempt_identity = None
 
     if attempt_id and attempt_id != previous_id:
         if previous_id and not previous_terminal:
@@ -69,16 +162,20 @@ def observe(state, result, gate_outcome, *, economic_opportunity_id=None):
                 "result": "SUPERSEDED_BY_FRESH_EXECUTION_PROOF",
             }))
         state.entry_timing_attempt_id = attempt_id
+        state.entry_timing_attempt_identity = dict(attempt_identity or {})
         state.entry_timing_attempt_terminal = False
         state.entry_timing_attempt_status = "OPEN"
+        state.entry_timing_attempt_last_wait_identity = None
         previous_terminal = False
         events.append(("TIMING_ATTEMPT_OPENED", {
             "timing_attempt_id": attempt_id,
-            "identity": _timing_payload(result),
+            "identity": attempt_identity,
         }))
 
     if attempt_id and not previous_terminal:
-        if gate.get("allowed"):
+        if expiring:
+            expire(attempt_id, reason)
+        elif gate.get("allowed"):
             state.entry_timing_attempt_terminal = True
             state.entry_timing_attempt_status = "PASSED"
             events.append(("TIMING_ATTEMPT_PASSED", {
@@ -110,10 +207,31 @@ def observe(state, result, gate_outcome, *, economic_opportunity_id=None):
     economic_id = (
         int(economic_opportunity_id or 0) or None
     )
+    previous_link = getattr(state, "entry_economic_opportunity_link", None)
     link_identity = (attempt_id, economic_id)
     if attempt_id and economic_id and link_identity != getattr(
         state, "entry_economic_opportunity_link", None
     ):
+        previous_attempt, previous_economic = (
+            previous_link if isinstance(previous_link, tuple)
+            and len(previous_link) == 2 else (None, None)
+        )
+        if previous_economic != economic_id:
+            events.append(("ECONOMIC_OPPORTUNITY_OPENED", {
+                "economic_opportunity_id": economic_id,
+                "canonical_opportunity_id": economic_id,
+                "causal_wave_id": (
+                    (attempt_identity or {}).get("causal_wave_id")
+                ),
+            }))
+        elif previous_attempt != attempt_id:
+            events.append(("ECONOMIC_OPPORTUNITY_REPRICED", {
+                "economic_opportunity_id": economic_id,
+                "canonical_opportunity_id": economic_id,
+                "previous_timing_attempt_id": previous_attempt,
+                "timing_attempt_id": attempt_id,
+                "reason": "FRESH_EXECUTION_PROOF",
+            }))
         state.entry_economic_opportunity_link = link_identity
         events.append(("ECONOMIC_OPPORTUNITY_LINKED", {
             "timing_attempt_id": attempt_id,
@@ -128,7 +246,9 @@ def observe(state, result, gate_outcome, *, economic_opportunity_id=None):
         "economic_opportunity_id": economic_id,
         "status": (
             getattr(state, "entry_timing_attempt_status", "UNOBSERVED")
-            if attempt_id else "UNOBSERVED"
+            if attempt_id else (
+                "EXPIRED" if stale_reuse or expiring else "UNOBSERVED"
+            )
         ),
         "events": events,
     }

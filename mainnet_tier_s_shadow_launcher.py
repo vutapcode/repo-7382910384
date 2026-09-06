@@ -2273,7 +2273,7 @@ async def _entry_loop():
                 "events", ()
             ):
                 _append_event(lifecycle_event, {
-                    "schema_version": "ENTRY_LIFECYCLE_RECORD_V1",
+                    "schema_version": "ENTRY_LIFECYCLE_RECORD_V2",
                     "cycle_id": decision_cycle_id,
                     "causal_episode_id": result.get("causal_episode_id"),
                     "side": result.get("side"),

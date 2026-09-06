@@ -16,11 +16,31 @@ def result(proof_hash="proof-a"):
             },
             "causal_epochs": {
                 "binance_spot": 1,
-                "coinbase_spot": 2,
+                "coinbase_spot": 1,
             },
         },
         "ignition": {},
     }
+
+
+def waiting_result(reason, proof_hash="proof-a", *, epoch=1):
+    row = result(proof_hash)
+    row["decision"] = "WAIT"
+    row["reason"] = reason
+    row["authority_dependencies"] = {}
+    row["ignition"] = {
+        "causal_episode_id": "wave-1",
+        "side": "LONG",
+        "current_execution_proof": {
+            "proof_hash": proof_hash,
+            "observed_at_ms": 1_000,
+        },
+        "clock_quality": {
+            "binance_spot": {"epoch": epoch},
+            "coinbase_spot": {"epoch": epoch},
+        },
+    }
+    return row
 
 
 class EntryLifecycleTests(unittest.TestCase):
@@ -45,6 +65,7 @@ class EntryLifecycleTests(unittest.TestCase):
         self.assertEqual(
             [name for name, _ in first["events"]],
             ["TIMING_ATTEMPT_OPENED", "TIMING_ATTEMPT_WAIT",
+             "ECONOMIC_OPPORTUNITY_OPENED",
              "ECONOMIC_OPPORTUNITY_LINKED"],
         )
         second = entry_lifecycle.observe(state, result(), {
@@ -75,6 +96,77 @@ class EntryLifecycleTests(unittest.TestCase):
         row = result()
         row["authority_dependencies"] = {}
         self.assertIsNone(entry_lifecycle.timing_attempt_id(row))
+
+    def test_futures_wait_expires_attempt_without_consuming_opportunity(self):
+        state = SimpleNamespace(canonical_last_consumed_opportunity_id=0)
+        observed = entry_lifecycle.observe(
+            state,
+            waiting_result("WAIT_CASH_IGNITION_FUTURES_RESPONSE"),
+            {
+                "allowed": False, "owner": "TIMING",
+                "stage": "TIMING_NOW",
+                "reason": "WAIT_CASH_IGNITION_FUTURES_RESPONSE",
+            },
+            economic_opportunity_id=11,
+        )
+        self.assertEqual(
+            [name for name, _ in observed["events"]],
+            [
+                "TIMING_ATTEMPT_OPENED", "TIMING_ATTEMPT_EXPIRED",
+                "ECONOMIC_OPPORTUNITY_OPENED",
+                "ECONOMIC_OPPORTUNITY_LINKED",
+            ],
+        )
+        self.assertEqual(observed["status"], "EXPIRED")
+        self.assertEqual(state.canonical_last_consumed_opportunity_id, 0)
+
+    def test_expired_proof_cannot_reopen_but_fresh_proof_can(self):
+        state = SimpleNamespace()
+        expired = waiting_result("WAIT_CURRENT_CASH_CONVERSION")
+        entry_lifecycle.observe(state, expired, {
+            "allowed": False, "owner": "TIMING",
+            "stage": "TIMING_NOW", "reason": "WAIT_CURRENT_CASH_CONVERSION",
+        }, economic_opportunity_id=12)
+
+        reused = entry_lifecycle.observe(state, result("proof-a"), {
+            "allowed": True, "owner": "ACTION",
+            "stage": "AUTHORIZED", "reason": "PASS",
+        }, economic_opportunity_id=12)
+        self.assertEqual(
+            [name for name, _ in reused["events"]],
+            ["TIMING_ATTEMPT_REUSE_REJECTED"],
+        )
+
+        fresh = entry_lifecycle.observe(state, result("proof-b"), {
+            "allowed": True, "owner": "ACTION",
+            "stage": "AUTHORIZED", "reason": "PASS",
+        }, economic_opportunity_id=12)
+        self.assertEqual(
+            [name for name, _ in fresh["events"]],
+            [
+                "TIMING_ATTEMPT_OPENED", "TIMING_ATTEMPT_PASSED",
+                "ECONOMIC_OPPORTUNITY_REPRICED",
+                "ECONOMIC_OPPORTUNITY_LINKED",
+            ],
+        )
+
+    def test_epoch_change_cannot_stitch_same_wave(self):
+        state = SimpleNamespace()
+        first = waiting_result("FLOW_FADING", epoch=1)
+        entry_lifecycle.observe(state, first, {
+            "allowed": False, "owner": "TIMING",
+            "stage": "TIMING_NOW", "reason": "FLOW_FADING",
+        }, economic_opportunity_id=13)
+        changed = waiting_result("FLOW_FADING", proof_hash="proof-b", epoch=2)
+        observed = entry_lifecycle.observe(state, changed, {
+            "allowed": False, "owner": "TIMING",
+            "stage": "TIMING_NOW", "reason": "FLOW_FADING",
+        }, economic_opportunity_id=13)
+        self.assertIn(
+            "TIMING_ATTEMPT_EXPIRED",
+            [name for name, _ in observed["events"]],
+        )
+        self.assertIsNone(observed["timing_attempt_id"])
 
 
 if __name__ == "__main__":
