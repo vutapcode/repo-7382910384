@@ -1,0 +1,3 @@
+CAPABILITY_TEST_ONLY
+purpose=prove pull_request GitHub Actions can be triggered and inspected by ChatGPT
+base=9282532ceb1c993544e509ef77ff8dbd26b305eb
