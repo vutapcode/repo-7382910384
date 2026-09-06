@@ -7,6 +7,7 @@ market orders are large.
 """
 
 from loi_he_thong import ignition_core
+from loi_he_thong import causal_mechanism
 
 VERSION = "ENTRY_THESIS_GATE_V7_OBSERVATION_NEUTRAL"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
@@ -111,21 +112,35 @@ def _intent_question(ignition, liquidation):
     ).upper()
     fresh = verification_status.startswith("FRESH_")
     phase = str((liquidation or {}).get("phase") or "UNKNOWN").upper()
-    forced = bool(
-        fresh and intent == "UNWIND"
-        or (liquidation or {}).get("burst")
-        or (liquidation or {}).get("decelerating")
-    )
-    classification = (
-        "POSITION_BUILD" if fresh and intent == "POSITION_BUILD" else
-        "LIQUIDATION_TAIL" if (liquidation or {}).get("decelerating") else
-        "LIQUIDATION_CASCADE" if (liquidation or {}).get("burst") else
-        "UNWIND" if fresh and intent == "UNWIND" else
-        "NEUTRAL_OR_UNVERIFIED"
-    )
+    
+    cash = set(ignition.get("cash_venues") or ())
+    dual_cash = {"binance_spot", "coinbase_spot"}.issubset(cash)
+    cash_evidence = {"dual_cash_independent": dual_cash}
+    
+    mech_class = causal_mechanism.classify(verification, liquidation, cash_evidence)
+    
+    burst = bool((liquidation or {}).get("burst"))
+    decelerating = bool((liquidation or {}).get("decelerating"))
+    forced = bool(fresh and intent == "UNWIND" or burst or decelerating)
+    
+    if mech_class == "POSITION_BUILD":
+        classification = "POSITION_BUILD"
+    elif mech_class == "UNWIND":
+        classification = "UNWIND"
+    elif mech_class == "FORCED_CLOSING":
+        if decelerating and not dual_cash:
+            classification = "LIQUIDATION_TAIL"
+        else:
+            classification = "LIQUIDATION_CASCADE"
+    elif mech_class == "CASH_CONTROL_AFTER_UNWIND":
+        classification = "CASH_CONTROL_AFTER_UNWIND"
+    else:
+        classification = "NEUTRAL_OR_UNVERIFIED"
+
     return {
         "question": "NEW_MONEY_OR_FORCED_UNWIND",
         "status": classification, "oi_intent": intent,
+        "mechanism_classification": mech_class,
         "oi_fresh": fresh, "oi_verification_status": verification_status,
         "oi_causal_class": oi.get("causal_class"),
         "force_order_phase": phase, "forced_closing_risk": forced,
