@@ -84,6 +84,42 @@ def timing_attempt_id(result):
     return "timing:" + hashlib.sha256(encoded).hexdigest()
 
 
+def wave_still_alive(state, causal_wave_id):
+    if not causal_wave_id:
+        return False
+    active_id = getattr(state, "canonical_opportunity_active_episode_id", None)
+    if active_id != causal_wave_id:
+        return False
+    if not getattr(state, "canonical_opportunity_active", False):
+        return False
+    return True
+
+def can_create_attempt(state, result):
+    payload = _timing_payload(result)
+    if not payload:
+        return False, "INVALID_PAYLOAD"
+    
+    causal_wave_id = payload.get("causal_wave_id")
+    if not wave_still_alive(state, causal_wave_id):
+        return False, "WAVE_NO_LONGER_ALIVE"
+
+    previous_terminal = bool(getattr(state, "entry_timing_attempt_terminal", False))
+    previous_id = str(getattr(state, "entry_timing_attempt_id", "") or "")
+    if previous_id and not previous_terminal:
+        return False, "PARALLEL_ACTIVE_ATTEMPT"
+
+    attempt_id = timing_attempt_id(result)
+    expired_ids = list(getattr(state, "entry_timing_expired_attempt_ids", ()) or ())
+    if attempt_id in expired_ids:
+        return False, "STALE_PROOF_REUSE"
+
+    previous_identity = dict(getattr(state, "entry_timing_attempt_identity", {}) or {})
+    if previous_identity and payload.get("causal_wave_id") == previous_identity.get("causal_wave_id"):
+        if dict(payload.get("venue_epochs") or {}) != dict(previous_identity.get("venue_epochs") or {}):
+            return False, "CAUSAL_EPOCH_CHANGED_WITHIN_WAVE"
+
+    return True, "ALLOWED"
+
 def observe(state, result, gate_outcome, *, economic_opportunity_id=None):
     """Observe sequential timing attempts without changing authorization."""
     result = dict(result or {})

@@ -2237,8 +2237,23 @@ async def _entry_loop():
                 s, result, quorum_ok, opportunity.get("causal_episode_id"),
             )
             if result.get("decision") == "GO" and quorum_ok:
-                try:
-                    result["entry_thesis_handoff"] = _freeze_entry_handoff(
+                prev_status = getattr(s, "entry_timing_attempt_status", "")
+                if prev_status == "EXPIRED":
+                    allowed, reject_reason = entry_lifecycle.can_create_attempt(s, result)
+                    if not allowed:
+                        quorum_ok = False
+                        blocking_stage = "TIMING_ATTEMPT_GATE"
+                        result["decision"] = "WAIT"
+                        result["reason"] = f"TIMING_RETRY_BLOCKED_{reject_reason}"
+                        gate_outcome = entry_gate_outcome.structural(
+                            False, "TIMING_RETRY_BLOCKED",
+                            {"error": reject_reason},
+                        )
+                        s.entry_gate_outcome = gate_outcome
+
+                if quorum_ok:
+                    try:
+                        result["entry_thesis_handoff"] = _freeze_entry_handoff(
                         result, opportunity.get("causal_episode_id"),
                     )
                 except ValueError as exc:
