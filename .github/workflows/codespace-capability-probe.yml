@@ -14,28 +14,26 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ secrets.CODESPACE_PAT || github.token }}
+      TARGET_SHA: aea8753e8405491bfbd2cf48d44f80e73acf5312
     steps:
-      - name: Create execute delete Codespace
+      - name: Verify exact commit inside Codespace
         shell: bash
         run: |
           set -euo pipefail
-          echo "runner=$RUNNER_OS repo=$GITHUB_REPOSITORY"
-          gh --version | head -n 1
-
-          cat > /tmp/create.json <<'JSON'
-          {
-            "repository_id": 1335905093,
-            "ref": "main",
-            "idle_timeout_minutes": 10,
-            "display_name": "chatgpt-capability-probe"
-          }
-          JSON
+          python3 - <<'PY' > /tmp/create.json
+          import json, os
+          print(json.dumps({
+              'repository_id': 1335905093,
+              'ref': os.environ['TARGET_SHA'],
+              'idle_timeout_minutes': 10,
+              'display_name': 'chatgpt-commit-verifier'
+          }))
+          PY
 
           gh api -X POST /user/codespaces --input /tmp/create.json > /tmp/created.json
           CS=$(python3 - <<'PY'
           import json
-          d=json.load(open('/tmp/created.json'))
-          print(d['name'])
+          print(json.load(open('/tmp/created.json'))['name'])
           PY
           )
           echo "codespace_created=$CS"
@@ -59,8 +57,7 @@ jobs:
             if [ "$STATE" = "Shutdown" ] || [ "$STATE" = "Failed" ]; then break; fi
             sleep 5
           done
-
           test "$READY" -eq 1
-          echo "codespace_ready=YES"
-          gh codespace ssh -c "$CS" -- bash -lc 'echo CODE_EXEC_OK; pwd; git -C "$CODESPACE_VSCODE_FOLDER" rev-parse HEAD; uname -srm'
-          echo "codespace_exec=OK"
+
+          gh codespace ssh -c "$CS" -- bash -lc "set -e; cd /workspaces/repo-7382910384; echo CODE_EXEC_OK; ACTUAL=\$(git rev-parse HEAD); echo target=$TARGET_SHA; echo actual=\$ACTUAL; test \"\$ACTUAL\" = \"$TARGET_SHA\"; git status --short; python3 -m compileall -q .; echo COMPILE_OK"
+          echo "exact_commit_verify=OK"
