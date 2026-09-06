@@ -734,7 +734,13 @@ def fut_price(state, now):
 def _previous_wave_side(state):
     side = str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
     wave_state = str(getattr(state, "bias_wave_state", "") or "").upper()
-    if wave_state in {"CONTROLLED", "PULLBACK"} and side in {"LONG", "SHORT"}:
+    # CONTROL_TRANSFER is not a transient candidate once Bias accepted it: it
+    # is the first observation of the new owner.  Forgetting that owner on the
+    # next tick makes the same cash process look like a fresh neutral
+    # acquisition and can manufacture both latency and duplicate waves.
+    if wave_state in {
+        "CONTROLLED", "PULLBACK", "CONTROL_TRANSFER",
+    } and side in {"LONG", "SHORT"}:
         return side
     # Upgrade/restart compatibility: an old persisted Bias may predate V12.
     if not wave_state and side in {"LONG", "SHORT"} and float(getattr(state, "bias_confidence", 0.0) or 0.0) >= 0.55:

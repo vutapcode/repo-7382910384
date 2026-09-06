@@ -425,6 +425,13 @@ class BiasCouncilTests(unittest.TestCase):
         self.assertFalse(report["reversal_latch"]["authority"])
         self.assertEqual(s.bias_wave_state, "CONTROL_TRANSFER")
 
+    def test_confirmed_control_transfer_is_the_previous_owner_next_tick(self):
+        s = state()
+        s.bias_state = "SHORT"
+        s.bias_confidence = 0.72
+        s.bias_wave_state = "CONTROL_TRANSFER"
+        self.assertEqual(council._previous_wave_side(s), "SHORT")
+
     def test_stale_spot_cannot_vote_direction(self):
         s = state()
         s.thoi_gian_tick_cuoi = 90.0
