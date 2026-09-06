@@ -1,0 +1,91 @@
+name: Phase 4 Acceptance CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - fix/phase4-acceptance-gate
+
+permissions:
+  contents: read
+
+jobs:
+  phase4-authority-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install runtime dependencies
+        run: python -m pip install --disable-pip-version-check -q -r requirements.txt
+      - name: Compile Phase 4 owners
+        run: |
+          python -m py_compile \
+            loi_he_thong/ignition_core.py \
+            loi_he_thong/entry_lifecycle.py \
+            loi_he_thong/entry_economics_v2.py \
+            loi_he_thong/entry_edge_tier.py \
+            loi_he_thong/verified_cost_model.py \
+            loi_he_thong/canonical_opportunity.py \
+            recorder/replay.py \
+            mainnet_tier_s_shadow_launcher.py
+      - name: Authority invariant - timing start cannot consume causal wave
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('loi_he_thong/ignition_core.py').read_text()
+          forbidden = '_ignition_acquisition_claimed_id'
+          assert forbidden not in src, (
+              'FAIL: Ignition still owns one-shot causal-wave claim via '
+              + forbidden
+          )
+          PY
+      - name: Authority invariant - maturity cannot hard-veto before Economics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('loi_he_thong/ignition_core.py').read_text()
+          forbidden = 'consumed > MAX_CONSUMED_FRACTION'
+          assert forbidden not in src, (
+              'FAIL: consumed_fraction still has structural Entry veto authority'
+          )
+          PY
+      - name: Lifecycle invariant - explicit consumed and invalidated semantics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('loi_he_thong/entry_lifecycle.py').read_text()
+          assert 'ECONOMIC_OPPORTUNITY_CONSUMED' in src, 'FAIL: missing CONSUMED lifecycle event'
+          assert 'ECONOMIC_OPPORTUNITY_INVALIDATED' in src, 'FAIL: missing INVALIDATED lifecycle event'
+          PY
+      - name: Replay invariant - semantic determinism verifier exists
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('recorder/replay.py').read_text()
+          markers = ('verify-determinism', 'semantic_hash')
+          missing = [m for m in markers if m not in src]
+          assert not missing, 'FAIL: replay missing semantic determinism markers: ' + ', '.join(missing)
+          PY
+      - name: Causal mechanism contract
+        run: python -m unittest discover -s tests -p 'test_causal_mechanism.py' -v
+      - name: Timing to Economics handoff contract
+        run: python -m unittest discover -s tests -p 'test_timing_economics_handoff.py' -v
+      - name: Frozen physical cost contract
+        run: python -m unittest discover -s tests -p 'test_verified_cost_model.py' -v
+      - name: Empirical Economics contract
+        run: python -m unittest discover -s tests -p 'test_entry_economics_v2.py' -v
+      - name: Opportunity lifecycle contract
+        run: python -m unittest discover -s tests -p 'test_entry_lifecycle.py' -v
+      - name: Canonical opportunity reservation and capture contract
+        run: python -m unittest discover -s tests -p 'test_canonical_opportunity.py' -v
+      - name: Ignition regression contract
+        run: python -m unittest discover -s tests -p 'test_ignition_core.py' -v
+      - name: Replay validation contract
+        run: python -m unittest discover -s tests -p 'test_wstrade_replay_validation.py' -v
+      - name: Mainnet remains locked
+        run: |
+          python -m unittest discover -s tests -p 'test_mainnet_safety.py' -v
+          python -m unittest discover -s tests -p 'test_direct_live_mode.py' -v
