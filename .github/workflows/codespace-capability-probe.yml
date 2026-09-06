@@ -15,39 +15,27 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.CODESPACE_PAT || github.token }}
     steps:
-      - name: Prove Codespaces lifecycle
+      - name: Create execute delete Codespace
         shell: bash
         run: |
           set -euo pipefail
           echo "runner=$RUNNER_OS repo=$GITHUB_REPOSITORY"
           gh --version | head -n 1
 
-          gh api "/repos/$GITHUB_REPOSITORY/codespaces/machines" > /tmp/machines.json
-          MACHINE=$(python3 - <<'PY'
-          import json
-          d=json.load(open('/tmp/machines.json'))
-          ms=d.get('machines', [])
-          if not ms:
-              raise SystemExit('NO_CODESPACE_MACHINE')
-          print(ms[0]['name'])
-          PY
-          )
-          echo "machine=$MACHINE"
+          cat > /tmp/create.json <<'JSON'
+          {
+            "repository_id": 1335905093,
+            "ref": "main",
+            "idle_timeout_minutes": 10,
+            "display_name": "chatgpt-capability-probe"
+          }
+          JSON
 
-          python3 - "$MACHINE" <<'PY' > /tmp/create.json
-          import json,sys
-          print(json.dumps({
-              'ref':'refs/heads/main',
-              'machine':sys.argv[1],
-              'idle_timeout_minutes':10,
-              'display_name':'chatgpt-capability-probe'
-          }))
-          PY
-
-          gh api -X POST "/repos/$GITHUB_REPOSITORY/codespaces" --input /tmp/create.json > /tmp/created.json
+          gh api -X POST /user/codespaces --input /tmp/create.json > /tmp/created.json
           CS=$(python3 - <<'PY'
           import json
-          print(json.load(open('/tmp/created.json'))['name'])
+          d=json.load(open('/tmp/created.json'))
+          print(d['name'])
           PY
           )
           echo "codespace_created=$CS"
@@ -72,11 +60,7 @@ jobs:
             sleep 5
           done
 
-          if [ "$READY" -ne 1 ]; then
-            echo "codespace_ready=NO"
-            exit 1
-          fi
-
+          test "$READY" -eq 1
           echo "codespace_ready=YES"
-          gh codespace ssh -c "$CS" -- bash -lc 'echo CODE_EXEC_OK; git -C "$CODESPACE_VSCODE_FOLDER" rev-parse HEAD; uname -srm'
+          gh codespace ssh -c "$CS" -- bash -lc 'echo CODE_EXEC_OK; pwd; git -C "$CODESPACE_VSCODE_FOLDER" rev-parse HEAD; uname -srm'
           echo "codespace_exec=OK"
