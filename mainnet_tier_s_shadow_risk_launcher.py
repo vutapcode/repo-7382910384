@@ -5,6 +5,7 @@ import time
 
 import mainnet_tier_s_shadow_launcher as base
 from loi_he_thong import shadow_ledger_metrics
+from loi_he_thong import entry_gate_outcome
 
 risk = base.app.load_module(
     "shadow_risk_guard_runtime",
@@ -118,7 +119,8 @@ def _flow_volume_quorum_required(state, now, required=2):
     }
     return len(venues) >= required
 
-def _entry_quorum_ok(result, state, now):
+def _entry_quorum_outcome(result, state, now):
+    """Evaluate each existing owner once and preserve the real blocker."""
     scope = "LIVE" if bool(getattr(state, "wstrade_live_armed", False)) else "SHADOW"
     valid, contract_reason, contract_detail = (
         base.entry_council.validate_frozen_entry_contract(
@@ -134,35 +136,33 @@ def _entry_quorum_ok(result, state, now):
         "authority_scope": scope,
     }
     if not valid:
-        return False
+        gate = entry_gate_outcome.structural(
+            False, contract_reason, contract_detail,
+        )
+        state.entry_gate_outcome = gate
+        return gate
     allowed, report = edge.authorize(result, state)
     state.entry_edge_tier = report
     state.entry_edge_class = report.get("edge_class")
     state.entry_edge_cost_ok = report.get("cost_ok")
     state.entry_edge_updated_at = now
-    if not allowed:
-        return False
     ignition = (result or {}).get("ignition") or {}
-    current_cash = dict(ignition.get("current_cash_conversion") or {})
     state.entry_tier_s_volume_quality = {
         "source": "IGNITION_100MS_SNAPSHOT",
         "venues": dict(ignition.get("flow_by_venue") or {}),
         "cash_venues": list(ignition.get("cash_venues") or ()),
         "proof_type": ignition.get("proof_type"),
     }
-    return bool(
-        ignition.get("state") == "PROVE"
-        and ignition.get("cash_venues")
-        and current_cash.get("confirmed")
-        and ignition.get("proof_type") in (
-            "METAORDER_CONTINUATION", "FAILED_REVERSION",
-            "PERSISTENT_METAORDER",
-        )
-        and (
-            ignition.get("proposer") != "futures"
-            or ignition.get("futures_cash_response_ok")
-        )
+    gate = entry_gate_outcome.from_edge_report(
+        allowed, report, live=(scope == "LIVE"),
     )
+    state.entry_gate_outcome = gate
+    return gate
+
+
+def _entry_quorum_ok(result, state, now):
+    """Compatibility boolean; structured outcome remains on runtime state."""
+    return bool(_entry_quorum_outcome(result, state, now).get("allowed"))
 
 def _open_shadow(side, result, now):
     state = base.app.state

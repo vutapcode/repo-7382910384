@@ -20,6 +20,8 @@ from loi_he_thong import canonical_opportunity
 from loi_he_thong import causal_threshold_registry
 from loi_he_thong import decision_boundary_evidence
 from loi_he_thong import entry_action_policy
+from loi_he_thong import entry_gate_outcome
+from loi_he_thong import entry_lifecycle
 from loi_he_thong import execution_causal_revalidation
 from loi_he_thong import host_cpu_governor
 from loi_he_thong import mainnet_safety
@@ -598,6 +600,7 @@ def _entry_handoff_valid(result, *, side=None, causal_episode_id=None):
 
 def _record_post_go_rejection(
     result, reject_stage, blocking_reason, failed_dependency=None,
+    *, gate_outcome=None,
 ):
     """Make every strategic GO rejection attributable to one dependency."""
     result = dict(result or {})
@@ -605,7 +608,16 @@ def _record_post_go_rejection(
         return False
     ignition = dict(result.get("ignition") or {})
     dependencies = dict(result.get("authority_dependencies") or {})
-    stage = str(reject_stage or "UNKNOWN").upper()
+    gate = dict(gate_outcome or {})
+    stage = str(gate.get("stage") or reject_stage or "UNKNOWN").upper()
+    attributed_reason = str(
+        gate.get("reason") or blocking_reason or "UNKNOWN"
+    ).upper()
+    if attributed_reason == "PASS":
+        # A rejection can never truthfully be attributed to PASS.  Keep the
+        # event visible as an instrumentation defect instead of lying about
+        # which strategy owner blocked it.
+        attributed_reason = "UNATTRIBUTED_POST_GO_REJECTION"
     if stage in {"RISK_ADMISSION", "HARD_RISK", "SAFETY"}:
         reject_owner = "SAFETY"
     elif stage in {
@@ -613,16 +625,28 @@ def _record_post_go_rejection(
         "EXECUTION_HANDOFF",
     }:
         reject_owner = "EXECUTION"
+    elif stage in {"FROZEN_ENTRY_CONTRACT", "STRUCTURAL_CONTRACT"}:
+        reject_owner = "STRUCTURAL"
+    elif stage in {"TIMING_NOW", "TIMING"}:
+        reject_owner = "TIMING"
+    elif stage in {"CAUSAL_THESIS", "THESIS"}:
+        reject_owner = "THESIS"
+    elif stage in {"FROZEN_COST", "FORWARD_EDGE", "EMPIRICAL_PROMOTION", "ECONOMICS"}:
+        reject_owner = "ECONOMICS"
     else:
         reject_owner = "ACTION"
+    reject_owner = str(gate.get("owner") or reject_owner).upper()
     _append_event("ENTRY_POST_GO_REJECTED", {
-        "schema_version": "POST_GO_REJECTION_V1",
+        "schema_version": "POST_GO_REJECTION_V2_OWNER_ATTRIBUTION",
         "cycle_id": result.get("decision_cycle_id"),
         "causal_episode_id": result.get("causal_episode_id"),
+        "timing_attempt_id": result.get("timing_attempt_id"),
+        "economic_opportunity_id": result.get("economic_opportunity_id"),
         "side": result.get("side"),
         "reject_stage": stage,
         "reject_owner": reject_owner,
-        "blocking_reason": str(blocking_reason or "UNKNOWN"),
+        "blocking_reason": attributed_reason,
+        "gate_outcome": gate,
         "authority_basis": result.get("authority_basis"),
         "proof_hash": result.get("authority_proof_hash"),
         "causal_origin_proof": dict(
@@ -919,6 +943,10 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "taxonomy_version": "TIER_S_MISS_TAXONOMY_V7_BOUNDARY_EVIDENCE",
         "threshold_registry_version": causal_threshold_registry.VERSION,
         "causal_episode_id": episode_id,
+        "timing_attempt_id": (result or {}).get("timing_attempt_id"),
+        "economic_opportunity_id": (result or {}).get(
+            "economic_opportunity_id"
+        ),
         "background_bias_side": background_bias_side,
         "causal_episode_side": causal_episode_side,
         "decision_side": decision_side,
@@ -997,6 +1025,10 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "phase": (result or {}).get("phase"),
             "confidence": float((result or {}).get("confidence", 0.0) or 0.0),
             "quorum_ok": bool(quorum_ok),
+            "entry_gate_outcome": dict(
+                (result or {}).get("entry_gate_outcome")
+                or getattr(state, "entry_gate_outcome", {}) or {}
+            ),
             "edge_class": (edge_report or {}).get("edge_class"),
             "cost": cost_snapshot,
             "miss_taxonomy": miss,
@@ -1093,6 +1125,10 @@ def _record_position_state(pos, guardian, risk, price, now, force=False):
         "cycle_id": getattr(pos, "position_cycle_id", None),
         "decision_cycle_id": getattr(pos, "decision_cycle_id", None),
         "causal_episode_id": getattr(pos, "causal_episode_id", None),
+        "timing_attempt_id": getattr(pos, "timing_attempt_id", None),
+        "economic_opportunity_id": getattr(
+            pos, "economic_opportunity_id", None
+        ),
         "side": getattr(pos, "side", None),
         "price": float(price or 0.0),
         "qty_btc": float(getattr(pos, "qty", 0.0) or 0.0),
@@ -1169,6 +1205,11 @@ def _open_shadow(side, result, now):
         }
         _append_event("SHADOW_MAKER_PLACED", {
             "cycle_id": result.get("decision_cycle_id"),
+            "causal_episode_id": result.get("causal_episode_id"),
+            "timing_attempt_id": result.get("timing_attempt_id"),
+            "economic_opportunity_id": result.get(
+                "economic_opportunity_id"
+            ),
             "side": side,
             "limit_price": limit_price,
             "ttl_seconds": live_execution.MAKER_TTL_SECONDS,
@@ -1272,6 +1313,8 @@ def _open_shadow(side, result, now):
         canonical_opportunity_id=int(
             result.get("canonical_opportunity_id", 0) or 0
         ),
+        timing_attempt_id=result.get("timing_attempt_id"),
+        economic_opportunity_id=result.get("economic_opportunity_id"),
         causal_episode_id=result.get("causal_episode_id"),
         authority_contracts=dict(result.get("authority_contracts") or {}),
         shadow_execution=execution or {
@@ -1311,6 +1354,8 @@ def _open_shadow(side, result, now):
             "regime_at_entry": entry_regime,
             "entry_causal_thesis": pos.entry_causal_thesis,
             "canonical_opportunity_id": pos.canonical_opportunity_id,
+            "timing_attempt_id": pos.timing_attempt_id,
+            "economic_opportunity_id": pos.economic_opportunity_id,
             "causal_episode_id": pos.causal_episode_id,
             "authority_contracts": dict(pos.authority_contracts or {}),
             "feasibility": feasibility,
@@ -1545,6 +1590,10 @@ def _close_shadow(pos, guardian_result, now):
             "cycle_id": getattr(pos, "position_cycle_id", None),
             "decision_cycle_id": getattr(pos, "decision_cycle_id", None),
             "causal_episode_id": getattr(pos, "causal_episode_id", None),
+            "timing_attempt_id": getattr(pos, "timing_attempt_id", None),
+            "economic_opportunity_id": getattr(
+                pos, "economic_opportunity_id", None
+            ),
             "authority_contracts": dict(
                 getattr(pos, "authority_contracts", {}) or {}
             ),
@@ -1636,6 +1685,10 @@ async def _open_position(side, result, now):
             "causal_episode_id": result.get("causal_episode_id"),
             "canonical_opportunity_id": result.get(
                 "canonical_opportunity_id"
+            ),
+            "timing_attempt_id": result.get("timing_attempt_id"),
+            "economic_opportunity_id": result.get(
+                "economic_opportunity_id"
             ),
             "side": side,
             "ok": causal_ok,
@@ -2112,6 +2165,24 @@ async def _entry_loop():
             s.entry_shadow_updated_at = now
 
             quorum_ok = _entry_quorum_ok(result, s, now)
+            gate_outcome = dict(
+                getattr(s, "entry_gate_outcome", {}) or {}
+            )
+            if not gate_outcome or bool(gate_outcome.get("allowed")) != bool(
+                quorum_ok
+            ):
+                # The base launcher only owns the structural contract.  The
+                # active risk wrapper installs a richer outcome before runtime
+                # starts; keep direct imports/tests honest as well.
+                structural = dict(
+                    getattr(s, "entry_structural_contract", {}) or {}
+                )
+                gate_outcome = entry_gate_outcome.structural(
+                    quorum_ok,
+                    structural.get("reason", "PASS" if quorum_ok else "ENTRY_QUORUM_FAIL"),
+                    structural.get("detail") or {},
+                )
+                s.entry_gate_outcome = gate_outcome
             edge_report = dict(getattr(s, "entry_edge_tier", {}) or {})
             # Freeze the exact decision-time economics with the decision. This
             # prevents downstream execution from reading a newer, unrelated
@@ -2138,7 +2209,9 @@ async def _entry_loop():
             if result.get("decision") != "GO":
                 blocking_stage = "COUNCIL"
             elif not quorum_ok:
-                blocking_stage = "EDGE_OR_QUORUM"
+                blocking_stage = str(
+                    gate_outcome.get("stage") or "ENTRY_AUTHORIZATION"
+                )
             else:
                 blocking_stage = "READY"
             opportunity = canonical_opportunity.observe(
@@ -2158,16 +2231,42 @@ async def _entry_loop():
                     )
                 except ValueError as exc:
                     quorum_ok = False
-                    blocking_stage = "EDGE_OR_QUORUM"
+                    blocking_stage = "FROZEN_ENTRY_CONTRACT"
                     reason = str(exc) or "ENTRY_HANDOFF_CONTRACT_INVALID"
                     s.entry_structural_contract = {
                         "ok": False,
                         "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
                         "detail": reason,
                     }
+                    gate_outcome = entry_gate_outcome.structural(
+                        False, "ENTRY_HANDOFF_CONTRACT_INVALID",
+                        {"error": reason},
+                    )
+                    s.entry_gate_outcome = gate_outcome
                     result["authority_contracts"] = _authority_contract_bundle(
                         s, result, False, opportunity.get("causal_episode_id"),
                     )
+            lifecycle = entry_lifecycle.observe(
+                s, result, gate_outcome,
+                economic_opportunity_id=opportunity.get("opportunity_id"),
+            )
+            result["entry_gate_outcome"] = dict(gate_outcome)
+            result["timing_attempt_id"] = lifecycle.get(
+                "timing_attempt_id"
+            )
+            result["economic_opportunity_id"] = lifecycle.get(
+                "economic_opportunity_id"
+            )
+            for lifecycle_event, lifecycle_payload in lifecycle.get(
+                "events", ()
+            ):
+                _append_event(lifecycle_event, {
+                    "schema_version": "ENTRY_LIFECYCLE_RECORD_V1",
+                    "cycle_id": decision_cycle_id,
+                    "causal_episode_id": result.get("causal_episode_id"),
+                    "side": result.get("side"),
+                    **dict(lifecycle_payload or {}),
+                })
             result["phase6_action_shadow"] = _phase6_action_shadow(
                 result, quorum_ok,
             )
@@ -2264,6 +2363,11 @@ async def _entry_loop():
                     "quorum_ok": bool(quorum_ok),
                     "near_miss": near_miss,
                     "blocking_stage": blocking_stage,
+                    "entry_gate_outcome": gate_outcome,
+                    "timing_attempt_id": result.get("timing_attempt_id"),
+                    "economic_opportunity_id": result.get(
+                        "economic_opportunity_id"
+                    ),
                     "vote_status": vote_status,
                     "edge_class": edge_report.get("edge_class"),
                     "cost_ok": edge_report.get("cost_ok"),
@@ -2339,13 +2443,12 @@ async def _entry_loop():
                 decision_event_emitted = True
 
             if not quorum_ok:
-                structural = dict(
-                    getattr(s, "entry_structural_contract", {}) or {}
-                )
                 _record_post_go_rejection(
-                    result, "STRUCTURAL_CONTRACT",
-                    structural.get("reason", "ENTRY_QUORUM_FAIL"),
-                    structural.get("detail") or "FROZEN_ENTRY_CONTRACT",
+                    result,
+                    gate_outcome.get("stage", "ENTRY_AUTHORIZATION"),
+                    gate_outcome.get("reason", "ENTRY_QUORUM_FAIL"),
+                    gate_outcome.get("detail") or "ENTRY_GATE_OUTCOME",
+                    gate_outcome=gate_outcome,
                 )
                 await asyncio.sleep(ENTRY_POLL)
                 continue

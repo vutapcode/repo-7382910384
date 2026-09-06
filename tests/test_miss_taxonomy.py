@@ -32,6 +32,47 @@ class MissTaxonomyTests(unittest.TestCase):
             self.assertIn(key, payload)
         self.assertEqual(payload["proof_hash"], "proof-1")
 
+    def test_post_go_rejection_never_labels_pass_as_blocker(self):
+        result = {
+            "decision": "GO", "side": "LONG",
+            "decision_cycle_id": "cycle-pass",
+        }
+        with patch.object(launcher, "_append_event") as append:
+            launcher._record_post_go_rejection(
+                result, "STRUCTURAL_CONTRACT", "PASS",
+            )
+        payload = append.call_args.args[1]
+        self.assertEqual(payload["reject_owner"], "STRUCTURAL")
+        self.assertEqual(
+            payload["blocking_reason"],
+            "UNATTRIBUTED_POST_GO_REJECTION",
+        )
+
+    def test_post_go_rejection_consumes_canonical_gate_owner(self):
+        result = {
+            "decision": "GO", "side": "SHORT",
+            "decision_cycle_id": "cycle-timing",
+            "timing_attempt_id": "timing-1",
+        }
+        gate = {
+            "allowed": False,
+            "owner": "TIMING",
+            "stage": "TIMING_NOW",
+            "reason": "WAIT_PERSISTENT_FLOW_EFFICIENCY",
+        }
+        with patch.object(launcher, "_append_event") as append:
+            launcher._record_post_go_rejection(
+                result, "STRUCTURAL_CONTRACT", "PASS",
+                gate_outcome=gate,
+            )
+        payload = append.call_args.args[1]
+        self.assertEqual(payload["reject_owner"], "TIMING")
+        self.assertEqual(payload["reject_stage"], "TIMING_NOW")
+        self.assertEqual(
+            payload["blocking_reason"],
+            "WAIT_PERSISTENT_FLOW_EFFICIENCY",
+        )
+
     def test_launcher_allows_only_canonical_dual_cash_transition_bypass(self):
         state = SimpleNamespace(bias_state="SHORT")
         base = {"decision": "GO", "side": "LONG", "ignition": {}}

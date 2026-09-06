@@ -59,6 +59,53 @@ def frozen_result(mode="IGNITION", proof="METAORDER_CONTINUATION"):
 
 
 class EntryContractParityTests(unittest.TestCase):
+    def test_active_runtime_does_not_reinterpret_validated_ignition(self):
+        result = {"decision": "GO", "ignition": {}}
+        state = SimpleNamespace(wstrade_live_armed=False)
+        with patch.object(
+            active_launcher.base.entry_council,
+            "validate_frozen_entry_contract",
+            return_value=(True, "PASS", {}),
+        ), patch.object(
+            active_launcher.edge, "authorize",
+            return_value=(True, {
+                "edge_class": "RESIDUAL_POSITIVE",
+                "cost_ok": True,
+            }),
+        ):
+            self.assertTrue(
+                active_launcher._entry_quorum_ok(result, state, 1.0)
+            )
+        self.assertEqual(state.entry_gate_outcome["reason"], "PASS")
+        self.assertEqual(state.entry_gate_outcome["owner"], "ACTION")
+
+    def test_active_runtime_preserves_timing_owner_from_edge(self):
+        result = frozen_result(
+            mode="PERSISTENT_METAORDER", proof="PERSISTENT_METAORDER",
+        )
+        state = SimpleNamespace(wstrade_live_armed=False)
+        report = {
+            "edge_class": "WAIT_EVIDENCE",
+            "cost_ok": False,
+            "hard_vetoes": [],
+            "soft_wait_reasons": ["WAIT_PERSISTENT_FLOW_EFFICIENCY"],
+        }
+        with patch.object(
+            active_launcher.base.entry_council,
+            "validate_frozen_entry_contract",
+            return_value=(True, "PASS", {}),
+        ), patch.object(
+            active_launcher.edge, "authorize", return_value=(False, report),
+        ):
+            self.assertFalse(
+                active_launcher._entry_quorum_ok(result, state, 1.0)
+            )
+        self.assertEqual(state.entry_gate_outcome["owner"], "TIMING")
+        self.assertEqual(
+            state.entry_gate_outcome["reason"],
+            "WAIT_PERSISTENT_FLOW_EFFICIENCY",
+        )
+
     def test_active_runtime_enforces_live_contract_before_economics(self):
         result = frozen_result()
         state = SimpleNamespace(wstrade_live_armed=True)
