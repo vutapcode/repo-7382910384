@@ -464,14 +464,44 @@ def validate_submit(state, side, result, now):
 
 
 def _current_release(state, side, result, placed_at):
-    """Require persistent cash release followed by an independent Futures response."""
+    """Observe a fresh release without reinterpreting Entry strategy.
+
+    Two persistent independent cash roots are sufficient. A single cash root
+    retains the existing Futures echo requirement. This mirrors the causal
+    truth accepted by Ignition and keeps Futures from vetoing dual-cash control.
+    """
     rows = _rows_after(state, result, cutoff_seconds=placed_at)
     if rows is None:
         return False, "EXECUTED_FLOW_ENGINE_UNAVAILABLE", {}
     side = str(side).upper()
     ignition = (result or {}).get("ignition") or {}
+    cash_streaks = {
+        venue: _material_streak(rows.get(venue, ()), side)
+        for venue in ("binance_spot", "coinbase_spot")
+    }
+    if all(cash_streaks.values()):
+        first_ms = {
+            venue: int(streak[0].get("receive_time_ms", 0) or 0)
+            for venue, streak in cash_streaks.items()
+        }
+        if abs(first_ms["binance_spot"] - first_ms["coinbase_spot"]) <= FOLLOW_MAX_MS:
+            return True, "CURRENT_DUAL_CASH_RELEASE", {
+                "cash_venues": ["binance_spot", "coinbase_spot"],
+                "cash_buckets": {
+                    venue: [
+                        int(row.get("bucket_start_ms", 0) or 0)
+                        for row in streak
+                    ]
+                    for venue, streak in cash_streaks.items()
+                },
+                "cross_cash_span_ms": abs(
+                    first_ms["binance_spot"] - first_ms["coinbase_spot"]
+                ),
+            }
     for venue in ignition.get("cash_venues") or ():
-        cash = _material_streak(rows.get(venue, ()), side)
+        cash = cash_streaks.get(venue) or _material_streak(
+            rows.get(venue, ()), side
+        )
         if not cash:
             continue
         first_cash_ms = int(cash[0].get("receive_time_ms", 0) or 0)
@@ -494,51 +524,13 @@ def _current_release(state, side, result, placed_at):
     return False, "CURRENT_RELEASE_NOT_PROVED", {}
 
 
-def _current_consumed_fraction(state, side, result, placed_at, now):
-    rows = _rows_after(state, result, cutoff_seconds=placed_at)
-    if rows is None:
-        return None, {"reason": "EXECUTED_FLOW_ENGINE_UNAVAILABLE"}
-    ignition = (result or {}).get("ignition") or {}
-    anchors = ignition.get("venue_anchor_prices") or {}
-    sign = 1.0 if str(side).upper() == "LONG" else -1.0
-    progress = max(0.0, _f(
-        (ignition.get("phase_measurement") or {}).get(
-            "precursor_cash_displacement_bps"
-        )
-    ))
-    measured = False
-    for venue in ignition.get("cash_venues") or ():
-        current = rows.get(venue, ())
-        anchor = _f(anchors.get(venue))
-        price = _f(current[-1].get("price")) if current else 0.0
-        if anchor <= 0.0 or price <= 0.0:
-            continue
-        measured = True
-        progress = max(progress, max(0.0, sign * (price - anchor) / anchor * 10_000.0))
-    spot = (
-        _f(getattr(state, "best_bid", 0.0))
-        + _f(getattr(state, "best_ask", 0.0))
-    ) / 2.0
-    atr = _f(getattr(state, "atr_1m", 0.0))
-    atr_ts = _f(getattr(state, "atr_1m_updated_at", 0.0))
-    atr_age = _f(now) - atr_ts
-    atr_bps = atr / spot * 10_000.0 if spot > 0.0 and atr > 0.0 else 0.0
-    if not measured or atr_bps <= 0.0 or atr_ts <= 0.0 or atr_age < -1.0 or atr_age > 120.0:
-        return None, {
-            "reason": "CURRENT_PHASE_SCALE_UNAVAILABLE",
-            "cash_progress_measured": measured,
-            "atr_age_seconds": max(0.0, atr_age) if atr_ts > 0.0 else None,
-        }
-    consumed = max(0.0, min(1.5, progress / atr_bps))
-    return consumed, {
-        "cash_displacement_bps": round(progress, 6),
-        "phase_scale_bps": round(atr_bps, 6),
-        "consumed_fraction": round(consumed, 6),
-    }
-
-
 def maker_ttl_release(state, side, result, now, placed_at):
-    """Shadow-only maker fallback check for the same reserved causal episode."""
+    """Shadow-only physical/cost recheck for the reserved Action decision.
+
+    Entry already owned phase and remaining-edge judgment. Execution checks
+    freshness, contradiction, executable release and cost only; it must not
+    recompute consumed phase from a later price sample.
+    """
     episode_id = (result or {}).get("causal_episode_id")
 
     def verdict(ok, reason, detail=None):
@@ -554,13 +546,6 @@ def maker_ttl_release(state, side, result, now, placed_at):
     ok, reason, detail = _current_release(state, side, result, placed_at)
     if not ok:
         return verdict(ok, reason, detail)
-    consumed, phase_detail = _current_consumed_fraction(
-        state, side, result, placed_at, now
-    )
-    if consumed is None:
-        return verdict(False, "CURRENT_PHASE_SCALE_UNAVAILABLE", phase_detail)
-    if consumed > 0.35:
-        return verdict(False, "CURRENT_IMPULSE_ALREADY_CONSUMED", phase_detail)
     cost_ok, cost_reason, cost_detail = (
         verified_cost_model.validate_execution_cost_contract(
             result, state, "TAKER"
@@ -570,7 +555,7 @@ def maker_ttl_release(state, side, result, now, placed_at):
         return verdict(False, cost_reason, cost_detail)
     return verdict(True, "CURRENT_RELEASE_PASS", {
         **detail,
-        "current_phase": phase_detail,
+        "phase_owner": "ENTRY_ACTION_FROZEN_AT_GO",
         "current_execution_cost_bps": cost_detail["current_cost_bps"],
         "cost_budget_bps": cost_detail["budget_bps"],
         "cost_components": cost_detail["current"],

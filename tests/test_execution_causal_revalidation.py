@@ -353,7 +353,7 @@ class ExecutionCausalRevalidationTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "CURRENT_RELEASE_NOT_PROVED")
 
-    def test_maker_release_rejects_currently_consumed_impulse(self):
+    def test_maker_release_does_not_reinterpret_entry_phase(self):
         state, result = fixture()
         cash = state._ignition_signal_engine.venues["binance_spot"].history
         futures = state._ignition_signal_engine.venues["futures"].history
@@ -365,9 +365,28 @@ class ExecutionCausalRevalidationTests(unittest.TestCase):
         ok, reason, detail = recheck.maker_ttl_release(
             state, "LONG", result, 10.0, 9.5
         )
-        self.assertFalse(ok)
-        self.assertEqual(reason, "CURRENT_IMPULSE_ALREADY_CONSUMED")
-        self.assertGreater(detail["consumed_fraction"], 0.35)
+        self.assertTrue(ok, detail)
+        self.assertEqual(reason, "CURRENT_RELEASE_PASS")
+        self.assertEqual(detail["phase_owner"], "ENTRY_ACTION_FROZEN_AT_GO")
+
+    def test_maker_release_accepts_persistent_dual_cash_without_futures_echo(self):
+        state, result = fixture()
+        result["ignition"]["cash_venues"] = [
+            "binance_spot", "coinbase_spot",
+        ]
+        for venue in ("binance_spot", "coinbase_spot"):
+            state._ignition_signal_engine.venues[venue].history.extend([
+                material(venue, 9600, "LONG", price=100.002),
+                material(venue, 9700, "LONG", price=100.004),
+            ])
+        ok, reason, detail = recheck.maker_ttl_release(
+            state, "LONG", result, 10.0, 9.5
+        )
+        self.assertTrue(ok, detail)
+        self.assertEqual(reason, "CURRENT_RELEASE_PASS")
+        self.assertEqual(
+            detail["cash_venues"], ["binance_spot", "coinbase_spot"]
+        )
 
     def test_straddling_bucket_is_not_post_decision_evidence(self):
         state, result = fixture()
