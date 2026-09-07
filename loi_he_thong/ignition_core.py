@@ -2340,8 +2340,8 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
     resolved_side = str(sealed.get("side") or "ABSTAIN").upper()
     completed_ms = int(sealed.get("ownership_completed_ms", 0) or 0)
     age_ms = int(now_ms) - completed_ms
-    if age_ms < 0 or age_ms > EPISODE_MAX_MS:
-        observation.update(status="ACQUISITION_HANDOFF_EXPIRED", age_ms=age_ms)
+    if age_ms < 0:
+        observation.update(status="ACQUISITION_HANDOFF_FROM_FUTURE", age_ms=age_ms)
         state._ignition_acquisition_handoff_observation = observation
         return False, observation
     if (
@@ -2387,13 +2387,6 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
             )
             state._ignition_acquisition_handoff_observation = observation
             return False, observation
-    claimed = str(
-        getattr(state, "_ignition_acquisition_claimed_id", "") or ""
-    )
-    if claimed == str(sealed.get("causal_wave_id") or ""):
-        observation.update(status="ACQUISITION_HANDOFF_ALREADY_CLAIMED")
-        state._ignition_acquisition_handoff_observation = observation
-        return False, observation
     observation.update(
         status="ELIGIBLE_SAME_WAVE_CURRENT_CASH_CONFIRMED",
         side=resolved_side,
@@ -2493,8 +2486,7 @@ def _start_acquisition_handoff_episode(state, histories, now_ms, side=None):
         ),
         "acquisition_handoff_authority": False,
     }
-    state._ignition_acquisition_claimed_id = handoff["causal_wave_id"]
-    observation["status"] = "CLAIMED_BY_IGNITION_TIMING"
+    observation["status"] = "TIMING_ATTEMPT_STARTED_FROM_LIVE_WAVE"
     observation["timing_started_at_ms"] = started_ms
     state._ignition_acquisition_handoff_observation = observation
     state._ignition_episode = episode

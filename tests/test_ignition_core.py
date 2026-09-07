@@ -260,8 +260,8 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertFalse(detail["live_authority"])
 
-    def test_evaluate_claims_acquisition_without_waiting_for_new_signal(self):
-        """The evaluator consumes already-available cash proof exactly once."""
+    def test_evaluate_starts_timing_from_acquisition_without_third_impulse(self):
+        """The evaluator consumes currently fresh proof, not wave ownership."""
         s = state(now=100.0)
         s.bias_version = "TEST"
         s.bias_acquisition_handoff = acquisition_handoff()
@@ -294,8 +294,49 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertEqual(
             s._ignition_acquisition_handoff_observation["status"],
-            "CLAIMED_BY_IGNITION_TIMING",
+            "TIMING_ATTEMPT_STARTED_FROM_LIVE_WAVE",
         )
+
+    def test_old_owned_wave_can_start_fresh_timing_attempt(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(completed_ms=90_000)
+        histories = self._acquisition_histories()
+
+        episode = ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        )
+
+        self.assertIsNotNone(episode)
+        self.assertEqual(
+            episode["causal_episode_id"],
+            s.bias_acquisition_handoff["causal_wave_id"],
+        )
+        self.assertEqual(
+            s._ignition_acquisition_handoff_observation["status"],
+            "TIMING_ATTEMPT_STARTED_FROM_LIVE_WAVE",
+        )
+
+    def test_same_owned_wave_is_not_one_shot_claimed(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff()
+        histories = self._acquisition_histories()
+
+        first = ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        )
+        s._ignition_episode = None
+        second = ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(
+            first["causal_episode_id"], second["causal_episode_id"],
+        )
+        self.assertFalse(hasattr(s, "_ignition_acquisition_claimed_id"))
 
     def test_bucket_availability_is_when_finalize_due_observes_it(self):
         venue = ignition_signals._Venue("binance_spot")
