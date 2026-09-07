@@ -1,4 +1,7 @@
 import copy
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 
 from recorder.phase4_lifecycle_replay import Phase4LifecycleReplay
@@ -21,6 +24,18 @@ def event(ts, name, opportunity_id, **payload):
 
 
 class Phase4ReplayDeterminismTests(unittest.TestCase):
+    def test_documented_direct_cli_bootstraps_repository_package(self):
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [sys.executable, str(root / "recorder" / "replay.py"), "--help"],
+            cwd="/tmp",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--verify-determinism", result.stdout)
+
     def test_recorded_capture_and_consumption_validate(self):
         rows = [
             event(1000, "ECONOMIC_OPPORTUNITY_OPENED", 7),
