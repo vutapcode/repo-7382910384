@@ -11,6 +11,30 @@ never substitutes for missing independent cash.
 
 VERSION = "CAUSAL_MECHANISM_V1"
 
+
+def _verified_dual_cash_conversion(cash):
+    """Require present same-side flow->price conversion on both cash roots."""
+    cash = dict(cash or {})
+    side = str(cash.get("side") or "ABSTAIN").upper()
+    venues = dict(cash.get("venues") or {})
+    required = {"binance_spot", "coinbase_spot"}
+    if (
+        side not in {"LONG", "SHORT"}
+        or not bool(cash.get("dual_cash_independent"))
+        or not bool(cash.get("dual_cash_flow_price_conversion"))
+        or not bool(cash.get("fresh"))
+        or set(venues) != required
+    ):
+        return False
+    max_age_ms = int(cash.get("max_age_ms", 600) or 600)
+    return all(
+        0 <= int((venues[name] or {}).get("age_ms", max_age_ms + 1))
+            <= max_age_ms
+        and float((venues[name] or {}).get("price_conversion_bps", 0.0) or 0.0)
+            > 0.0
+        for name in required
+    )
+
 def classify(oi_verification, liquidation_snapshot, cash_conversion_evidence):
     """Classify the causal mechanism driving the move."""
     oi = dict(oi_verification or {})
@@ -24,7 +48,7 @@ def classify(oi_verification, liquidation_snapshot, cash_conversion_evidence):
     decelerating = bool(liq.get("decelerating"))
     forced = burst or decelerating
 
-    dual_cash = bool(cash.get("dual_cash_independent"))
+    continuing_cash_control = _verified_dual_cash_conversion(cash)
 
     if not status.startswith("FRESH_"):
         return "UNRESOLVED"
@@ -35,7 +59,7 @@ def classify(oi_verification, liquidation_snapshot, cash_conversion_evidence):
     if status == "FRESH_UNWIND":
         if not forced:
             return "UNWIND"
-        if decelerating and dual_cash:
+        if decelerating and continuing_cash_control:
             return "CASH_CONTROL_AFTER_UNWIND"
         return "FORCED_CLOSING"
         

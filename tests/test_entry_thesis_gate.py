@@ -442,6 +442,9 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertEqual(maturity["status"], "MATURE")
         self.assertEqual(maturity["shared_wave_consumed"], 0.4)
         self.assertTrue(maturity["consumed_reset_mismatch"])
+        self.assertEqual(maturity["authority_scope"], "TIMING_ROLLOUT_GUARD")
+        self.assertFalse(maturity["market_wave_falsified"])
+        self.assertFalse(maturity["economic_edge_exhausted"])
 
     def test_depth_research_is_never_claimed_as_entry_authority(self):
         audit = entry_thesis_gate.evaluate(

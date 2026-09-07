@@ -115,7 +115,25 @@ def _intent_question(ignition, liquidation):
     
     cash = set(ignition.get("cash_venues") or ())
     dual_cash = {"binance_spot", "coinbase_spot"}.issubset(cash)
-    cash_evidence = {"dual_cash_independent": dual_cash}
+    current_cash = dict(ignition.get("current_cash_conversion") or {})
+    cash_venues = dict(current_cash.get("venues") or {})
+    cash_evidence = {
+        "dual_cash_independent": dual_cash,
+        "dual_cash_flow_price_conversion": bool(
+            current_cash.get("dual_cash_control")
+        ),
+        "fresh": bool(
+            set(cash_venues) == {"binance_spot", "coinbase_spot"}
+            and all(
+                (row or {}).get("age_ms") is not None
+                and 0 <= int((row or {}).get("age_ms")) <= 600
+                for row in cash_venues.values()
+            )
+        ),
+        "side": current_cash.get("side"),
+        "venues": cash_venues,
+        "max_age_ms": current_cash.get("max_age_ms", 600),
+    }
     
     mech_class = causal_mechanism.classify(verification, liquidation, cash_evidence)
     
@@ -297,6 +315,9 @@ def _maturity_question(ignition):
         "shared_wave_consumed": round(shared, 6),
         "consumed_reset_mismatch": reset_mismatch,
         "phase_source": phase.get("source"),
+        "authority_scope": "TIMING_ROLLOUT_GUARD",
+        "market_wave_falsified": False,
+        "economic_edge_exhausted": False,
     }
 
 

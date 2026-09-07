@@ -4466,6 +4466,15 @@ def _result_from_episode(state, episode, histories, freshness, now):
         state._ignition_episode = None
         return _wait(now, side, "OI_INTENT_DIRECTION_CONFLICT", "INVALID", payload, freshness)
     if consumed > MAX_CONSUMED_FRACTION:
+        payload["consumed_rollout_guard"] = {
+            "version": "CONSUMED_ROLLOUT_GUARD_V1",
+            "threshold": MAX_CONSUMED_FRACTION,
+            "observed": consumed,
+            "authority_scope": "ENTRY_TIMING_ONLY",
+            "market_wave_falsified": False,
+            "economic_edge_exhausted": False,
+            "same_wal_ablation_required": True,
+        }
         state._ignition_episode = None
         return _wait(now, side, "WAIT_IMPULSE_ALREADY_CONSUMED", "MATURE", payload, freshness)
     payload["state"] = "PROVE"
