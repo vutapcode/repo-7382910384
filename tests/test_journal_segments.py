@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from loi_he_thong import journal_segments
 from recorder.decision_tap import DecisionTap
@@ -112,6 +113,29 @@ class JournalSegmentTests(unittest.TestCase):
             current.write_bytes(b'{"event":"EXIT"}\nnot-json\n')
             with self.assertRaises(json.JSONDecodeError):
                 journal_segments.last_matching_event(current, {"ENTRY", "EXIT"})
+
+    def test_reverse_scan_discards_cold_page_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            current = Path(temp) / "events.jsonl"
+            current.write_text(
+                json.dumps({"event": "ENTRY", "event_seq": 4}) + "\n"
+                + "".join(
+                    json.dumps({"event": "DECISION_EVALUATED", "n": index})
+                    + "\n"
+                    for index in range(20)
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(
+                journal_segments.os, "posix_fadvise", create=True
+            ) as advise, patch.object(
+                journal_segments.os, "POSIX_FADV_DONTNEED", 4, create=True
+            ):
+                row = journal_segments.last_matching_event(
+                    current, {"ENTRY", "EXIT"}, block_size=64,
+                )
+            self.assertEqual(row["event_seq"], 4)
+            self.assertGreater(advise.call_count, 1)
 
 
 if __name__ == "__main__":

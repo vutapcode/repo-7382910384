@@ -20,6 +20,19 @@ DEFAULT_RETENTION_SECONDS = 84 * 3600
 _LOCK = threading.RLock()
 
 
+def _discard_scan_cache(handle, start, length):
+    """Do not let a cold safety scan evict the live runtime working set."""
+    advise = getattr(os, "posix_fadvise", None)
+    dontneed = getattr(os, "POSIX_FADV_DONTNEED", None)
+    if advise is None or dontneed is None or int(length) <= 0:
+        return
+    try:
+        advise(handle.fileno(), int(start), int(length), dontneed)
+    except OSError:
+        # This is only a page-cache hint. Journal parsing remains fail-closed.
+        pass
+
+
 def _identity(path):
     stat = Path(path).stat()
     return int(stat.st_dev), int(stat.st_ino)
@@ -118,7 +131,8 @@ def last_matching_event(current, event_names, block_size=65536):
                 while pos > 0:
                     start = max(0, pos - int(block_size))
                     handle.seek(start)
-                    data = handle.read(pos - start) + carry
+                    read_length = pos - start
+                    data = handle.read(read_length) + carry
                     lines = data.split(b"\n")
                     carry = lines[0]
                     for raw in reversed(lines[1:]):
@@ -127,6 +141,12 @@ def last_matching_event(current, event_names, block_size=65536):
                         row = json.loads(raw.decode("utf-8"))
                         if str(row.get("event") or "").upper() in wanted:
                             return row
+                    # Reverse-scanning up to the full retained journal can be
+                    # correct but must not pin ~1GiB of cold pages inside the
+                    # bot's MemoryHigh cgroup during startup.
+                    data = None
+                    lines = None
+                    _discard_scan_cache(handle, start, read_length)
                     pos = start
                 if carry.strip():
                     row = json.loads(carry.decode("utf-8"))
