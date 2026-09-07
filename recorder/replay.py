@@ -23,6 +23,7 @@ from recorder.liquidity_response import (
     LiquidityResponseAnalyzer, SpotLiquidityResponseAnalyzer,
 )
 from recorder.causal_world_model import CausalWorldModel
+from recorder.phase4_lifecycle_replay import Phase4LifecycleReplay
 from loi_he_thong import authority_contracts
 from loi_he_thong.market_event_contract import available_time_ms
 
@@ -257,6 +258,7 @@ class DeterministicReplay:
         self.causal_world_model = CausalWorldModel(
             self._emit_causal_world
         )
+        self.phase4_lifecycle = Phase4LifecycleReplay()
 
     def _emit_wavefront(self, stream, payload, event_time_ms=None):
         self.wavefront_records.append({
@@ -319,6 +321,7 @@ class DeterministicReplay:
         # Decision/research handlers may inspect only evidence available by
         # this replay tick. Exchange event time remains market metadata.
         self.clock.advance(available_time_ms(record))
+        self.phase4_lifecycle.observe(record)
         stream = str(record.get('stream', ''))
         payload = record.get('payload', {}) or {}
         in_metrics = self._in_metrics(record)
@@ -541,7 +544,30 @@ class DeterministicReplay:
             'causal_world_output_hash': hashlib.sha256(orjson.dumps(
                 self.causal_world_records, option=orjson.OPT_SORT_KEYS
             )).hexdigest(),
+            'phase4_lifecycle': self.phase4_lifecycle.summary(),
         }
+
+
+def _replay_output_hash(result):
+    return hashlib.sha256(orjson.dumps(
+        result, option=orjson.OPT_SORT_KEYS
+    )).hexdigest()
+
+
+def _run_from_args(args):
+    start_ms = parse_time(args.start)
+    end_ms = parse_time(args.end)
+    read_start = (
+        start_ms - max(0, args.warmup_seconds) * 1000
+        if start_ms is not None else None
+    )
+    records = iter_merged_records(
+        args.data_root, streams=args.streams,
+        start_ms=read_start, end_ms=end_ms,
+    )
+    return DeterministicReplay(
+        metrics_start_ms=start_ms, setup_id=args.setup_id
+    ).run(records)
 
 
 def main(argv=None):
@@ -553,6 +579,10 @@ def main(argv=None):
     parser.add_argument('--stream', action='append', dest='streams')
     parser.add_argument('--setup-id')
     parser.add_argument('--output')
+    parser.add_argument(
+        '--verify-determinism', action='store_true',
+        help='replay the same immutable input twice and compare output hashes',
+    )
     args = parser.parse_args(argv)
     from loi_he_thong.runtime_lock import DuplicateInstanceError, acquire_runtime_lock
     try:
@@ -560,24 +590,25 @@ def main(argv=None):
     except DuplicateInstanceError as exc:
         parser.error(f'replay cannot overlap the production bot: {exc}')
     try:
-        start_ms = parse_time(args.start)
-        end_ms = parse_time(args.end)
-        read_start = (
-            start_ms - max(0, args.warmup_seconds) * 1000
-            if start_ms is not None else None
-        )
-        records = iter_merged_records(
-            args.data_root, streams=args.streams,
-            start_ms=read_start, end_ms=end_ms,
-        )
-        result = DeterministicReplay(
-            metrics_start_ms=start_ms, setup_id=args.setup_id
-        ).run(records)
+        result = _run_from_args(args)
+        first_hash = _replay_output_hash(result)
+        result['replay_deterministic_hash'] = first_hash
+        if args.verify_determinism:
+            repeated = _run_from_args(args)
+            repeat_hash = _replay_output_hash(repeated)
+            result['replay_determinism'] = {
+                'verified': first_hash == repeat_hash,
+                'first_hash': first_hash,
+                'repeat_hash': repeat_hash,
+                'scope': 'NON_AUTHORITY_RECONSTRUCTION',
+            }
         rendered = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
         if args.output:
             Path(args.output).write_text(rendered + '\n')
         else:
             print(rendered)
+        if args.verify_determinism and not result['replay_determinism']['verified']:
+            return 3
         return 0 if result['depth_gaps'] == 0 else 2
     finally:
         lock.close()
