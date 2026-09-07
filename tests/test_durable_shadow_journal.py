@@ -28,13 +28,16 @@ class DurableShadowJournalTest(unittest.TestCase):
             durable_shadow_journal.journal_segments, "prepare_append"
         ) as rotate, patch.object(
             durable_shadow_journal, "_fsync_path_and_parent"
-        ) as sync:
+        ) as sync, patch.object(
+            durable_shadow_journal.journal_segments, "write_matching_cursor"
+        ) as cursor:
             shadow._append_event("ENTRY_SKIPPED", {"x": 1})
             rotate.assert_called_once_with(shadow.EVENT_PATH)
             sync.assert_not_called()
 
             shadow._append_event("ENTRY", {"x": 2})
             sync.assert_called_once_with(shadow.EVENT_PATH)
+            cursor.assert_called_once()
 
             sync.reset_mock()
             shadow._append_event("EXIT", {"x": 3})

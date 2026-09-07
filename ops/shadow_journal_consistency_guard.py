@@ -19,9 +19,12 @@ EVENTS_PATH = Path(os.environ.get("SMC_SHADOW_EVENTS_PATH") or (ROOT / "events.j
 _RELEVANT = {"ENTRY", "EXIT"}
 
 
-def _last_relevant_event(path, block_size=65536):
-    return journal_segments.last_matching_event(
-        path, _RELEVANT, block_size=block_size,
+def _last_relevant_event(path, block_size=65536, cursor_path=None):
+    cursor_path = cursor_path or (
+        Path(path).parent / "entry_exit_consistency_cursor.json"
+    )
+    return journal_segments.last_matching_event_cached(
+        path, _RELEVANT, cursor_path, block_size=block_size,
     )
 
 

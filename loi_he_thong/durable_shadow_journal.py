@@ -7,6 +7,10 @@ VERSION = "DURABLE_SHADOW_JOURNAL_V2_BOUNDED_SEGMENTS"
 _CRITICAL = {"ENTRY", "EXIT"}
 
 
+def _cursor_path(path):
+    return path.parent / "entry_exit_consistency_cursor.json"
+
+
 def _fsync_path_and_parent(path):
     fd = os.open(str(path), os.O_RDONLY)
     try:
@@ -32,6 +36,17 @@ def install(shadow):
         out = original(event, payload)
         if str(event).upper() in _CRITICAL:
             _fsync_path_and_parent(shadow.EVENT_PATH)
+            try:
+                journal_segments.write_matching_cursor(
+                    shadow.EVENT_PATH,
+                    _cursor_path(shadow.EVENT_PATH),
+                    _CRITICAL,
+                    {"event": str(event).upper(), **dict(payload)},
+                )
+            except OSError:
+                # Optimization only. A missing cursor forces the next startup
+                # to perform the full canonical journal scan.
+                pass
         return out
 
     shadow._append_event = append_event_durable

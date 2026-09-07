@@ -137,6 +137,44 @@ class JournalSegmentTests(unittest.TestCase):
             self.assertEqual(row["event_seq"], 4)
             self.assertGreater(advise.call_count, 1)
 
+    def test_cached_search_scans_only_appended_complete_records(self):
+        with tempfile.TemporaryDirectory() as temp:
+            current = Path(temp) / "events.jsonl"
+            cursor = Path(temp) / "cursor.json"
+            current.write_text(
+                '{"event":"ENTRY","event_seq":4}\n'
+                '{"event":"DECISION_EVALUATED"}\n', encoding="utf-8",
+            )
+            first = journal_segments.last_matching_event_cached(
+                current, {"ENTRY", "EXIT"}, cursor,
+            )
+            self.assertEqual(first["event_seq"], 4)
+            with current.open("a", encoding="utf-8") as handle:
+                handle.write('{"event":"EXIT","event_seq":5}\n')
+            with patch.object(
+                journal_segments, "last_matching_event",
+                side_effect=AssertionError("full scan must not repeat"),
+            ):
+                second = journal_segments.last_matching_event_cached(
+                    current, {"ENTRY", "EXIT"}, cursor,
+                )
+            self.assertEqual(second["event_seq"], 5)
+
+    def test_truncated_cursor_falls_back_to_canonical_scan(self):
+        with tempfile.TemporaryDirectory() as temp:
+            current = Path(temp) / "events.jsonl"
+            cursor = Path(temp) / "cursor.json"
+            current.write_text('{"event":"ENTRY","event_seq":4}\n', encoding="utf-8")
+            journal_segments.write_matching_cursor(
+                current, cursor, {"ENTRY", "EXIT"},
+                {"event": "ENTRY", "event_seq": 4},
+            )
+            current.write_text('{"event":"EXIT","event_seq":5}\n', encoding="utf-8")
+            row = journal_segments.last_matching_event_cached(
+                current, {"ENTRY", "EXIT"}, cursor,
+            )
+            self.assertEqual(row["event_seq"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

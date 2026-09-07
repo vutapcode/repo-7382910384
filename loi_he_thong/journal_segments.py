@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import os
 import json
+import tempfile
 import threading
 import time
 from pathlib import Path
 
 
 VERSION = "SHADOW_EVENT_JOURNAL_SEGMENTS_V1"
+CRITICAL_CURSOR_VERSION = "CRITICAL_EVENT_CURSOR_V1"
 DEFAULT_MAX_BYTES = 128 * 1024 * 1024
 DEFAULT_MAX_SEGMENTS = 8
 DEFAULT_RETENTION_SECONDS = 84 * 3600
@@ -155,6 +157,132 @@ def last_matching_event(current, event_names, block_size=65536):
         except FileNotFoundError:
             continue
     return None
+
+
+def _complete_boundary(path, block_size=65536):
+    """Return the byte after the last complete JSONL record."""
+    path = Path(path)
+    size = path.stat().st_size
+    if size <= 0:
+        return 0
+    with path.open("rb") as handle:
+        handle.seek(size - 1)
+        if handle.read(1) == b"\n":
+            return size
+        end = size
+        while end > 0:
+            start = max(0, end - int(block_size))
+            handle.seek(start)
+            chunk = handle.read(end - start)
+            newline = chunk.rfind(b"\n")
+            if newline >= 0:
+                return start + newline + 1
+            end = start
+    return 0
+
+
+def _atomic_json(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=path.parent,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def write_matching_cursor(current, cursor_path, event_names, latest_event):
+    """Persist an optimization cursor; the journal remains the authority."""
+    current = Path(current)
+    if not current.exists():
+        return
+    stat = current.stat()
+    _atomic_json(cursor_path, {
+        "version": CRITICAL_CURSOR_VERSION,
+        "event_names": sorted(str(name).upper() for name in event_names),
+        "device": int(stat.st_dev),
+        "inode": int(stat.st_ino),
+        "offset": _complete_boundary(current),
+        "latest_event": latest_event,
+    })
+
+
+def _load_matching_cursor(current, cursor_path, event_names):
+    try:
+        payload = json.loads(Path(cursor_path).read_text(encoding="utf-8"))
+        if payload.get("version") != CRITICAL_CURSOR_VERSION:
+            return None
+        expected = sorted(str(name).upper() for name in event_names)
+        if payload.get("event_names") != expected:
+            return None
+        wanted = (int(payload["device"]), int(payload["inode"]))
+        offset = int(payload["offset"])
+        if offset < 0:
+            return None
+        source = None
+        for candidate in ordered_paths(current):
+            if _identity(candidate) == wanted:
+                source = candidate
+                break
+        if source is None or offset > source.stat().st_size:
+            return None
+        latest = payload.get("latest_event")
+        if latest is not None and not isinstance(latest, dict):
+            return None
+        return latest, wanted, offset
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def last_matching_event_cached(
+    current, event_names, cursor_path, block_size=65536,
+):
+    """Find the latest selected event, incrementally after the first scan.
+
+    The cursor can only reduce work: missing, stale, truncated, rotated-out or
+    corrupt cursors fall back to the canonical reverse journal scan.
+    """
+    current = Path(current)
+    wanted = {str(name).upper() for name in event_names}
+    cached = _load_matching_cursor(current, cursor_path, wanted)
+    if cached is None:
+        latest = last_matching_event(current, wanted, block_size=block_size)
+        write_matching_cursor(current, cursor_path, wanted, latest)
+        return latest
+
+    latest, identity, offset = cached
+    sources = cursor_sources(current, identity[0], identity[1], offset)
+    for source, start in sources:
+        try:
+            with source.open("rb") as handle:
+                handle.seek(int(start))
+                scan_start = int(start)
+                while True:
+                    line = handle.readline()
+                    if not line:
+                        break
+                    if not line.endswith(b"\n"):
+                        break
+                    row = json.loads(line.decode("utf-8"))
+                    if str(row.get("event") or "").upper() in wanted:
+                        latest = row
+                _discard_scan_cache(
+                    handle, scan_start, max(0, handle.tell() - scan_start),
+                )
+        except FileNotFoundError:
+            # Rotation pruning between planning and opening cannot grant
+            # authority. Rebuild from the retained canonical journal.
+            latest = last_matching_event(current, wanted, block_size=block_size)
+            break
+    write_matching_cursor(current, cursor_path, wanted, latest)
+    return latest
 
 
 def _fsync_parent(path):
