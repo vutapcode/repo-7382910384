@@ -14,6 +14,12 @@ class Graph(unittest.TestCase):
   s=self.base(); s["loi_he_thong/execution_causal_revalidation.py"]="BIAS_SIDE_CHANGED"; self.assertIn("EXECUTION_RECHECKS_MUTABLE_BIAS",g.analyze_sources(s)["blockers"])
  def test_execution_action_phase_reinterpret_is_separate_blocker(self):
   s=self.base(); s["loi_he_thong/execution_causal_revalidation.py"]="CURRENT_IMPULSE_ALREADY_CONSUMED"; self.assertIn("EXECUTION_REINTERPRETS_ACTION_PHASE",g.analyze_sources(s)["blockers"])
+ def test_guardian_safety_evidence_is_not_market_truth_rewrite(self):
+  s=self.base(); s["3_thuc_thi/ve_si_lenh/guardian_s_tier.py"]="def _s1(): pass\ndef _s2(): pass"
+  self.assertNotIn("GUARDIAN_REWRITES_MARKET_TRUTH",g.analyze_sources(s)["blockers"])
+ def test_guardian_market_truth_rewrite_fails(self):
+  s=self.base(); s["3_thuc_thi/ve_si_lenh/guardian_s_tier.py"]="market_truth_status = 'FALSIFIED'"
+  self.assertIn("GUARDIAN_REWRITES_MARKET_TRUTH",g.analyze_sources(s)["blockers"])
  def test_old_brain_fallback_fail(self):
   s=self.base(); s["mainnet_tier_s_shadow_launcher.py"]+="\nimport whale_legacy"; self.assertIn("LEGACY_BRAIN_ACTIVE_OR_FALLBACK",g.analyze_sources(s)["blockers"])
  def test_legacy_named_state_is_not_an_import(self):

@@ -79,7 +79,14 @@ def analyze_sources(sources, runtime_profile=None):
     if guardian_active: safety_owners.append("3_thuc_thi/ve_si_lenh/guardian_s_tier.py")
     if any(x in execution for x in ("BIAS_SIDE_CHANGED","BIAS_CONFIDENCE_DROPPED","BIAS_STALE")): blockers.append("EXECUTION_RECHECKS_MUTABLE_BIAS")
     if "CURRENT_IMPULSE_ALREADY_CONSUMED" in execution: blockers.append("EXECUTION_REINTERPRETS_ACTION_PHASE")
-    if guardian_active and any(x in guardian for x in ("def _s1","def _s2","def _s3","S1_price","S2_executed","S3_price")): blockers.append("GUARDIAN_CAUSAL_COUNCIL_STILL_ACTIVE")
+    # Price/flow/OI evidence inside Guardian belongs to exit Safety Policy; it
+    # is not a second Market Truth owner. Flag only an actual write/replacement
+    # of the canonical truth contract, not the presence of causal exit inputs.
+    if guardian_active and any(x in guardian for x in (
+        "market_truth_status =", "market_truth_wave_lifecycle =",
+        "market_thesis =", "bias_state =",
+    )):
+        blockers.append("GUARDIAN_REWRITES_MARKET_TRUTH")
     active_text="\n".join(active_sources).lower()
     legacy_imports=[
         value for value in active_imports
