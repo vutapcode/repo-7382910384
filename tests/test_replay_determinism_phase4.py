@@ -8,7 +8,10 @@ from recorder.phase4_lifecycle_replay import Phase4LifecycleReplay
 from recorder.replay import DeterministicReplay, _replay_output_hash
 
 
-def event(ts, name, opportunity_id, **payload):
+def event(
+    ts, name, opportunity_id, *, code_version="code-a",
+    config_version="config-a", **payload
+):
     body = {
         "event": name,
         "economic_opportunity_id": opportunity_id,
@@ -19,6 +22,8 @@ def event(ts, name, opportunity_id, **payload):
         "event_time_ms": ts,
         "receive_time_ms": ts,
         "available_time_ms": ts,
+        "code_version": code_version,
+        "config_version": config_version,
         "payload": body,
     }
 
@@ -64,6 +69,32 @@ class Phase4ReplayDeterminismTests(unittest.TestCase):
         replay.observe(event(1000, "ECONOMIC_OPPORTUNITY_INVALIDATED", 9))
         replay.observe(event(1100, "ECONOMIC_OPPORTUNITY_CONSUMED", 9))
         self.assertEqual(replay.summary()["status"], "FAIL")
+
+    def test_same_numeric_id_in_different_versions_is_not_merged(self):
+        replay = Phase4LifecycleReplay()
+        replay.observe(event(
+            1000, "ECONOMIC_OPPORTUNITY_INVALIDATED", 9,
+            code_version="code-old", causal_wave_id="wave-old",
+        ))
+        replay.observe(event(
+            1100, "ECONOMIC_OPPORTUNITY_INVALIDATED", 9,
+            code_version="code-new", causal_wave_id="wave-new",
+        ))
+        report = replay.summary()
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["terminals"], 2)
+
+    def test_same_numeric_id_in_different_waves_is_not_merged(self):
+        replay = Phase4LifecycleReplay()
+        replay.observe(event(
+            1000, "ECONOMIC_OPPORTUNITY_INVALIDATED", 9,
+            causal_wave_id="wave-one",
+        ))
+        replay.observe(event(
+            1100, "ECONOMIC_OPPORTUNITY_INVALIDATED", 9,
+            causal_wave_id="wave-two",
+        ))
+        self.assertEqual(replay.summary()["status"], "PASS")
 
     def test_same_input_has_same_complete_output_hash(self):
         rows = [

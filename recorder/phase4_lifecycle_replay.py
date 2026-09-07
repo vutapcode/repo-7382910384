@@ -7,7 +7,7 @@ import orjson
 from loi_he_thong.market_event_contract import available_time_ms
 
 
-VERSION = "PHASE4_LIFECYCLE_REPLAY_V1"
+VERSION = "PHASE4_LIFECYCLE_REPLAY_V2_VERSION_BOUND_IDENTITY"
 LIFECYCLE_EVENTS = frozenset({
     "ECONOMIC_OPPORTUNITY_OPENED",
     "ECONOMIC_OPPORTUNITY_REPRICED",
@@ -49,6 +49,29 @@ class Phase4LifecycleReplay:
         except (AttributeError, TypeError, ValueError):
             return 0
 
+    @staticmethod
+    def _key(record, body, opportunity_id):
+        """Keep reused numeric counters isolated across recorder versions/waves."""
+        return (
+            str(record.get("code_version") or "UNKNOWN_CODE"),
+            str(record.get("config_version") or "UNKNOWN_CONFIG"),
+            int(opportunity_id),
+            str(
+                body.get("causal_wave_id")
+                or body.get("causal_episode_id")
+                or "UNKNOWN_WAVE"
+            ),
+        )
+
+    @staticmethod
+    def _key_payload(key):
+        return {
+            "code_version": key[0],
+            "config_version": key[1],
+            "opportunity_id": key[2],
+            "causal_wave_id": key[3],
+        }
+
     def observe(self, record):
         if str(record.get("stream") or "") != "bot_event":
             return
@@ -59,6 +82,8 @@ class Phase4LifecycleReplay:
         body = dict(payload.get("payload") or payload)
         identity = {
             "available_time_ms": available_time_ms(record),
+            "code_version": record.get("code_version"),
+            "config_version": record.get("config_version"),
             "event": event,
             "causal_wave_id": body.get("causal_wave_id")
             or body.get("causal_episode_id"),
@@ -69,37 +94,38 @@ class Phase4LifecycleReplay:
         self.digest.update(orjson.dumps(identity, option=orjson.OPT_SORT_KEYS))
         self.events += 1
         opportunity_id = identity["economic_opportunity_id"]
+        opportunity_key = self._key(record, body, opportunity_id)
         if event == "ECONOMIC_OPPORTUNITY_OPENED" and opportunity_id:
-            self.opened.add(opportunity_id)
+            self.opened.add(opportunity_key)
         elif event in {"ENTRY", "LIVE_ENTRY"} and opportunity_id:
-            self.captures.add(opportunity_id)
+            self.captures.add(opportunity_key)
         elif event in {
             "ECONOMIC_OPPORTUNITY_CONSUMED",
             "ECONOMIC_OPPORTUNITY_INVALIDATED",
         } and opportunity_id:
             status = event.rsplit("_", 1)[-1]
-            existing = self.terminals.get(opportunity_id)
+            existing = self.terminals.get(opportunity_key)
             if existing is not None:
                 self.violations.append({
-                    "opportunity_id": opportunity_id,
+                    **self._key_payload(opportunity_key),
                     "reason": "DUPLICATE_OR_CONFLICTING_TERMINAL",
                     "existing": existing,
                     "observed": status,
                 })
             else:
-                self.terminals[opportunity_id] = status
+                self.terminals[opportunity_key] = status
 
     def summary(self):
         violations = list(self.violations)
-        for opportunity_id, status in sorted(self.terminals.items()):
-            if status == "CONSUMED" and opportunity_id not in self.captures:
+        for opportunity_key, status in sorted(self.terminals.items()):
+            if status == "CONSUMED" and opportunity_key not in self.captures:
                 violations.append({
-                    "opportunity_id": opportunity_id,
+                    **self._key_payload(opportunity_key),
                     "reason": "CONSUMED_WITHOUT_RECORDED_EXECUTABLE_CAPTURE",
                 })
-            if status == "INVALIDATED" and opportunity_id in self.captures:
+            if status == "INVALIDATED" and opportunity_key in self.captures:
                 violations.append({
-                    "opportunity_id": opportunity_id,
+                    **self._key_payload(opportunity_key),
                     "reason": "INVALIDATED_OPPORTUNITY_HAS_CAPTURE",
                 })
         if not self.terminals:
