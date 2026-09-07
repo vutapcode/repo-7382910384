@@ -2337,8 +2337,11 @@ async def _entry_loop():
                 )
             else:
                 blocking_stage = "READY"
+            market_truth_wave = market_thesis.wave_lifecycle(s, result)
+            result["market_truth_wave_lifecycle"] = market_truth_wave
             opportunity = canonical_opportunity.observe(
-                s, result, qualified=quorum_ok, now=now
+                s, result, qualified=quorum_ok, now=now,
+                market_truth_wave=market_truth_wave,
             )
             invalidation = dict(opportunity.get("invalidation") or {})
             if invalidation:

@@ -11,6 +11,16 @@ def go(side="LONG", mode="NORMAL", phase="ACCEPTANCE"):
     }
 
 
+def truth(wave_id, status="ACTIVE", falsifier=None):
+    return {
+        "version": "MARKET_TRUTH_WAVE_LIFECYCLE_V1",
+        "owner": "MARKET_THESIS",
+        "causal_wave_id": wave_id,
+        "status": status,
+        "falsifier": falsifier,
+    }
+
+
 class CanonicalOpportunityTests(unittest.TestCase):
     def test_reservation_freezes_authority_proof(self):
         dependencies = {
@@ -89,7 +99,7 @@ class CanonicalOpportunityTests(unittest.TestCase):
             "decision": "WAIT", "side": "LONG", "phase": "ACCEPTANCE",
         }, qualified=False, now=102.0)
         self.assertFalse(wait["qualified_now"])
-        self.assertTrue(wait["qualified_ever"])
+        self.assertFalse(wait["qualified_ever"])
 
     def test_new_episode_cannot_supersede_held_execution_reservation(self):
         state = SimpleNamespace()
@@ -101,7 +111,8 @@ class CanonicalOpportunityTests(unittest.TestCase):
                             qualified=False, now=100.2)
         second = opportunity.observe(state, {
             **go(), "causal_episode_id": "episode-2",
-        }, qualified=True, now=100.3)
+        }, qualified=True, now=100.3,
+            market_truth_wave=truth("episode-2"))
         self.assertFalse(opportunity.reserve(state, second["opportunity_id"], now=100.4))
         self.assertEqual(state.canonical_last_reserve_reject,
                          "ACTIVE_RESERVATION_HELD")
@@ -114,7 +125,8 @@ class CanonicalOpportunityTests(unittest.TestCase):
         wait = opportunity.observe(state, {"decision": "WAIT"}, qualified=False, now=101.0)
         second = opportunity.observe(state, go(phase="RELEASE"), qualified=True, now=103.0)
 
-        self.assertTrue(wait["grace_active"])
+        self.assertFalse(wait["grace_active"])
+        self.assertTrue(wait["active"])
         self.assertEqual(second["opportunity_id"], first["opportunity_id"])
         self.assertEqual(state.canonical_opportunity_qualified, 1)
 
@@ -130,24 +142,42 @@ class CanonicalOpportunityTests(unittest.TestCase):
         self.assertFalse(entered["new"])
         self.assertEqual(entered["causal_episode_id"], pressure["causal_episode_id"])
 
-    def test_data_gap_resets_episode_immediately(self):
+    def test_data_gap_does_not_falsify_market_wave(self):
         state = SimpleNamespace()
-        first = opportunity.observe(state, go(), qualified=False, now=100.0)
+        first_result = {**go(), "causal_episode_id": "wave-gap"}
+        first = opportunity.observe(
+            state, first_result, qualified=False, now=100.0,
+            market_truth_wave=truth("wave-gap"),
+        )
         gap = opportunity.observe(state, {
             "decision": "WAIT", "side": "LONG", "phase": "PRESSURE_BUILDING",
-            "reason": "DATA_GAP",
-        }, qualified=False, now=101.0)
-        self.assertFalse(gap["active"])
-        self.assertEqual(
-            gap["invalidation"],
-            {
-                "opportunity_id": first["opportunity_id"],
-                "causal_wave_id": first["causal_episode_id"],
-                "reason": "DATA_GAP",
-            },
+            "reason": "DATA_GAP", "causal_episode_id": "wave-gap",
+        }, qualified=False, now=101.0,
+            market_truth_wave={**truth("wave-gap"), "status": "UNKNOWN"},
         )
-        second = opportunity.observe(state, go(), qualified=False, now=102.0)
-        self.assertGreater(second["opportunity_id"], first["opportunity_id"])
+        self.assertTrue(gap["active"])
+        self.assertNotIn("invalidation", gap)
+        self.assertEqual(gap["opportunity_id"], first["opportunity_id"])
+
+    def test_typed_market_truth_falsifier_invalidates(self):
+        state = SimpleNamespace()
+        first = opportunity.observe(
+            state, {**go(), "causal_episode_id": "wave-dead"},
+            qualified=False, now=100.0,
+            market_truth_wave=truth("wave-dead"),
+        )
+        dead = opportunity.observe(
+            state, {"decision": "WAIT", "causal_episode_id": "wave-dead"},
+            qualified=False, now=101.0,
+            market_truth_wave=truth(
+                "wave-dead", "FALSIFIED", "OPPOSITE_DUAL_CASH_CONTROL",
+            ),
+        )
+        self.assertFalse(dead["active"])
+        self.assertEqual(dead["invalidation"]["opportunity_id"], first["opportunity_id"])
+        self.assertEqual(
+            dead["invalidation"]["reason"], "OPPOSITE_DUAL_CASH_CONTROL",
+        )
 
     def test_new_causal_wave_exposes_replaced_opportunity_invalidation(self):
         state = SimpleNamespace()
@@ -156,17 +186,18 @@ class CanonicalOpportunityTests(unittest.TestCase):
         }, qualified=True, now=100.0)
         second = opportunity.observe(state, {
             **go(side="SHORT"), "causal_episode_id": "wave-b",
-        }, qualified=True, now=101.0)
+        }, qualified=True, now=101.0,
+            market_truth_wave=truth("wave-b"))
         self.assertEqual(second["invalidation"]["opportunity_id"], first["opportunity_id"])
         self.assertEqual(second["invalidation"]["causal_wave_id"], "wave-a")
         self.assertEqual(second["invalidation"]["reason"], "CAUSAL_WAVE_REPLACED")
 
-    def test_wait_beyond_grace_creates_new_opportunity(self):
+    def test_wait_duration_cannot_create_new_opportunity(self):
         state = SimpleNamespace()
         first = opportunity.observe(state, go(), qualified=False, now=100.0)
         opportunity.observe(state, {"decision": "WAIT"}, qualified=False, now=106.0)
         second = opportunity.observe(state, go(), qualified=True, now=106.1)
-        self.assertEqual(second["opportunity_id"], first["opportunity_id"] + 1)
+        self.assertEqual(second["opportunity_id"], first["opportunity_id"])
 
     def test_calibration_capture_is_once_per_qualified_opportunity(self):
         state = SimpleNamespace()

@@ -24,6 +24,12 @@ class TimingEconomicsHandoffTests(unittest.TestCase):
                 },
                 "clock_quality": {"a": {"epoch": 1}},
             },
+            "market_truth_wave_lifecycle": {
+                "version": "MARKET_TRUTH_WAVE_LIFECYCLE_V1",
+                "owner": "MARKET_THESIS",
+                "causal_wave_id": "wave_1",
+                "status": "ACTIVE",
+            },
         }
 
         canonical_opportunity.observe(state, first, qualified=True, now=now)

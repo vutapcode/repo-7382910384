@@ -84,15 +84,15 @@ def timing_attempt_id(result):
     return "timing:" + hashlib.sha256(encoded).hexdigest()
 
 
-def wave_still_alive(state, causal_wave_id):
+def wave_still_alive(result, causal_wave_id):
     if not causal_wave_id:
         return False
-    active_id = getattr(state, "canonical_opportunity_active_episode_id", None)
-    if active_id != causal_wave_id:
-        return False
-    if not getattr(state, "canonical_opportunity_active", False):
-        return False
-    return True
+    truth = dict((result or {}).get("market_truth_wave_lifecycle") or {})
+    return bool(
+        str(truth.get("owner") or "") == "MARKET_THESIS"
+        and str(truth.get("status") or "").upper() == "ACTIVE"
+        and str(truth.get("causal_wave_id") or "") == str(causal_wave_id)
+    )
 
 def can_create_attempt(state, result):
     payload = _timing_payload(result)
@@ -100,7 +100,7 @@ def can_create_attempt(state, result):
         return False, "INVALID_PAYLOAD"
     
     causal_wave_id = payload.get("causal_wave_id")
-    if not wave_still_alive(state, causal_wave_id):
+    if not wave_still_alive(result, causal_wave_id):
         return False, "WAVE_NO_LONGER_ALIVE"
 
     previous_terminal = bool(getattr(state, "entry_timing_attempt_terminal", False))

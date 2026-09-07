@@ -16,6 +16,7 @@ from loi_he_thong import authority_contracts
 
 VERSION = "MARKET_THESIS_V3_AUTHORITY_SEPARATED"
 OBSERVATION_VERSION = "MARKET_THESIS_OBSERVATION_V1"
+WAVE_LIFECYCLE_VERSION = "MARKET_TRUTH_WAVE_LIFECYCLE_V1"
 OWNER = "MARKET_THESIS"
 OBSERVATION_STATUSES = {
     "SUPPORT", "DIVERGENCE", "CONTROL_TRANSFER", "FALSIFY", "UNKNOWN",
@@ -46,6 +47,72 @@ def _knowledge_state(result):
     )):
         return "DIVERGING", "CONTRADICTED"
     return "UNKNOWN", "UNKNOWN_MARKET"
+
+
+def wave_lifecycle(state, result):
+    """Publish the sole typed alive/falsified view of one causal wave.
+
+    Timing, Economics and Execution may observe this contract but cannot
+    terminate the market process. Source unavailability remains UNKNOWN; it
+    can fail execution safety independently without masquerading as a market
+    falsifier.
+    """
+    result = dict(result or {})
+    ignition = dict(result.get("ignition") or {})
+    wave = dict(ignition.get("causal_wave_snapshot") or {})
+    episode_id = str(
+        result.get("causal_episode_id")
+        or ignition.get("causal_episode_id")
+        or wave.get("causal_wave_id")
+        or ""
+    )
+    row = {
+        "version": WAVE_LIFECYCLE_VERSION,
+        "owner": OWNER,
+        "causal_wave_id": episode_id or None,
+        "status": "UNKNOWN",
+        "falsifier": None,
+        "time_alone_falsifies": False,
+    }
+    if not episode_id:
+        row["reason"] = "NO_CAUSAL_WAVE_ID"
+        return row
+
+    handoff = dict(getattr(state, "bias_acquisition_handoff", {}) or {})
+    if str(handoff.get("causal_wave_id") or "") == episode_id:
+        handoff_status = str(handoff.get("status") or "UNKNOWN").upper()
+        if handoff_status == "SEALED":
+            row.update(status="ACTIVE", reason="BIAS_CASH_WAVE_OWNED")
+        elif handoff_status.startswith(("TERMINATED_", "INVALIDATED_")):
+            falsifier = str(
+                handoff.get("termination_reason")
+                or handoff.get("invalidation_reason")
+                or handoff_status
+            )
+            row.update(
+                status="FALSIFIED", reason="BIAS_CAUSAL_FALSIFIER",
+                falsifier=falsifier,
+            )
+        return row
+
+    contradictions = dict(wave.get("contradictions") or {})
+    if contradictions.get("opposing_cash_control"):
+        row.update(
+            status="FALSIFIED",
+            reason="OPPOSITE_DUAL_CASH_CONTROL",
+            falsifier="OPPOSITE_DUAL_CASH_CONTROL",
+        )
+        return row
+
+    _status, knowledge = _knowledge_state(result)
+    if knowledge == "UNKNOWN_SOURCE":
+        row.update(status="UNKNOWN", reason=knowledge)
+    else:
+        # A current identified wave stays alive until Market Truth observes a
+        # causal contradiction. GO/WAIT, economics and elapsed time are not
+        # lifecycle evidence.
+        row.update(status="ACTIVE", reason="CAUSAL_WAVE_NOT_FALSIFIED")
+    return row
 
 
 def _source_health(ignition, knowledge_state):

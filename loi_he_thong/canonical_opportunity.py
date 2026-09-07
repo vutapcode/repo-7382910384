@@ -7,8 +7,7 @@ temporary execution failures may retry the same opportunity.
 """
 import time
 
-VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V5_RESERVE_COMMIT"
-WAIT_GRACE_SECONDS = 5.0
+VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V6_MARKET_TRUTH_LIFECYCLE"
 CAUSAL_PHASES = {
     "PROBE", "EARLY", "MATURE", "ACCEPTANCE", "RELEASE",
     "PRESSURE_BUILDING", "WAIT_CHASE",
@@ -23,16 +22,6 @@ def _signature(result):
     return (str(result.get("side", "ABSTAIN") or "ABSTAIN").upper(),)
 
 
-def _hard_reset(result):
-    reason = str((result or {}).get("reason") or "").upper()
-    return bool(
-        (result or {}).get("data_gap")
-        or "STALE" in reason
-        or "GAP" in reason
-        or reason in {"PRICE_AND_FLOW_OPPOSE", "WAIT_EXTERNAL_UNAVAILABLE"}
-    )
-
-
 def _candidate(result):
     result = result or {}
     side = str(result.get("side", "ABSTAIN") or "ABSTAIN").upper()
@@ -40,7 +29,6 @@ def _candidate(result):
     return bool(
         side in ("LONG", "SHORT")
         and (result.get("decision") == "GO" or phase in CAUSAL_PHASES)
-        and not _hard_reset(result)
     )
 
 
@@ -51,7 +39,6 @@ def _reset_active(state):
     state.canonical_opportunity_active = False
     state.canonical_opportunity_signature = None
     state.canonical_opportunity_active_qualified = False
-    state.canonical_opportunity_wait_since = 0.0
     state.canonical_opportunity_last_evidence_at = 0.0
     state.canonical_opportunity_active_episode_id = None
 
@@ -73,16 +60,25 @@ def _snapshot(state, *, active, new, qualified_now, transition,
         ),
         "causal_episode_id": causal_episode_id,
         "grace_active": bool(grace_active),
-        "grace_seconds": WAIT_GRACE_SECONDS,
+        "grace_seconds": None,
     }
     if signature is not None:
         row["signature"] = signature
     return row
 
 
-def observe(state, result, qualified=False, now=None):
+def observe(state, result, qualified=False, now=None, market_truth_wave=None):
     """Observe the canonical council result without changing its authority."""
     now = time.time() if now is None else float(now)
+    market_truth_wave = dict(
+        market_truth_wave
+        or (result or {}).get("market_truth_wave_lifecycle")
+        or {}
+    )
+    truth_status = str(market_truth_wave.get("status") or "UNKNOWN").upper()
+    truth_wave_id = str(
+        market_truth_wave.get("causal_wave_id") or ""
+    )
     go = bool((result or {}).get("decision") == "GO")
     candidate = _candidate(result)
     previous_active = bool(
@@ -94,8 +90,14 @@ def observe(state, result, qualified=False, now=None):
     previous_episode = getattr(
         state, "canonical_opportunity_active_episode_id", None
     )
-    if _hard_reset(result):
-        reason = str((result or {}).get("reason") or "CAUSAL_HARD_RESET")
+    if truth_status == "FALSIFIED" and (
+        not truth_wave_id or truth_wave_id == str(previous_episode or "")
+    ):
+        reason = str(
+            market_truth_wave.get("falsifier")
+            or market_truth_wave.get("reason")
+            or "MARKET_TRUTH_CAUSAL_FALSIFIER"
+        )
         _reset_active(state)
         row = _snapshot(
             state, active=False, new=False, qualified_now=False,
@@ -110,31 +112,35 @@ def observe(state, result, qualified=False, now=None):
         return row
     if not candidate:
         active = bool(getattr(state, "canonical_opportunity_active", False))
-        last_evidence = float(
-            getattr(state, "canonical_opportunity_last_evidence_at", 0.0) or 0.0
-        )
-        grace = bool(
-            active and last_evidence > 0.0
-            and now - last_evidence <= WAIT_GRACE_SECONDS
-        )
-        if not grace:
-            _reset_active(state)
-        elif float(getattr(state, "canonical_opportunity_wait_since", 0.0) or 0.0) <= 0.0:
-            state.canonical_opportunity_wait_since = now
         return _snapshot(
-            state, active=grace, new=False, qualified_now=False,
+            state, active=active, new=False, qualified_now=False,
             transition=False,
             causal_episode_id=(
                 getattr(state, "canonical_opportunity_active_episode_id", None)
-                if grace else None
+                if active else None
             ),
-            grace_active=grace,
+            grace_active=False,
         )
 
     signature = _signature(result)
     previous = tuple(
         getattr(state, "canonical_opportunity_signature", ()) or ()
     )
+    if (
+        previous_active and signature != previous
+        and not (
+            truth_status == "ACTIVE"
+            and truth_wave_id
+            and truth_wave_id == str(signature[0])
+        )
+    ):
+        row = _snapshot(
+            state, active=True, new=False, qualified_now=False,
+            transition=False, causal_episode_id=previous_episode,
+            grace_active=False, signature=previous,
+        )
+        row["candidate_rejected"] = "MARKET_TRUTH_WAVE_UNVERIFIED"
+        return row
     is_new = bool(
         not getattr(state, "canonical_opportunity_active", False)
         or signature != previous
@@ -160,7 +166,6 @@ def observe(state, result, qualified=False, now=None):
     state.canonical_opportunity_last_evidence_at = now
     if go:
         state.canonical_opportunity_last_go_at = now
-    state.canonical_opportunity_wait_since = 0.0
 
     qualified_now = bool(go and qualified)
     qualification_transition = bool(qualified_now and not bool(
@@ -334,4 +339,6 @@ def mark_captured(state, opportunity_id):
     state.canonical_opportunity_captured = int(
         getattr(state, "canonical_opportunity_captured", 0) or 0
     ) + 1
+    if int(getattr(state, "canonical_opportunity_count", 0) or 0) == opportunity_id:
+        _reset_active(state)
     return True
