@@ -2661,9 +2661,9 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
 def validate_frozen_authority(result):
     """Validate one immutable GO authority proof without rerunning strategy.
 
-    The launcher may revalidate a still-required live dependency (current Bias
-    for ``BIAS_ALIGNED``), but it must not reconstruct Transition semantics
-    from mutable Ignition fields after the proof has been frozen.
+    Execution may validate this sealed proof plus current physical freshness
+    and contradictions. It must not re-read mutable Bias or reconstruct
+    Transition strategy semantics after the proof has been frozen.
     """
     result = dict(result or {})
     ignition = dict(result.get("ignition") or {})

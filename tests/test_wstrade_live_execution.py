@@ -223,8 +223,8 @@ class LiveExecutionTests(unittest.TestCase):
         ok, reason = live._revalidate_before_submit(
             s, "LONG", result, now=10.0,
         )
-        self.assertFalse(ok)
-        self.assertEqual(reason, "BIAS_SIDE_CHANGED")
+        self.assertTrue(ok)
+        self.assertEqual(reason, "PASS")
 
     def test_post_rest_spread_widen_blocks_before_live_submit(self):
         async def run():

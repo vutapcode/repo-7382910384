@@ -5,9 +5,6 @@ authorizes a strategy candidate.  It only decides whether an already reserved
 candidate is still executable after REST/maker latency.
 """
 
-import hashlib
-import json
-
 from loi_he_thong import authority_contracts
 from loi_he_thong import execution_contradiction_shadow
 from loi_he_thong import ignition_signals
@@ -15,11 +12,9 @@ from loi_he_thong import ignition_core
 from loi_he_thong import verified_cost_model
 
 
-VERSION = "EXECUTION_CAUSAL_REVALIDATION_V3_GO_SUBMIT_DECAY"
+VERSION = "EXECUTION_CAUSAL_REVALIDATION_V4_SEALED_AUTHORITY"
 PROOF_MAX_AGE_SECONDS = 1.5
 BBO_MAX_AGE_SECONDS = 1.0
-BIAS_MAX_AGE_SECONDS = 3.0
-BIAS_MIN_CONFIDENCE = 0.55
 FOLLOW_MAX_MS = 600
 
 
@@ -86,18 +81,13 @@ def _authority_contract(state, side, result, now):
         return False, "RESERVED_AUTHORITY_DEPENDENCIES_CHANGED", {}
     if proof_hash != str(reserved.get("authority_proof_hash") or ""):
         return False, "RESERVED_AUTHORITY_PROOF_CHANGED", {}
-    encoded = json.dumps(
-        {"authority_basis": basis, "authority_dependencies": dependencies},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-    ).encode("utf-8")
-    if hashlib.sha256(encoded).hexdigest() != proof_hash:
-        return False, "AUTHORITY_PROOF_HASH_INVALID", {}
-    if str(dependencies.get("side") or "").upper() != str(side).upper():
-        return False, "AUTHORITY_SIDE_CHANGED", {}
-    if str(dependencies.get("causal_episode_id") or "") != str(
-        (result or {}).get("causal_episode_id") or ""
-    ):
-        return False, "AUTHORITY_EPISODE_CHANGED", {}
+    sealed_ok, sealed_reason, sealed_detail = (
+        ignition_core.validate_frozen_authority({
+            **dict(result or {}), "side": str(side).upper(),
+        })
+    )
+    if not sealed_ok:
+        return False, sealed_reason, sealed_detail
 
     cash = dict(dependencies.get("current_cash_conversion") or {})
     qualified = dict(cash.get("qualified_acceptances") or {})
@@ -116,19 +106,7 @@ def _authority_contract(state, side, result, now):
             "minimum_fresh_venues": minimum,
         }
 
-    if basis == "BIAS_ALIGNED":
-        if str(
-            getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN"
-        ).upper() != str(side).upper():
-            return False, "BIAS_SIDE_CHANGED", {}
-        if _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONFIDENCE:
-            return False, "BIAS_CONFIDENCE_DROPPED", {}
-        bias_age = float(now) - _f(getattr(state, "bias_updated_at", 0.0))
-        if bias_age < 0.0 or bias_age > BIAS_MAX_AGE_SECONDS:
-            return False, "BIAS_STALE", {
-                "age_seconds": max(0.0, bias_age)
-            }
-    else:
+    if basis == "TRANSITION_CONFIRMED":
         transition = dict(dependencies.get("transition") or {})
         accepted = {
             str(value) for value in transition.get(
@@ -145,8 +123,9 @@ def _authority_contract(state, side, result, now):
             and {"binance_spot", "coinbase_spot"}.issubset(accepted)
             and {"binance_spot", "coinbase_spot"}.issubset(set(fresh))
         ):
-            return False, "TRANSITION_AUTHORITY_DEPENDENCY_INVALID", {}
+            return False, "SEALED_TRANSITION_PROOF_INVALID", {}
     return True, "PASS", {
+        **dict(sealed_detail or {}),
         "authority_basis": basis,
         "fresh_cash_venues": fresh,
     }

@@ -77,7 +77,8 @@ def analyze_sources(sources, runtime_profile=None):
     guardian_active="guardian_s_tier.py" in shadow; safety_owners=[]
     if "mainnet_safety" in shadow or "mainnet_safety" in live: safety_owners.append("loi_he_thong/mainnet_safety.py")
     if guardian_active: safety_owners.append("3_thuc_thi/ve_si_lenh/guardian_s_tier.py")
-    if any(x in execution for x in ("BIAS_SIDE_CHANGED","BIAS_CONFIDENCE_DROPPED","CURRENT_IMPULSE_ALREADY_CONSUMED","TRANSITION_AUTHORITY_DEPENDENCY_INVALID")): blockers.append("EXECUTION_REINTERPRETS_DIRECTION_OR_STRATEGY")
+    if any(x in execution for x in ("BIAS_SIDE_CHANGED","BIAS_CONFIDENCE_DROPPED","BIAS_STALE")): blockers.append("EXECUTION_RECHECKS_MUTABLE_BIAS")
+    if "CURRENT_IMPULSE_ALREADY_CONSUMED" in execution: blockers.append("EXECUTION_REINTERPRETS_ACTION_PHASE")
     if guardian_active and any(x in guardian for x in ("def _s1","def _s2","def _s3","S1_price","S2_executed","S3_price")): blockers.append("GUARDIAN_CAUSAL_COUNCIL_STILL_ACTIVE")
     active_text="\n".join(active_sources).lower()
     legacy_imports=[
@@ -114,7 +115,7 @@ def analyze_sources(sources, runtime_profile=None):
       "shadow_only_activated":activated_shadow,"unsafe_shadow_activations":unsafe_shadow,
       "legacy_authority_imports":sorted(set(legacy_imports+legacy_dynamic)),
       "hidden_fallback_config_switches":config_switches,
-      "duplicate_question_owners":[x for x in blockers if x in ("ACTION_POLICY_DUPLICATE_OWNER","EXECUTION_REINTERPRETS_DIRECTION_OR_STRATEGY","GUARDIAN_CAUSAL_COUNCIL_STILL_ACTIVE")],
+      "duplicate_question_owners":[x for x in blockers if x in ("ACTION_POLICY_DUPLICATE_OWNER","EXECUTION_RECHECKS_MUTABLE_BIAS","EXECUTION_REINTERPRETS_ACTION_PHASE","GUARDIAN_CAUSAL_COUNCIL_STILL_ACTIVE")],
       "runtime_profile":dict(runtime_profile or {}),"status":"PASS" if not blockers else "FAIL","blockers":sorted(set(blockers)),"read_only":True}
     out["graph_hash"]=_stable(out); return out
 

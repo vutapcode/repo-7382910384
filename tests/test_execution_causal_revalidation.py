@@ -199,6 +199,20 @@ class ExecutionCausalRevalidationTests(unittest.TestCase):
         self.assertEqual(basis, "TRANSITION_CONFIRMED")
         self.assertEqual(detail["authority_basis"], "TRANSITION_CONFIRMED")
 
+    def test_bias_aligned_proof_does_not_recheck_mutable_bias(self):
+        state, result = fixture()
+        state.bias_state = "SHORT"
+        state.bias_confidence = 0.0
+        state.bias_updated_at = 1.0
+
+        ok, reason, detail = recheck.validate_submit(
+            state, "LONG", result, 10.0,
+        )
+
+        self.assertTrue(ok, (reason, detail))
+        self.assertEqual(reason, "PASS")
+        self.assertEqual(detail["authority_basis"], "BIAS_ALIGNED")
+
     def test_mutated_authority_dependencies_fail_closed(self):
         state, result = fixture()
         result["authority_dependencies"] = dict(

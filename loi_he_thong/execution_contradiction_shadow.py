@@ -26,10 +26,13 @@ FAIL_CLOSED_FACTS = (
 )
 
 STRATEGY_REJUDGMENT_REASONS = frozenset({
+    # Retained as historical/replay taxonomy even though V4 active Execution
+    # no longer emits mutable-Bias rejudgment reasons.
     "BIAS_SIDE_CHANGED",
     "BIAS_CONFIDENCE_DROPPED",
     "BIAS_STALE",
     "TRANSITION_AUTHORITY_DEPENDENCY_INVALID",
+    "SEALED_TRANSITION_PROOF_INVALID",
     "CURRENT_PHASE_SCALE_UNAVAILABLE",
     "CURRENT_IMPULSE_ALREADY_CONSUMED",
     "FOLLOWER_REQUIRED_AGAIN",
