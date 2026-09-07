@@ -10,10 +10,13 @@ class ShadowDynamicSizingTest(unittest.TestCase):
         app = SimpleNamespace(state=state)
         calls = {"close_qty": None}
 
-        def feasibility(price):
+        def feasibility(price, frozen_cost_plan=None):
             qty = shadow.QTY_BTC
             required = qty * float(price) / shadow.LEVERAGE
-            fees = qty * float(price) * (2.0 * shadow.FEE_BPS_PER_SIDE / 10000.0)
+            fees = qty * float(price) * (
+                float((frozen_cost_plan or {}).get("roundtrip_fee_bps", 0.0))
+                or 2.0 * shadow.FEE_BPS_PER_SIDE
+            ) / 10000.0
             return {"ok": required + fees <= state.mainnet_shadow_balance_usdt}
 
         def close(pos, guardian_result, now):
@@ -47,6 +50,14 @@ class ShadowDynamicSizingTest(unittest.TestCase):
         self.assertGreater(result["adaptive_qty_btc"], 0.0)
         self.assertLess(result["adaptive_qty_btc"], 0.001)
         self.assertEqual(result["sizing_mode"], "BALANCE_ADAPTIVE")
+
+    def test_forwards_frozen_cost_plan_to_active_feasibility_owner(self):
+        shadow, _ = self._shadow(balance=5.01)
+        hook.install(shadow)
+        plan = {"roundtrip_fee_bps": 100.0}
+        result = shadow._entry_feasibility(100000.0, plan)
+        self.assertEqual(result["sizing_mode"], "BALANCE_ADAPTIVE")
+        self.assertLess(result["adaptive_qty_btc"], 0.001)
 
     def test_close_uses_persisted_position_qty(self):
         shadow, calls = self._shadow(balance=5.4)

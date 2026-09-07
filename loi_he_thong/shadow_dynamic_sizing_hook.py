@@ -132,7 +132,7 @@ def install(shadow):
     original_feasibility = shadow._entry_feasibility
     original_close = shadow._close_shadow
 
-    def feasibility(price):
+    def feasibility(price, frozen_cost_plan=None):
         target = max(_MIN_INTERNAL_QTY_BTC, _TARGET_QTY_BTC)
         affordable = _affordable_qty(shadow, price)
         raw_qty = min(target, affordable)
@@ -143,7 +143,11 @@ def install(shadow):
         else:
             shadow.QTY_BTC = raw_qty if raw_qty >= _MIN_INTERNAL_QTY_BTC else target
 
-        result = original_feasibility(price)
+        result = (
+            original_feasibility(price, frozen_cost_plan)
+            if frozen_cost_plan is not None
+            else original_feasibility(price)
+        )
         result["target_qty_btc"] = target
         result["raw_adaptive_qty_btc"] = float(raw_qty)
         result["adaptive_qty_btc"] = float(shadow.QTY_BTC)
