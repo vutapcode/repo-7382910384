@@ -67,6 +67,40 @@ def _snapshot(state, *, active, new, qualified_now, transition,
     return row
 
 
+def bind_result_identity(result, observation):
+    """Bind only a candidate accepted by the canonical wave owner.
+
+    ``observe`` deliberately keeps the previous opportunity active when a new
+    candidate has not been verified by Market Truth.  The launcher must not
+    then copy that previous episode id onto the rejected candidate: doing so
+    changes a LONG timing observation into a SHORT episode (or vice versa) and
+    lets the old lifecycle/TTL explain the new market evidence.
+
+    Return the immutable candidate record plus the economic opportunity id it
+    may legitimately use.  An unverified candidate stays observable but is not
+    attached to the previous opportunity.
+    """
+    bound = dict(result or {})
+    observation = dict(observation or {})
+    candidate_episode = str(bound.get("causal_episode_id") or "")
+    canonical_episode = str(observation.get("causal_episode_id") or "")
+    rejected = str(observation.get("candidate_rejected") or "")
+    if rejected:
+        bound["canonical_opportunity_link_status"] = rejected
+        return bound, None
+    if canonical_episode:
+        if candidate_episode and candidate_episode != canonical_episode:
+            # This should be unreachable for an accepted candidate. Fail
+            # closed without corrupting provenance or borrowing an old id.
+            bound["canonical_opportunity_link_status"] = (
+                "CANONICAL_EPISODE_ID_MISMATCH"
+            )
+            return bound, None
+        bound["causal_episode_id"] = canonical_episode
+    bound["canonical_opportunity_link_status"] = "LINKED"
+    return bound, observation.get("opportunity_id")
+
+
 def observe(state, result, qualified=False, now=None, market_truth_wave=None):
     """Observe the canonical council result without changing its authority."""
     now = time.time() if now is None else float(now)

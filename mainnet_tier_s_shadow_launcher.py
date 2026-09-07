@@ -2349,12 +2349,13 @@ async def _entry_loop():
                     s, invalidation, side=result.get("side"),
                     cycle_id=decision_cycle_id,
                 )
-            result = dict(result)
-            result["causal_episode_id"] = opportunity.get(
-                "causal_episode_id"
-            ) or result.get("causal_episode_id")
+            result, linked_opportunity_id = (
+                canonical_opportunity.bind_result_identity(
+                    result, opportunity,
+                )
+            )
             result["authority_contracts"] = _authority_contract_bundle(
-                s, result, quorum_ok, opportunity.get("causal_episode_id"),
+                s, result, quorum_ok, result.get("causal_episode_id"),
             )
             if result.get("decision") == "GO" and quorum_ok:
                 prev_status = getattr(s, "entry_timing_attempt_status", "")
@@ -2374,7 +2375,7 @@ async def _entry_loop():
                 if quorum_ok:
                     try:
                         result["entry_thesis_handoff"] = _freeze_entry_handoff(
-                            result, opportunity.get("causal_episode_id"),
+                            result, result.get("causal_episode_id"),
                         )
                     except ValueError as exc:
                         quorum_ok = False
@@ -2392,11 +2393,11 @@ async def _entry_loop():
                         s.entry_gate_outcome = gate_outcome
                         result["authority_contracts"] = _authority_contract_bundle(
                             s, result, False,
-                            opportunity.get("causal_episode_id"),
+                            result.get("causal_episode_id"),
                         )
             lifecycle = entry_lifecycle.observe(
                 s, result, gate_outcome,
-                economic_opportunity_id=opportunity.get("opportunity_id"),
+                economic_opportunity_id=linked_opportunity_id,
             )
             result["entry_gate_outcome"] = dict(gate_outcome)
             result["timing_attempt_id"] = lifecycle.get(

@@ -22,6 +22,53 @@ def truth(wave_id, status="ACTIVE", falsifier=None):
 
 
 class CanonicalOpportunityTests(unittest.TestCase):
+    def test_unverified_opposite_candidate_cannot_borrow_active_identity(self):
+        state = SimpleNamespace()
+        first = opportunity.observe(state, {
+            "decision": "WAIT", "side": "SHORT", "phase": "PROBE",
+            "causal_episode_id": "wave-short",
+        }, now=100.0, market_truth_wave=truth("wave-short"))
+        candidate = {
+            "decision": "WAIT", "side": "LONG", "phase": "PROBE",
+            "causal_episode_id": "wave-long",
+        }
+        observed = opportunity.observe(
+            state, candidate, now=101.0,
+            market_truth_wave={"status": "UNKNOWN"},
+        )
+
+        bound, economic_id = opportunity.bind_result_identity(
+            candidate, observed,
+        )
+
+        self.assertEqual(first["causal_episode_id"], "wave-short")
+        self.assertEqual(observed["causal_episode_id"], "wave-short")
+        self.assertEqual(bound["causal_episode_id"], "wave-long")
+        self.assertEqual(
+            bound["canonical_opportunity_link_status"],
+            "MARKET_TRUTH_WAVE_UNVERIFIED",
+        )
+        self.assertIsNone(economic_id)
+
+    def test_verified_candidate_binds_to_its_own_opportunity(self):
+        state = SimpleNamespace()
+        candidate = {
+            "decision": "WAIT", "side": "LONG", "phase": "PROBE",
+            "causal_episode_id": "wave-long",
+        }
+        observed = opportunity.observe(
+            state, candidate, now=100.0,
+            market_truth_wave=truth("wave-long"),
+        )
+
+        bound, economic_id = opportunity.bind_result_identity(
+            candidate, observed,
+        )
+
+        self.assertEqual(bound["causal_episode_id"], "wave-long")
+        self.assertEqual(bound["canonical_opportunity_link_status"], "LINKED")
+        self.assertEqual(economic_id, observed["opportunity_id"])
+
     def test_reservation_freezes_authority_proof(self):
         dependencies = {
             "version": "ENTRY_AUTHORITY_DEPENDENCIES_V1",
