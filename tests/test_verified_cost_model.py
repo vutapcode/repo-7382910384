@@ -209,6 +209,33 @@ class VerifiedCostModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             verified_cost_model.position_fee_components(position), (5.0, 5.0)
         )
+        valid, reason = verified_cost_model.validate_frozen_cost_plan(plan)
+        self.assertTrue(valid, reason)
+        self.assertEqual(
+            plan["immutability_contract"],
+            verified_cost_model.FROZEN_COST_IMMUTABILITY_CONTRACT,
+        )
+
+    async def test_frozen_plan_rejects_mutation_and_double_charge(self):
+        state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)
+        await verified_cost_model.refresh_account_commission(FakeAPI(), state)
+        plan = verified_cost_model.shadow_execution_plan(
+            {"phase": "RELEASE"}, state, "MARKET"
+        )
+
+        mutated = dict(plan, total_cost_bps=plan["total_cost_bps"] + 1.0)
+        valid, reason = verified_cost_model.validate_frozen_cost_plan(mutated)
+        self.assertFalse(valid)
+        self.assertEqual(reason, "FROZEN_COST_CONTRACT_MUTATED")
+
+        double_charged = dict(plan)
+        double_charged["total_cost_bps"] += double_charged["entry_slippage_bps"]
+        double_charged["contract_hash"] = verified_cost_model.frozen_cost_plan_hash(
+            double_charged
+        )
+        valid, reason = verified_cost_model.validate_frozen_cost_plan(double_charged)
+        self.assertFalse(valid)
+        self.assertEqual(reason, "FROZEN_COST_DOUBLE_COUNT_OR_ALLOCATION_INVALID")
 
     async def test_cost_contract_compares_the_same_execution_style(self):
         state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)

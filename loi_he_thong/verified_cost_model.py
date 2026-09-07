@@ -1,11 +1,14 @@
 """Verified Binance account fees plus execution-aware Tier-S cost estimates."""
+import hashlib
+import json
 import os
 
 
 VERSION = "VERIFIED_COST_MODEL_V3_SHADOW_ASSUMED_PROFILE"
 DEFAULT_FALLBACK_FEE_BPS_PER_SIDE = 9.0
 MAX_SANE_FEE_BPS_PER_SIDE = 20.0
-FROZEN_COST_PLAN_VERSION = "FROZEN_COST_PLAN_V2_SHADOW_PROFILE"
+FROZEN_COST_PLAN_VERSION = "FROZEN_COST_PLAN_V3_SINGLE_CHARGE"
+FROZEN_COST_IMMUTABILITY_CONTRACT = "FROZEN_COST_IMMUTABILITY_CONTRACT_V1"
 
 
 def _f(value, default=0.0):
@@ -370,6 +373,68 @@ def validate_execution_cost_contract(result, state, execution_style):
     }
 
 
+def _frozen_plan_payload(plan):
+    """Return only immutable accounting fields used by all downstream owners."""
+    names = (
+        "version", "immutability_contract", "execution_style", "fill_style",
+        "commission_verified", "simulation_cost_usable", "commission_profile",
+        "commission_source", "entry_fee_bps", "exit_fee_bps",
+        "roundtrip_fee_bps", "entry_slippage_bps", "exit_slippage_bps",
+        "decision_total_cost_bps", "entry_execution_cost_embedded_in_fill",
+        "exit_execution_cost_embedded_in_fill", "roundtrip_cost_bps",
+        "remaining_recovery_cost_bps", "ledger_fee_bps", "total_cost_bps",
+        "minimum_net_edge_bps",
+    )
+    return {name: plan.get(name) for name in names}
+
+
+def frozen_cost_plan_hash(plan):
+    encoded = json.dumps(
+        _frozen_plan_payload(dict(plan or {})),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_frozen_cost_plan(plan):
+    """Reject mutated or double-charged frozen physical-cost plans."""
+    plan = dict(plan or {})
+    if (
+        plan.get("version") != FROZEN_COST_PLAN_VERSION
+        or plan.get("immutability_contract")
+        != FROZEN_COST_IMMUTABILITY_CONTRACT
+    ):
+        return False, "FROZEN_COST_CONTRACT_VERSION_INVALID"
+    expected_hash = frozen_cost_plan_hash(plan)
+    if str(plan.get("contract_hash") or "") != expected_hash:
+        return False, "FROZEN_COST_CONTRACT_MUTATED"
+
+    entry_fee = max(0.0, _f(plan.get("entry_fee_bps")))
+    exit_fee = max(0.0, _f(plan.get("exit_fee_bps")))
+    entry_impact = max(0.0, _f(plan.get("entry_slippage_bps")))
+    exit_impact = max(0.0, _f(plan.get("exit_slippage_bps")))
+    expected_fees = entry_fee + exit_fee
+    expected_roundtrip = expected_fees + entry_impact + exit_impact
+    expected_recovery = expected_fees + exit_impact
+    fields = (
+        (_f(plan.get("roundtrip_fee_bps"), -1.0), expected_fees),
+        (_f(plan.get("ledger_fee_bps"), -1.0), expected_fees),
+        (_f(plan.get("decision_total_cost_bps"), -1.0), expected_roundtrip),
+        (_f(plan.get("roundtrip_cost_bps"), -1.0), expected_roundtrip),
+        (_f(plan.get("remaining_recovery_cost_bps"), -1.0), expected_recovery),
+        (_f(plan.get("total_cost_bps"), -1.0), expected_recovery),
+    )
+    if any(abs(actual - expected) > 1e-6 for actual, expected in fields):
+        return False, "FROZEN_COST_DOUBLE_COUNT_OR_ALLOCATION_INVALID"
+    if not bool(plan.get("entry_execution_cost_embedded_in_fill")):
+        return False, "ENTRY_EXECUTION_COST_NOT_EMBEDDED_IN_FILL"
+    if bool(plan.get("exit_execution_cost_embedded_in_fill")):
+        return False, "EXIT_EXECUTION_COST_PREMATURELY_EMBEDDED"
+    return True, "FROZEN_COST_CONTRACT_PASS"
+
+
 def shadow_execution_plan(result, state, execution_style):
     """Return the fee/cost plan for the shadow fill that actually occurred.
 
@@ -391,8 +456,9 @@ def shadow_execution_plan(result, state, execution_style):
         + float(modeled["exit_fee_bps"])
         + float(modeled["exit_slippage_bps"])
     )
-    return {
+    plan = {
         "version": FROZEN_COST_PLAN_VERSION,
+        "immutability_contract": FROZEN_COST_IMMUTABILITY_CONTRACT,
         "execution_style": "MAKER" if is_maker else "TAKER",
         "fill_style": style or "MARKET",
         "commission_verified": bool(modeled["commission_verified"]),
@@ -414,7 +480,9 @@ def shadow_execution_plan(result, state, execution_style):
         "exit_slippage_bps": float(modeled["exit_slippage_bps"]),
         "decision_total_cost_bps": float(modeled["total_cost_bps"]),
         "entry_execution_cost_embedded_in_fill": True,
-        "exit_execution_cost_embedded_in_fill": True,
+        # Exit impact is reserved for Guardian recovery accounting until the
+        # executable exit fill exists; only the entry impact is already paid.
+        "exit_execution_cost_embedded_in_fill": False,
         "roundtrip_cost_bps": float(modeled["total_cost_bps"]),
         "remaining_recovery_cost_bps": round(remaining, 6),
         "ledger_fee_bps": round(
@@ -426,6 +494,11 @@ def shadow_execution_plan(result, state, execution_style):
         "total_cost_bps": round(remaining, 6),
         "minimum_net_edge_bps": float(modeled["minimum_net_edge_bps"]),
     }
+    plan["contract_hash"] = frozen_cost_plan_hash(plan)
+    valid, reason = validate_frozen_cost_plan(plan)
+    if not valid:
+        raise ValueError(reason)
+    return plan
 
 
 def position_total_cost_bps(position, fallback_bps=18.0):
