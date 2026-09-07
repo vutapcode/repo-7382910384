@@ -1,6 +1,7 @@
 """Record and durably persist causally valid shadow calibration outcomes."""
 from loi_he_thong import edge_calibration_v2
 from loi_he_thong import entry_economics_v2
+from loi_he_thong import verified_cost_model
 
 VERSION="SHADOW_CAL_HOOK_V3_GAP_TAINT_EXCLUSION"
 
@@ -54,6 +55,22 @@ def install(hardened):
                     "edge_class": edge_class,
                     "position_cycle_id": getattr(pos,"position_cycle_id",None),
                     "causal_episode_id": getattr(pos,"causal_episode_id",None),
+                }
+                return out
+            cost_valid, cost_reason = verified_cost_model.validate_frozen_cost_plan(
+                cost_plan
+            )
+            if not cost_valid:
+                state.edge_cal_v2_excluded_invalid_cost = int(
+                    getattr(state, "edge_cal_v2_excluded_invalid_cost", 0) or 0
+                ) + 1
+                state.edge_cal_v2_last_exclusion = {
+                    "version": VERSION,
+                    "reason": cost_reason,
+                    "ts": float(now),
+                    "side": side,
+                    "position_cycle_id": getattr(pos, "position_cycle_id", None),
+                    "causal_episode_id": getattr(pos, "causal_episode_id", None),
                 }
                 return out
             entry=float(getattr(pos,"entry_price",0.0) or 0.0)

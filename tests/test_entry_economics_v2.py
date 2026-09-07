@@ -2,6 +2,7 @@ from types import SimpleNamespace
 import unittest
 
 from loi_he_thong import entry_economics_v2
+from loi_he_thong import verified_cost_model
 from importlib import import_module
 
 
@@ -11,6 +12,7 @@ guardian = import_module("3_thuc_thi.ve_si_lenh.guardian_s_tier")
 def snapshot(**overrides):
     row = {
         "economic_contract_version": entry_economics_v2.CONTRACT_VERSION,
+        "frozen_cost_plan_version": verified_cost_model.FROZEN_COST_PLAN_VERSION,
         "side": "LONG", "entry_mode": "IGNITION", "regime": "NORMAL",
         "proof_type": "METAORDER_CONTINUATION",
         "proposer": "BINANCE_SPOT", "execution_style": "TAKER",
@@ -104,6 +106,16 @@ class EntryEconomicsV2Tests(unittest.TestCase):
         self.assertEqual(report["status"], "BOOTSTRAP_UNVERIFIED")
         self.assertIsNone(report["expected_guardian_net_bps"])
         self.assertFalse(report["authority"])
+
+    def test_old_cost_contract_rows_do_not_enter_current_cohort(self):
+        state = SimpleNamespace(code_version="code", strategy_config_version="cfg")
+        incompatible = snapshot(frozen_cost_plan_version="RETIRED_COST_PLAN")
+        recorded = entry_economics_v2.record(
+            state, incompatible, net_bps=100.0, execution_cost_bps=1.0
+        )
+        self.assertIsNone(recorded)
+        report = entry_economics_v2.estimate(state, snapshot())
+        self.assertEqual(report["samples"], 0)
 
     def test_exact_guardian_net_cohort_activates_after_thirty(self):
         state = SimpleNamespace(code_version="code", strategy_config_version="cfg",

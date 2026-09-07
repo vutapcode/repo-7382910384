@@ -7,6 +7,8 @@ execution cost.  Unknown cohorts remain bootstrap telemetry.
 
 import math
 
+from loi_he_thong import verified_cost_model
+
 
 VERSION = "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
 CONTRACT_VERSION = "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
@@ -64,6 +66,7 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
         oi_status = _u(oi.get("status"))
     return {
         "economic_contract_version": CONTRACT_VERSION,
+        "frozen_cost_plan_version": verified_cost_model.FROZEN_COST_PLAN_VERSION,
         "side": _u((result or {}).get("side")),
         "entry_mode": _u((result or {}).get("entry_mode"), "IGNITION"),
         "regime": _u((regime or {}).get("regime"), "NORMAL"),
@@ -97,6 +100,8 @@ def _rows(state):
         dict(row) for row in rows
         if isinstance(row, dict)
         and row.get("economic_contract_version") == CONTRACT_VERSION
+        and row.get("frozen_cost_plan_version")
+        == verified_cost_model.FROZEN_COST_PLAN_VERSION
         and row.get("valid") is True
     ][-MAX_ROWS:]
     return rows
@@ -122,7 +127,11 @@ def record(state, snapshot, *, net_bps, execution_cost_bps,
            time_to_positive_net_seconds=None, observation_seconds=None,
            valid=True):
     snapshot = dict(snapshot or {})
-    if snapshot.get("economic_contract_version") != CONTRACT_VERSION:
+    if (
+        snapshot.get("economic_contract_version") != CONTRACT_VERSION
+        or snapshot.get("frozen_cost_plan_version")
+        != verified_cost_model.FROZEN_COST_PLAN_VERSION
+    ):
         return None
     event_time = (
         None if time_to_positive_net_seconds is None

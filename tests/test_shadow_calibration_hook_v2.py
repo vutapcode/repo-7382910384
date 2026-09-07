@@ -54,10 +54,30 @@ class ShadowCalibrationTaintTests(unittest.TestCase):
             calibration_tainted=False,
         )
         base = _runtime(pos, state)
-        with patch.object(hook.edge_calibration_v2, "record") as record:
+        with patch.object(
+            hook.verified_cost_model,
+            "validate_frozen_cost_plan",
+            return_value=(True, "FROZEN_COST_CONTRACT_PASS"),
+        ), patch.object(hook.edge_calibration_v2, "record") as record:
             base._close_shadow(pos, {"reason": "GUARDIAN"}, 101.0)
         record.assert_called_once()
         self.assertEqual(saves, [True])
+
+    def test_invalid_frozen_cost_is_excluded_from_empirical_alpha(self):
+        state = self._state()
+        pos = SimpleNamespace(
+            active=True, side="LONG", entry_price=100.0, qty=0.001,
+            calibration_tainted=False, execution_cost_plan={"version": "OLD"},
+        )
+        base = _runtime(pos, state)
+        with patch.object(hook.edge_calibration_v2, "record") as record:
+            base._close_shadow(pos, {"reason": "GUARDIAN"}, 101.0)
+        record.assert_not_called()
+        self.assertEqual(state.edge_cal_v2_excluded_invalid_cost, 1)
+        self.assertEqual(
+            state.edge_cal_v2_last_exclusion["reason"],
+            "FROZEN_COST_CONTRACT_VERSION_INVALID",
+        )
 
 
 if __name__ == "__main__":

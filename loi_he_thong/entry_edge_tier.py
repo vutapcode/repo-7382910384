@@ -96,7 +96,11 @@ def classify(result, state):
         result, state
     )
     residual = max(0.0, _f(ignition.get("residual_edge_proxy_bps")))
-    cost_budget = max(0.0, _f(costs.get("total_cost_bps")))
+    frozen_budgets = dict(cost_contract.get("budgets_bps") or {})
+    cost_budget = max(0.0, _f(
+        frozen_budgets.get(costs.get("execution_style")),
+        costs.get("total_cost_bps"),
+    ))
     reserve = max(0.0, _f(costs.get("minimum_net_edge_bps")))
     economic_snapshot = entry_economics_v2.feature_snapshot(
         result, regime, costs.get("execution_style"), thesis_audit,
