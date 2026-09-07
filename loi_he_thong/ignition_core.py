@@ -4453,24 +4453,25 @@ def _result_from_episode(state, episode, histories, freshness, now):
             now, side, "WAIT_FUTURES_PROPOSER_OI_UNWIND",
             "INVALID", payload, freshness,
         )
-    # A strict old-side-failure -> dual-cash reclaim transition owns direction.
-    # Futures remains required as a healthy feed and supplies urgency/context,
-    # but its missing 600 ms echo cannot overrule two independent cash venues.
-    # Ordinary Bias-aligned cash ignition retains the existing Futures follower
-    # contract.
+    # Two independent cash venues which are converting now own cash timing.
+    # Futures remains a required healthy feed and supplies urgency/context, but
+    # its missing 600 ms echo cannot veto either a proved control transfer or a
+    # Bias-aligned dual-cash ignition.  A single-cash ignition still needs the
+    # existing Futures follower: this is not a blanket relaxation.
     synchronous_transition = _strict_transition_side(episode) == side
+    synchronous_cash_acceptance = bool(
+        current_cash.get("dual_cash_synchronous_acceptance")
+    )
     if (
         not proposer_is_futures
         and not futures_follow_ok
         and not synchronous_transition
+        and not synchronous_cash_acceptance
     ):
         return _wait(
             now, side, "WAIT_CASH_IGNITION_FUTURES_RESPONSE",
             "PROBE", payload, freshness,
         )
-    synchronous_cash_acceptance = bool(
-        current_cash.get("dual_cash_synchronous_acceptance")
-    )
     if (
         leader == "SIMULTANEOUS"
         and proof_type != "FAILED_REVERSION"

@@ -2810,6 +2810,41 @@ class IgnitionCoreTests(unittest.TestCase):
             s, proved["causal_episode_id"], side="LONG",
             last_evidence_ms=proved["ignition"]["last_evidence_ms"],
         ))
+
+    def test_bias_aligned_dual_cash_can_prove_without_futures_echo(self):
+        s = state()
+        warm(s, "binance_spot")
+        warm(s, "coinbase_spot")
+        warm(s, "futures")
+        ignition_core.evaluate(s, now=2.0)
+
+        bucket(s, "binance_spot", 3_000)
+        bucket(s, "coinbase_spot", 3_000)
+        ignition_core.evaluate(s, now=3.101)
+        bucket(s, "binance_spot", 3_100, base=100.003)
+        bucket(s, "coinbase_spot", 3_100, base=100.003)
+        proved = ignition_core.evaluate(s, now=3.201)
+
+        self.assertEqual(proved["decision"], "GO")
+        self.assertFalse(proved["ignition"]["futures_follow_ok"])
+        self.assertTrue(
+            proved["ignition"]["dual_cash_synchronous_acceptance"]
+        )
+
+    def test_single_cash_still_requires_futures_echo(self):
+        s = state()
+        warm(s, "binance_spot")
+        warm(s, "futures")
+        ignition_core.evaluate(s, now=2.0)
+        bucket(s, "binance_spot", 3_000)
+        ignition_core.evaluate(s, now=3.101)
+        bucket(s, "binance_spot", 3_100, base=100.003)
+        waiting = ignition_core.evaluate(s, now=3.201)
+
+        self.assertEqual(waiting["decision"], "WAIT")
+        self.assertEqual(
+            waiting["reason"], "WAIT_CASH_IGNITION_FUTURES_RESPONSE"
+        )
         captured = ignition_core.evaluate(s, now=3.403)
         self.assertNotEqual(captured["decision"], "GO")
 
