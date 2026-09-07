@@ -8,7 +8,7 @@ Entry, Execution, Guardian or Risk authority.
 import hashlib
 import json
 
-VERSION = "ENTRY_LIFECYCLE_V2_RETRYABLE_TIMING_ATTEMPTS"
+VERSION = "ENTRY_LIFECYCLE_V3_ECONOMIC_TERMINALS"
 
 _EXPIRING_TIMING_REASONS = frozenset({
     "WAIT_CASH_IGNITION_FUTURES_RESPONSE",
@@ -288,3 +288,93 @@ def observe(state, result, gate_outcome, *, economic_opportunity_id=None):
         ),
         "events": events,
     }
+
+
+def _terminal_states(state):
+    rows = getattr(state, "entry_economic_terminal_states", None)
+    if not isinstance(rows, dict):
+        rows = {}
+        state.entry_economic_terminal_states = rows
+    return rows
+
+
+def _terminal(state, opportunity_id, status, *, causal_wave_id=None,
+              timing_attempt_id=None, reason=None):
+    opportunity_id = int(opportunity_id or 0)
+    status = str(status or "").upper()
+    if opportunity_id <= 0 or status not in {"CONSUMED", "INVALIDATED"}:
+        return {
+            "version": VERSION,
+            "accepted": False,
+            "reason": "INVALID_TERMINAL_REQUEST",
+            "event": None,
+        }
+    states = _terminal_states(state)
+    key = str(opportunity_id)
+    existing = dict(states.get(key) or {})
+    if existing:
+        return {
+            "version": VERSION,
+            "accepted": existing.get("status") == status,
+            "reason": (
+                "IDEMPOTENT_TERMINAL"
+                if existing.get("status") == status
+                else "CONFLICTING_TERMINAL_REJECTED"
+            ),
+            "event": None,
+            "terminal": existing,
+        }
+    terminal = {
+        "economic_opportunity_id": opportunity_id,
+        "canonical_opportunity_id": opportunity_id,
+        "causal_wave_id": str(causal_wave_id or "") or None,
+        "timing_attempt_id": str(timing_attempt_id or "") or None,
+        "status": status,
+        "reason": str(reason or (
+            "EXECUTABLE_FILL_CAPTURED"
+            if status == "CONSUMED" else "CAUSAL_OPPORTUNITY_INVALIDATED"
+        )),
+    }
+    states[key] = terminal
+    # Keep bounded recorder state without changing opportunity authority.
+    for stale_key in list(states)[:-128]:
+        states.pop(stale_key, None)
+    link = getattr(state, "entry_economic_opportunity_link", None)
+    linked_id = (
+        int(link[1] or 0)
+        if isinstance(link, tuple) and len(link) == 2 else 0
+    )
+    if linked_id == opportunity_id:
+        state.entry_economic_opportunity_link = None
+    state.entry_economic_last_terminal = dict(terminal)
+    return {
+        "version": VERSION,
+        "accepted": True,
+        "reason": terminal["reason"],
+        "event": (
+            f"ECONOMIC_OPPORTUNITY_{status}", dict(terminal)
+        ),
+        "terminal": terminal,
+    }
+
+
+def consume(state, opportunity_id, *, causal_wave_id=None,
+            timing_attempt_id=None, reason="EXECUTABLE_FILL_CAPTURED"):
+    """Record consumption only after canonical executable capture."""
+    return _terminal(
+        state, opportunity_id, "CONSUMED",
+        causal_wave_id=causal_wave_id,
+        timing_attempt_id=timing_attempt_id,
+        reason=reason,
+    )
+
+
+def invalidate(state, opportunity_id, *, causal_wave_id=None,
+               timing_attempt_id=None, reason="CAUSAL_OPPORTUNITY_INVALIDATED"):
+    """Record death only from a causal falsifier or source continuity break."""
+    return _terminal(
+        state, opportunity_id, "INVALIDATED",
+        causal_wave_id=causal_wave_id,
+        timing_attempt_id=timing_attempt_id,
+        reason=reason,
+    )

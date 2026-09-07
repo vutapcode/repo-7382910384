@@ -138,8 +138,28 @@ class CanonicalOpportunityTests(unittest.TestCase):
             "reason": "DATA_GAP",
         }, qualified=False, now=101.0)
         self.assertFalse(gap["active"])
+        self.assertEqual(
+            gap["invalidation"],
+            {
+                "opportunity_id": first["opportunity_id"],
+                "causal_wave_id": first["causal_episode_id"],
+                "reason": "DATA_GAP",
+            },
+        )
         second = opportunity.observe(state, go(), qualified=False, now=102.0)
         self.assertGreater(second["opportunity_id"], first["opportunity_id"])
+
+    def test_new_causal_wave_exposes_replaced_opportunity_invalidation(self):
+        state = SimpleNamespace()
+        first = opportunity.observe(state, {
+            **go(), "causal_episode_id": "wave-a",
+        }, qualified=True, now=100.0)
+        second = opportunity.observe(state, {
+            **go(side="SHORT"), "causal_episode_id": "wave-b",
+        }, qualified=True, now=101.0)
+        self.assertEqual(second["invalidation"]["opportunity_id"], first["opportunity_id"])
+        self.assertEqual(second["invalidation"]["causal_wave_id"], "wave-a")
+        self.assertEqual(second["invalidation"]["reason"], "CAUSAL_WAVE_REPLACED")
 
     def test_wait_beyond_grace_creates_new_opportunity(self):
         state = SimpleNamespace()

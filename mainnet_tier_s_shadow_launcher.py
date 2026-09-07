@@ -288,7 +288,9 @@ def _release_execution_reservation_if_safe(
         return False
     if _execution_recovery_active(state):
         return False
-    return canonical_opportunity.release(state, opportunity_id, reason=reason)
+    return _release_opportunity_and_finalize_invalidation(
+        state, opportunity_id, reason
+    )
 
 
 def _settle_reconciled_reservation(state, reconciliation):
@@ -302,14 +304,19 @@ def _settle_reconciled_reservation(state, reconciliation):
         getattr(state, "canonical_reserved_context", {}) or {}
     )
     if reconciliation == "FLAT":
-        return canonical_opportunity.release(
-            state, reserved_id, reason="RECOVERY_VERIFIED_FLAT_NO_FILL"
+        return _release_opportunity_and_finalize_invalidation(
+            state, reserved_id, "RECOVERY_VERIFIED_FLAT_NO_FILL"
         )
     if reconciliation in {
         "UNOWNED_POSITION_FLATTENED",
         "RECOVERY_VERIFIED_FLAT_AFTER_FILL",
     }:
-        captured = canonical_opportunity.mark_captured(state, reserved_id)
+        captured = _mark_opportunity_consumed(
+            state,
+            reserved_id,
+            causal_wave_id=reserved_context.get("causal_episode_id"),
+            reason=reconciliation,
+        )
         if captured:
             entry_council.capture_episode(
                 state,
@@ -338,7 +345,13 @@ def _commit_live_execution_capture(state, result, position=None):
     )
     if not captured_execution:
         return False
-    committed = canonical_opportunity.mark_captured(state, opportunity_id)
+    committed = _mark_opportunity_consumed(
+        state,
+        opportunity_id,
+        causal_wave_id=episode_id,
+        timing_attempt_id=result.get("timing_attempt_id"),
+        reason="LIVE_EXECUTION_CAPTURED",
+    )
     if committed:
         entry_council.capture_episode(
             state,
@@ -349,6 +362,92 @@ def _commit_live_execution_capture(state, result, position=None):
             ),
         )
     return committed
+
+
+def _emit_lifecycle_terminal(state, report, *, side=None, cycle_id=None):
+    event = (report or {}).get("event")
+    if not event:
+        return False
+    name, payload = event
+    _append_event(name, {
+        "schema_version": "ENTRY_LIFECYCLE_RECORD_V3",
+        "cycle_id": cycle_id,
+        "side": side,
+        **dict(payload or {}),
+    })
+    return True
+
+
+def _release_opportunity_and_finalize_invalidation(state, opportunity_id, reason):
+    released = canonical_opportunity.release(
+        state, opportunity_id, reason=reason
+    )
+    if not released:
+        return False
+    pending = dict(
+        getattr(state, "entry_economic_pending_invalidation", {}) or {}
+    )
+    if int(pending.get("opportunity_id", 0) or 0) == int(opportunity_id or 0):
+        report = entry_lifecycle.invalidate(
+            state,
+            opportunity_id,
+            causal_wave_id=pending.get("causal_wave_id"),
+            timing_attempt_id=pending.get("timing_attempt_id"),
+            reason=pending.get("reason"),
+        )
+        _emit_lifecycle_terminal(state, report)
+        state.entry_economic_pending_invalidation = None
+    return True
+
+
+def _invalidate_opportunity_or_defer(state, invalidation, *, side=None,
+                                     cycle_id=None):
+    invalidation = dict(invalidation or {})
+    opportunity_id = int(invalidation.get("opportunity_id", 0) or 0)
+    reserved_id = int(
+        getattr(state, "canonical_reserved_opportunity_id", 0) or 0
+    )
+    if opportunity_id <= 0:
+        return False
+    if reserved_id == opportunity_id or _execution_recovery_active(state):
+        state.entry_economic_pending_invalidation = {
+            **invalidation,
+            "timing_attempt_id": getattr(
+                state, "entry_timing_attempt_id", None
+            ),
+        }
+        return False
+    report = entry_lifecycle.invalidate(
+        state,
+        opportunity_id,
+        causal_wave_id=invalidation.get("causal_wave_id"),
+        timing_attempt_id=getattr(state, "entry_timing_attempt_id", None),
+        reason=invalidation.get("reason"),
+    )
+    return _emit_lifecycle_terminal(
+        state, report, side=side, cycle_id=cycle_id
+    )
+
+
+def _mark_opportunity_consumed(state, opportunity_id, *, causal_wave_id=None,
+                               timing_attempt_id=None, reason=None):
+    captured = canonical_opportunity.mark_captured(state, opportunity_id)
+    if not captured:
+        return False
+    pending = dict(
+        getattr(state, "entry_economic_pending_invalidation", {}) or {}
+    )
+    if int(pending.get("opportunity_id", 0) or 0) == int(opportunity_id or 0):
+        state.entry_economic_pending_invalidation = None
+    report = entry_lifecycle.consume(
+        state,
+        opportunity_id,
+        causal_wave_id=causal_wave_id,
+        timing_attempt_id=timing_attempt_id,
+        reason=reason or "EXECUTABLE_FILL_CAPTURED",
+    )
+    _emit_lifecycle_terminal(state, report)
+    return bool(report.get("accepted"))
 
 
 def _latest_futures_price(now=None):
@@ -1323,8 +1422,12 @@ def _open_shadow(side, result, now):
         },
     )
     app.state.mainnet_shadow_position = pos
-    canonical_opportunity.mark_captured(
-        app.state, pos.canonical_opportunity_id
+    _mark_opportunity_consumed(
+        app.state,
+        pos.canonical_opportunity_id,
+        causal_wave_id=pos.causal_episode_id,
+        timing_attempt_id=pos.timing_attempt_id,
+        reason="SHADOW_EXECUTABLE_FILL_CAPTURED",
     )
     entry_council.capture_episode(
         app.state,
@@ -1443,10 +1546,10 @@ def _advance_shadow_pending(now):
         }
         if not release:
             app.state.mainnet_shadow_pending_entry = None
-            canonical_opportunity.release(
+            _release_opportunity_and_finalize_invalidation(
                 app.state,
                 int(result.get("canonical_opportunity_id", 0) or 0),
-                reason=release_reason,
+                release_reason,
             )
             _append_event("SHADOW_MAKER_CANCELED", {
                 "cycle_id": result.get("decision_cycle_id"),
@@ -1491,10 +1594,10 @@ def _advance_shadow_pending(now):
         fill = shadow_execution_model.market_fill(side, bid, ask)
         if fill <= 0.0:
             app.state.mainnet_shadow_pending_entry = None
-            canonical_opportunity.release(
+            _release_opportunity_and_finalize_invalidation(
                 app.state,
                 int(result.get("canonical_opportunity_id", 0) or 0),
-                reason="SHADOW_MARKET_FALLBACK_BBO_MISSING",
+                "SHADOW_MARKET_FALLBACK_BBO_MISSING",
             )
             _append_event("ENTRY_SKIPPED", {
                 "schema_version": "TIER_S_SHADOW_EXECUTION_V1",
@@ -1526,10 +1629,10 @@ def _advance_shadow_pending(now):
     result["_shadow_execution"] = execution
     position = _open_shadow(side, result, now)
     if position is None:
-        canonical_opportunity.release(
+        _release_opportunity_and_finalize_invalidation(
             app.state,
             int(result.get("canonical_opportunity_id", 0) or 0),
-            reason=str(
+            str(
                 getattr(
                     app.state, "mainnet_shadow_last_skip",
                     "MAKER_PENDING_TERMINAL_NO_FILL",
@@ -2229,6 +2332,12 @@ async def _entry_loop():
             opportunity = canonical_opportunity.observe(
                 s, result, qualified=quorum_ok, now=now
             )
+            invalidation = dict(opportunity.get("invalidation") or {})
+            if invalidation:
+                _invalidate_opportunity_or_defer(
+                    s, invalidation, side=result.get("side"),
+                    cycle_id=decision_cycle_id,
+                )
             result = dict(result)
             result["causal_episode_id"] = opportunity.get(
                 "causal_episode_id"
@@ -2254,25 +2363,26 @@ async def _entry_loop():
                 if quorum_ok:
                     try:
                         result["entry_thesis_handoff"] = _freeze_entry_handoff(
-                        result, opportunity.get("causal_episode_id"),
-                    )
-                except ValueError as exc:
-                    quorum_ok = False
-                    blocking_stage = "FROZEN_ENTRY_CONTRACT"
-                    reason = str(exc) or "ENTRY_HANDOFF_CONTRACT_INVALID"
-                    s.entry_structural_contract = {
-                        "ok": False,
-                        "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
-                        "detail": reason,
-                    }
-                    gate_outcome = entry_gate_outcome.structural(
-                        False, "ENTRY_HANDOFF_CONTRACT_INVALID",
-                        {"error": reason},
-                    )
-                    s.entry_gate_outcome = gate_outcome
-                    result["authority_contracts"] = _authority_contract_bundle(
-                        s, result, False, opportunity.get("causal_episode_id"),
-                    )
+                            result, opportunity.get("causal_episode_id"),
+                        )
+                    except ValueError as exc:
+                        quorum_ok = False
+                        blocking_stage = "FROZEN_ENTRY_CONTRACT"
+                        reason = str(exc) or "ENTRY_HANDOFF_CONTRACT_INVALID"
+                        s.entry_structural_contract = {
+                            "ok": False,
+                            "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
+                            "detail": reason,
+                        }
+                        gate_outcome = entry_gate_outcome.structural(
+                            False, "ENTRY_HANDOFF_CONTRACT_INVALID",
+                            {"error": reason},
+                        )
+                        s.entry_gate_outcome = gate_outcome
+                        result["authority_contracts"] = _authority_contract_bundle(
+                            s, result, False,
+                            opportunity.get("causal_episode_id"),
+                        )
             lifecycle = entry_lifecycle.observe(
                 s, result, gate_outcome,
                 economic_opportunity_id=opportunity.get("opportunity_id"),
@@ -2288,7 +2398,7 @@ async def _entry_loop():
                 "events", ()
             ):
                 _append_event(lifecycle_event, {
-                    "schema_version": "ENTRY_LIFECYCLE_RECORD_V2",
+                    "schema_version": "ENTRY_LIFECYCLE_RECORD_V3",
                     "cycle_id": decision_cycle_id,
                     "causal_episode_id": result.get("causal_episode_id"),
                     "side": result.get("side"),

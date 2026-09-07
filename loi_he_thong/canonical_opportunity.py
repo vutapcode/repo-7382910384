@@ -85,12 +85,29 @@ def observe(state, result, qualified=False, now=None):
     now = time.time() if now is None else float(now)
     go = bool((result or {}).get("decision") == "GO")
     candidate = _candidate(result)
+    previous_active = bool(
+        getattr(state, "canonical_opportunity_active", False)
+    )
+    previous_id = int(
+        getattr(state, "canonical_opportunity_count", 0) or 0
+    )
+    previous_episode = getattr(
+        state, "canonical_opportunity_active_episode_id", None
+    )
     if _hard_reset(result):
+        reason = str((result or {}).get("reason") or "CAUSAL_HARD_RESET")
         _reset_active(state)
-        return _snapshot(
+        row = _snapshot(
             state, active=False, new=False, qualified_now=False,
             transition=False, causal_episode_id=None, grace_active=False,
         )
+        if previous_active and previous_id > 0:
+            row["invalidation"] = {
+                "opportunity_id": previous_id,
+                "causal_wave_id": previous_episode,
+                "reason": reason,
+            }
+        return row
     if not candidate:
         active = bool(getattr(state, "canonical_opportunity_active", False))
         last_evidence = float(
@@ -122,7 +139,14 @@ def observe(state, result, qualified=False, now=None):
         not getattr(state, "canonical_opportunity_active", False)
         or signature != previous
     )
+    invalidation = None
     if is_new:
+        if previous_active and previous_id > 0:
+            invalidation = {
+                "opportunity_id": previous_id,
+                "causal_wave_id": previous_episode,
+                "reason": "CAUSAL_WAVE_REPLACED",
+            }
         state.canonical_opportunity_count = int(
             getattr(state, "canonical_opportunity_count", 0) or 0
         ) + 1
@@ -148,7 +172,7 @@ def observe(state, result, qualified=False, now=None):
         ) + 1
         state.canonical_opportunity_active_qualified = True
 
-    return _snapshot(
+    row = _snapshot(
         state, active=True, new=is_new, qualified_now=qualified_now,
         transition=qualification_transition,
         causal_episode_id=getattr(
@@ -156,6 +180,9 @@ def observe(state, result, qualified=False, now=None):
         ),
         grace_active=False, signature=signature,
     )
+    if invalidation:
+        row["invalidation"] = invalidation
+    return row
 
 
 def _clear_reservation(state):

@@ -168,6 +168,41 @@ class EntryLifecycleTests(unittest.TestCase):
         )
         self.assertIsNone(observed["timing_attempt_id"])
 
+    def test_consumed_is_emitted_once_only_after_capture_boundary(self):
+        state = SimpleNamespace(entry_economic_opportunity_link=("attempt-1", 21))
+        report = entry_lifecycle.consume(
+            state, 21, causal_wave_id="wave-21",
+            timing_attempt_id="attempt-1",
+        )
+        self.assertTrue(report["accepted"])
+        self.assertEqual(report["event"][0], "ECONOMIC_OPPORTUNITY_CONSUMED")
+        duplicate = entry_lifecycle.consume(state, 21)
+        self.assertTrue(duplicate["accepted"])
+        self.assertIsNone(duplicate["event"])
+
+    def test_invalidated_is_terminal_and_cannot_become_consumed(self):
+        state = SimpleNamespace()
+        report = entry_lifecycle.invalidate(
+            state, 22, causal_wave_id="wave-22", reason="DATA_GAP"
+        )
+        self.assertTrue(report["accepted"])
+        self.assertEqual(report["event"][0], "ECONOMIC_OPPORTUNITY_INVALIDATED")
+        conflict = entry_lifecycle.consume(state, 22)
+        self.assertFalse(conflict["accepted"])
+        self.assertEqual(conflict["reason"], "CONFLICTING_TERMINAL_REJECTED")
+
+    def test_timing_and_economics_failure_do_not_terminalize_opportunity(self):
+        state = SimpleNamespace()
+        entry_lifecycle.observe(
+            state, result(), {
+                "allowed": False, "owner": "ACTION",
+                "stage": "ECONOMICS", "reason": "INSUFFICIENT_EDGE",
+            }, economic_opportunity_id=23,
+        )
+        self.assertEqual(
+            getattr(state, "entry_economic_terminal_states", {}), {}
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

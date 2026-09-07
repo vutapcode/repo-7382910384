@@ -40,6 +40,22 @@ class LauncherReservationSafetyTests(unittest.TestCase):
         self.assertTrue(released)
         self.assertEqual(state.canonical_reserved_opportunity_id, 0)
 
+    def test_causal_invalidation_waits_for_reserved_execution_resolution(self):
+        state = reserved_state()
+        emitted = launcher._invalidate_opportunity_or_defer(state, {
+            "opportunity_id": 7,
+            "causal_wave_id": "episode-7",
+            "reason": "DATA_GAP",
+        })
+        self.assertFalse(emitted)
+        self.assertFalse(hasattr(state, "entry_economic_terminal_states"))
+        self.assertTrue(launcher._release_execution_reservation_if_safe(
+            state, 7, "RECOVERY_VERIFIED_FLAT_NO_FILL"
+        ))
+        self.assertEqual(
+            state.entry_economic_last_terminal["status"], "INVALIDATED"
+        )
+
     def test_recovery_flat_releases_but_flattened_fill_is_consumed(self):
         flat = reserved_state(recovery=True)
         self.assertTrue(launcher._settle_reconciled_reservation(flat, "FLAT"))
@@ -52,6 +68,9 @@ class LauncherReservationSafetyTests(unittest.TestCase):
         ))
         self.assertEqual(flattened.canonical_reserved_opportunity_id, 0)
         self.assertEqual(flattened.canonical_last_consumed_opportunity_id, 7)
+        self.assertEqual(
+            flattened.entry_economic_last_terminal["status"], "CONSUMED"
+        )
 
         recovered = reserved_state(recovery=True)
         self.assertTrue(launcher._settle_reconciled_reservation(
@@ -76,6 +95,7 @@ class LauncherReservationSafetyTests(unittest.TestCase):
             state, result, position=None
         ))
         self.assertEqual(state.canonical_last_consumed_opportunity_id, 7)
+        self.assertEqual(state.entry_economic_last_terminal["status"], "CONSUMED")
         self.assertIn("episode-7", state._ignition_tombstones)
 
 
