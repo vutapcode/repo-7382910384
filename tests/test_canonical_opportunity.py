@@ -190,7 +190,47 @@ class CanonicalOpportunityTests(unittest.TestCase):
             market_truth_wave=truth("wave-b"))
         self.assertEqual(second["invalidation"]["opportunity_id"], first["opportunity_id"])
         self.assertEqual(second["invalidation"]["causal_wave_id"], "wave-a")
-        self.assertEqual(second["invalidation"]["reason"], "CAUSAL_WAVE_REPLACED")
+        self.assertEqual(
+            second["invalidation"]["reason"],
+            "MARKET_TRUTH_ACTIVE_WAVE_SUPERSEDED",
+        )
+
+    def test_terminal_candidate_cannot_reopen_without_active_opportunity(self):
+        state = SimpleNamespace()
+        row = opportunity.observe(
+            state,
+            {**go(), "causal_episode_id": "wave-dead"},
+            qualified=True,
+            now=100.0,
+            market_truth_wave=truth(
+                "wave-dead", "FALSIFIED", "OLD_SIDE_CONTROL_RECLAIMED",
+            ),
+        )
+        self.assertFalse(row["active"])
+        self.assertFalse(row["new"])
+        self.assertEqual(
+            row["candidate_rejected"], "MARKET_TRUTH_WAVE_TERMINAL",
+        )
+        self.assertEqual(
+            int(getattr(state, "canonical_opportunity_count", 0) or 0), 0,
+        )
+
+    def test_falsified_other_candidate_does_not_kill_active_wave(self):
+        state = SimpleNamespace()
+        active = opportunity.observe(
+            state, {**go(), "causal_episode_id": "wave-live"},
+            qualified=True, now=100.0,
+            market_truth_wave=truth("wave-live"),
+        )
+        rejected = opportunity.observe(
+            state, {**go(side="SHORT"), "causal_episode_id": "wave-dead"},
+            qualified=True, now=101.0,
+            market_truth_wave=truth("wave-dead", "FALSIFIED", "CONTRADICTION"),
+        )
+        self.assertTrue(rejected["active"])
+        self.assertEqual(rejected["opportunity_id"], active["opportunity_id"])
+        self.assertEqual(rejected["causal_episode_id"], "wave-live")
+        self.assertNotIn("invalidation", rejected)
 
     def test_wait_duration_cannot_create_new_opportunity(self):
         state = SimpleNamespace()

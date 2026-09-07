@@ -7,7 +7,7 @@ temporary execution failures may retry the same opportunity.
 """
 import time
 
-VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V6_MARKET_TRUTH_LIFECYCLE"
+VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V7_TERMINAL_WAVE_SAFE"
 CAUSAL_PHASES = {
     "PROBE", "EARLY", "MATURE", "ACCEPTANCE", "RELEASE",
     "PRESSURE_BUILDING", "WAIT_CHASE",
@@ -90,25 +90,39 @@ def observe(state, result, qualified=False, now=None, market_truth_wave=None):
     previous_episode = getattr(
         state, "canonical_opportunity_active_episode_id", None
     )
-    if truth_status == "FALSIFIED" and (
-        not truth_wave_id or truth_wave_id == str(previous_episode or "")
-    ):
+    if truth_status == "FALSIFIED":
         reason = str(
             market_truth_wave.get("falsifier")
             or market_truth_wave.get("reason")
             or "MARKET_TRUTH_CAUSAL_FALSIFIER"
         )
-        _reset_active(state)
-        row = _snapshot(
-            state, active=False, new=False, qualified_now=False,
-            transition=False, causal_episode_id=None, grace_active=False,
+        invalidates_active = bool(
+            previous_active
+            and (
+                not truth_wave_id
+                or truth_wave_id == str(previous_episode or "")
+            )
         )
-        if previous_active and previous_id > 0:
+        if invalidates_active:
+            _reset_active(state)
+        active = bool(getattr(state, "canonical_opportunity_active", False))
+        row = _snapshot(
+            state, active=active, new=False, qualified_now=False,
+            transition=False,
+            causal_episode_id=(
+                getattr(state, "canonical_opportunity_active_episode_id", None)
+                if active else None
+            ),
+            grace_active=False,
+        )
+        if invalidates_active and previous_id > 0:
             row["invalidation"] = {
                 "opportunity_id": previous_id,
                 "causal_wave_id": previous_episode,
                 "reason": reason,
             }
+        if candidate:
+            row["candidate_rejected"] = "MARKET_TRUTH_WAVE_TERMINAL"
         return row
     if not candidate:
         active = bool(getattr(state, "canonical_opportunity_active", False))
@@ -151,7 +165,7 @@ def observe(state, result, qualified=False, now=None, market_truth_wave=None):
             invalidation = {
                 "opportunity_id": previous_id,
                 "causal_wave_id": previous_episode,
-                "reason": "CAUSAL_WAVE_REPLACED",
+                "reason": "MARKET_TRUTH_ACTIVE_WAVE_SUPERSEDED",
             }
         state.canonical_opportunity_count = int(
             getattr(state, "canonical_opportunity_count", 0) or 0

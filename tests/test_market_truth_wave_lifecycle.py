@@ -43,6 +43,44 @@ class MarketTruthWaveLifecycleTests(unittest.TestCase):
         self.assertEqual(row["status"], "FALSIFIED")
         self.assertEqual(row["falsifier"], "OPPOSITE_DUAL_CASH_CONTROL")
 
+    def test_falsified_wave_cannot_resurrect_after_handoff_replacement(self):
+        state = SimpleNamespace(bias_acquisition_handoff={
+            "causal_wave_id": "wave-dead",
+            "status": "TERMINATED_CONTRADICTION",
+            "termination_reason": "EXECUTED_FLOW_STOPPED_CONVERTING",
+        })
+        dead = market_thesis.wave_lifecycle(state, {
+            "causal_episode_id": "wave-dead",
+            "ignition": {"causal_episode_id": "wave-dead"},
+        })
+        self.assertEqual(dead["status"], "FALSIFIED")
+
+        state.bias_acquisition_handoff = {
+            "causal_wave_id": "wave-new", "status": "SEALED",
+        }
+        replayed = market_thesis.wave_lifecycle(state, {
+            "decision": "GO", "causal_episode_id": "wave-dead",
+            "ignition": {"causal_episode_id": "wave-dead"},
+        })
+        self.assertEqual(replayed["status"], "FALSIFIED")
+        self.assertEqual(
+            replayed["falsifier"], "EXECUTED_FLOW_STOPPED_CONVERTING",
+        )
+
+    def test_unknown_source_does_not_create_terminal_tombstone(self):
+        state = SimpleNamespace()
+        unknown = market_thesis.wave_lifecycle(state, {
+            "decision": "WAIT", "reason": "DATA_GAP",
+            "causal_episode_id": "wave-unknown",
+            "ignition": {"causal_episode_id": "wave-unknown"},
+        })
+        self.assertEqual(unknown["status"], "UNKNOWN")
+        later = market_thesis.wave_lifecycle(state, {
+            "decision": "GO", "causal_episode_id": "wave-unknown",
+            "ignition": {"causal_episode_id": "wave-unknown"},
+        })
+        self.assertEqual(later["status"], "ACTIVE")
+
     def test_bias_owned_acquisition_wave_is_authoritative(self):
         state = SimpleNamespace(bias_acquisition_handoff={
             "causal_wave_id": "wave-owned", "status": "SEALED",
