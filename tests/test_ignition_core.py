@@ -2611,6 +2611,44 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertAlmostEqual(measured["consumed_fraction"], 0.2, places=3)
 
+    def test_acquisition_wave_history_does_not_expire_first_timing_attempt(self):
+        s = state()
+        measured = ignition_core._phase_measurement(
+            s, "LONG", ["binance_spot", "coinbase_spot"],
+            {"binance_spot": 2.0, "coinbase_spot": 1.5},
+            {"price_conversion_bps": 0.5, "receive_time_ms": 3_000},
+            {
+                "acquisition_handoff": {"sealed": True},
+                "acquisition_cash_displacement_bps": 8.0,
+            },
+        )
+
+        self.assertTrue(measured["valid"])
+        self.assertAlmostEqual(
+            measured["market_wave_cash_displacement_bps"], 8.0,
+        )
+        self.assertAlmostEqual(
+            measured["market_wave_consumed_fraction"], 0.8,
+        )
+        self.assertAlmostEqual(
+            measured["timing_attempt_cash_displacement_bps"], 2.0,
+        )
+        self.assertAlmostEqual(measured["consumed_fraction"], 0.2)
+        self.assertEqual(
+            measured["consumed_authority_scope"],
+            "CURRENT_TIMING_ATTEMPT_ONLY",
+        )
+
+    def test_ordinary_ignition_keeps_precursor_in_timing_guard(self):
+        s = state()
+        measured = ignition_core._phase_measurement(
+            s, "LONG", ["binance_spot"], {"binance_spot": 2.0},
+            {"price_conversion_bps": 0.5, "receive_time_ms": 3_000},
+            {"acquisition_cash_displacement_bps": 8.0},
+        )
+
+        self.assertAlmostEqual(measured["consumed_fraction"], 0.8)
+
     def test_oi_intent_direction_conflict_is_explicit(self):
         s = state(now=3.0)
         # A later mutable council update must not rewrite the pre-impulse OI

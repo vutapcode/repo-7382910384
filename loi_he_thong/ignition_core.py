@@ -4049,8 +4049,21 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
     # A sealed neutral acquisition explicitly proves that both segments belong
     # to the same cash-control wave.  Retain its already-travelled distance so
     # the handoff cannot reset a mature move to EARLY and manufacture edge.
-    progress = max(
+    market_wave_progress = max(
         episode_progress, effective_precursor_progress, acquisition_progress,
+    )
+    # A sealed acquisition handoff proves Market Truth ownership; it is not a
+    # timing attempt.  Reusing its pre-handoff displacement in the 0.35 timing
+    # guard makes the first legitimate post-ownership attempt arrive already
+    # expired.  Keep the full wave displacement visible to Thesis/Economics,
+    # while the rollout guard measures only displacement since the currently
+    # fresh attempt began.  Ordinary Ignition retains conservative precursor
+    # accounting, so this cannot reset arbitrary late impulses to EARLY.
+    acquisition_timing_attempt = bool(
+        isinstance((episode or {}).get("acquisition_handoff"), dict)
+    )
+    timing_attempt_progress = (
+        episode_progress if acquisition_timing_attempt else market_wave_progress
     )
     if (
         atr_bps <= 0.0 or atr_updated_at <= 0.0
@@ -4067,7 +4080,13 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
             ),
             "atr_updated_at": atr_updated_at or None,
             "atr_age_seconds": round(max(0.0, atr_age), 4) if atr_updated_at > 0.0 else None,
-            "cash_displacement_bps": round(progress, 6),
+            "cash_displacement_bps": round(market_wave_progress, 6),
+            "market_wave_cash_displacement_bps": round(
+                market_wave_progress, 6
+            ),
+            "timing_attempt_cash_displacement_bps": round(
+                timing_attempt_progress, 6
+            ),
             "episode_cash_displacement_bps": round(episode_progress, 6),
             "precursor_cash_displacement_bps": round(precursor_progress, 6),
             "effective_precursor_cash_displacement_bps": round(
@@ -4080,11 +4099,22 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
             "precursor_measurement": precursor,
             "phase_scale_bps": None, "consumed_fraction": 1.0,
         }
-    consumed = max(0.0, min(1.5, progress / atr_bps))
+    consumed = max(
+        0.0, min(1.5, timing_attempt_progress / atr_bps)
+    )
+    market_wave_consumed = max(
+        0.0, min(1.5, market_wave_progress / atr_bps)
+    )
     return {
         "valid": True,
         "source": "CAUSAL_LEG_AWARE_CASH_DISPLACEMENT_OVER_ATR_1M",
-        "cash_displacement_bps": round(progress, 6),
+        "cash_displacement_bps": round(market_wave_progress, 6),
+        "market_wave_cash_displacement_bps": round(
+            market_wave_progress, 6
+        ),
+        "timing_attempt_cash_displacement_bps": round(
+            timing_attempt_progress, 6
+        ),
         "episode_cash_displacement_bps": round(episode_progress, 6),
         "precursor_cash_displacement_bps": round(precursor_progress, 6),
         "effective_precursor_cash_displacement_bps": round(
@@ -4099,6 +4129,10 @@ def _phase_measurement(state, side, cash_venues, venue_moves, latest, episode=No
         "atr_updated_at": atr_updated_at,
         "atr_age_seconds": round(max(0.0, atr_age), 4),
         "consumed_fraction": round(consumed, 6),
+        "market_wave_consumed_fraction": round(
+            market_wave_consumed, 6
+        ),
+        "consumed_authority_scope": "CURRENT_TIMING_ATTEMPT_ONLY",
         "latest_conversion_bps": round(
             max(0.0, _sign(side) * _f(latest.get("price_conversion_bps"))), 6
         ),
