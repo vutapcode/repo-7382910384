@@ -7,15 +7,24 @@ temporary execution failures may retry the same opportunity.
 """
 import time
 
-VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V7_TERMINAL_WAVE_SAFE"
+VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V8_MARKET_TIMING_SEPARATED"
 CAUSAL_PHASES = {
     "PROBE", "EARLY", "MATURE", "ACCEPTANCE", "RELEASE",
     "PRESSURE_BUILDING", "WAIT_CHASE",
 }
 
 
-def _signature(result):
+def _signature(result, market_truth_wave=None):
     result = result or {}
+    truth = dict(market_truth_wave or {})
+    market_wave_id = str(
+        truth.get("market_wave_id")
+        or truth.get("causal_wave_id")
+        or result.get("market_wave_id")
+        or ""
+    )
+    if market_wave_id:
+        return (market_wave_id,)
     episode_id = str(result.get("causal_episode_id") or "")
     if episode_id:
         return (episode_id,)
@@ -59,6 +68,7 @@ def _snapshot(state, *, active, new, qualified_now, transition,
             getattr(state, "canonical_opportunity_count", 0) or 0
         ),
         "causal_episode_id": causal_episode_id,
+        "market_wave_id": causal_episode_id,
         "grace_active": bool(grace_active),
         "grace_seconds": None,
     }
@@ -82,21 +92,34 @@ def bind_result_identity(result, observation):
     """
     bound = dict(result or {})
     observation = dict(observation or {})
-    candidate_episode = str(bound.get("causal_episode_id") or "")
-    canonical_episode = str(observation.get("causal_episode_id") or "")
+    candidate_wave = str(
+        bound.get("market_wave_id")
+        or ((bound.get("market_truth_wave_lifecycle") or {}).get(
+            "market_wave_id"
+        ))
+        or ((bound.get("market_truth_wave_lifecycle") or {}).get(
+            "causal_wave_id"
+        ))
+        or ""
+    )
+    canonical_wave = str(
+        observation.get("market_wave_id")
+        or observation.get("causal_episode_id")
+        or ""
+    )
     rejected = str(observation.get("candidate_rejected") or "")
     if rejected:
         bound["canonical_opportunity_link_status"] = rejected
         return bound, None
-    if canonical_episode:
-        if candidate_episode and candidate_episode != canonical_episode:
+    if canonical_wave:
+        if candidate_wave and candidate_wave != canonical_wave:
             # This should be unreachable for an accepted candidate. Fail
             # closed without corrupting provenance or borrowing an old id.
             bound["canonical_opportunity_link_status"] = (
                 "CANONICAL_EPISODE_ID_MISMATCH"
             )
             return bound, None
-        bound["causal_episode_id"] = canonical_episode
+        bound["market_wave_id"] = canonical_wave
     bound["canonical_opportunity_link_status"] = "LINKED"
     return bound, observation.get("opportunity_id")
 
@@ -111,8 +134,13 @@ def observe(state, result, qualified=False, now=None, market_truth_wave=None):
     )
     truth_status = str(market_truth_wave.get("status") or "UNKNOWN").upper()
     truth_wave_id = str(
-        market_truth_wave.get("causal_wave_id") or ""
+        market_truth_wave.get("market_wave_id")
+        or market_truth_wave.get("causal_wave_id") or ""
     )
+    truth_identity = str(
+        market_truth_wave.get("identity_authority")
+        or "EXPLICIT_TYPED_MARKET_TRUTH"
+    ).upper()
     go = bool((result or {}).get("decision") == "GO")
     candidate = _candidate(result)
     previous_active = bool(
@@ -170,7 +198,7 @@ def observe(state, result, qualified=False, now=None, market_truth_wave=None):
             grace_active=False,
         )
 
-    signature = _signature(result)
+    signature = _signature(result, market_truth_wave)
     previous = tuple(
         getattr(state, "canonical_opportunity_signature", ()) or ()
     )
@@ -180,6 +208,7 @@ def observe(state, result, qualified=False, now=None, market_truth_wave=None):
             truth_status == "ACTIVE"
             and truth_wave_id
             and truth_wave_id == str(signature[0])
+            and truth_identity != "TIMING_EPISODE_FALLBACK"
         )
     ):
         row = _snapshot(
@@ -208,9 +237,14 @@ def observe(state, result, qualified=False, now=None, market_truth_wave=None):
         state.canonical_opportunity_signature = signature
         state.canonical_opportunity_active_qualified = False
         state.canonical_opportunity_active_episode_id = (
-            (result or {}).get("causal_episode_id")
+            truth_wave_id
+            or (result or {}).get("market_wave_id")
+            or (result or {}).get("causal_episode_id")
             or f"tier-s:{int(getattr(state, 'canonical_opportunity_count', 0) or 0)}"
         )
+    state.canonical_opportunity_last_timing_episode_id = (
+        (result or {}).get("causal_episode_id")
+    )
     state.canonical_opportunity_last_evidence_at = now
     if go:
         state.canonical_opportunity_last_go_at = now
@@ -261,6 +295,13 @@ def _reservation_context(state, opportunity_id, now):
     return {
         "opportunity_id": int(opportunity_id),
         "causal_episode_id": episode_id,
+        "market_wave_id": (
+            result.get("market_wave_id")
+            or (result.get("market_truth_wave_lifecycle") or {}).get(
+                "market_wave_id"
+            )
+            or getattr(state, "canonical_opportunity_active_episode_id", None)
+        ),
         "side": str(
             result.get("side") or getattr(state, "bias_state", "ABSTAIN")
         ).upper(),

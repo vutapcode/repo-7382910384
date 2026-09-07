@@ -16,7 +16,7 @@ from loi_he_thong import authority_contracts
 
 VERSION = "MARKET_THESIS_V3_AUTHORITY_SEPARATED"
 OBSERVATION_VERSION = "MARKET_THESIS_OBSERVATION_V1"
-WAVE_LIFECYCLE_VERSION = "MARKET_TRUTH_WAVE_LIFECYCLE_V2_TOMBSTONES"
+WAVE_LIFECYCLE_VERSION = "MARKET_TRUTH_WAVE_LIFECYCLE_V3_IDENTITY_SEPARATED"
 OWNER = "MARKET_THESIS"
 MAX_WAVE_TOMBSTONES = 256
 OBSERVATION_STATUSES = {
@@ -82,25 +82,53 @@ def wave_lifecycle(state, result):
     result = dict(result or {})
     ignition = dict(result.get("ignition") or {})
     wave = dict(ignition.get("causal_wave_snapshot") or {})
-    episode_id = str(
+    timing_episode_id = str(
         result.get("causal_episode_id")
         or ignition.get("causal_episode_id")
         or wave.get("causal_wave_id")
         or ""
     )
+    side = _u(result.get("side") or ignition.get("side"), "ABSTAIN")
+    handoff = dict(getattr(state, "bias_acquisition_handoff", {}) or {})
+    transition = dict(ignition.get("transition_authority") or {})
+    handoff_owns_side = bool(
+        str(handoff.get("status") or "").upper() == "SEALED"
+        and str(handoff.get("side") or "").upper() == side
+        and str(handoff.get("causal_wave_id") or "")
+    )
+    transition_owns_side = bool(
+        str(transition.get("status") or "").upper() == "REVERSAL_CONFIRMED"
+        and str(transition.get("control_ownership_state") or "").upper()
+            == "CONTROL_OWNED"
+        and str(transition.get("side") or "").upper() == side
+    )
+    if handoff_owns_side:
+        market_wave_id = str(handoff.get("causal_wave_id"))
+        identity_authority = "BIAS_CASH_WAVE_OWNERSHIP"
+    elif transition_owns_side and timing_episode_id:
+        market_wave_id = timing_episode_id
+        identity_authority = "FAST_TRANSITION_CONTROL_OWNERSHIP"
+    else:
+        # Compatibility only. A timing episode can be observed as active, but
+        # it cannot replace another Market Wave merely because its id changed.
+        market_wave_id = timing_episode_id
+        identity_authority = "TIMING_EPISODE_FALLBACK"
     row = {
         "version": WAVE_LIFECYCLE_VERSION,
         "owner": OWNER,
-        "causal_wave_id": episode_id or None,
+        "causal_wave_id": market_wave_id or None,
+        "market_wave_id": market_wave_id or None,
+        "timing_episode_id": timing_episode_id or None,
+        "identity_authority": identity_authority,
         "status": "UNKNOWN",
         "falsifier": None,
         "time_alone_falsifies": False,
     }
-    if not episode_id:
+    if not market_wave_id:
         row["reason"] = "NO_CAUSAL_WAVE_ID"
         return row
 
-    tombstone = _wave_tombstones(state).get(episode_id)
+    tombstone = _wave_tombstones(state).get(market_wave_id)
     if tombstone:
         row.update(
             status="FALSIFIED",
@@ -109,8 +137,7 @@ def wave_lifecycle(state, result):
         )
         return row
 
-    handoff = dict(getattr(state, "bias_acquisition_handoff", {}) or {})
-    if str(handoff.get("causal_wave_id") or "") == episode_id:
+    if str(handoff.get("causal_wave_id") or "") == market_wave_id:
         handoff_status = str(handoff.get("status") or "UNKNOWN").upper()
         if handoff_status == "SEALED":
             row.update(status="ACTIVE", reason="BIAS_CASH_WAVE_OWNED")
@@ -124,7 +151,7 @@ def wave_lifecycle(state, result):
                 status="FALSIFIED", reason="BIAS_CAUSAL_FALSIFIER",
                 falsifier=falsifier,
             )
-            _remember_wave_falsifier(state, episode_id, falsifier)
+            _remember_wave_falsifier(state, market_wave_id, falsifier)
         return row
 
     contradictions = dict(wave.get("contradictions") or {})
@@ -135,7 +162,7 @@ def wave_lifecycle(state, result):
             falsifier="OPPOSITE_DUAL_CASH_CONTROL",
         )
         _remember_wave_falsifier(
-            state, episode_id, "OPPOSITE_DUAL_CASH_CONTROL",
+            state, market_wave_id, "OPPOSITE_DUAL_CASH_CONTROL",
         )
         return row
 

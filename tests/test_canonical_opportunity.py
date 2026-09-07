@@ -69,6 +69,55 @@ class CanonicalOpportunityTests(unittest.TestCase):
         self.assertEqual(bound["canonical_opportunity_link_status"], "LINKED")
         self.assertEqual(economic_id, observed["opportunity_id"])
 
+    def test_same_market_wave_reuses_opportunity_across_timing_attempts(self):
+        state = SimpleNamespace()
+        first_result = {
+            **go(), "causal_episode_id": "timing-1",
+            "market_wave_id": "cash-wave-1",
+        }
+        first = opportunity.observe(
+            state, first_result, qualified=True, now=100.0,
+            market_truth_wave=truth("cash-wave-1"),
+        )
+        second_result = {
+            **go(), "causal_episode_id": "timing-2",
+            "market_wave_id": "cash-wave-1",
+        }
+        second = opportunity.observe(
+            state, second_result, qualified=True, now=101.0,
+            market_truth_wave=truth("cash-wave-1"),
+        )
+        bound, economic_id = opportunity.bind_result_identity(
+            second_result, second,
+        )
+
+        self.assertEqual(second["opportunity_id"], first["opportunity_id"])
+        self.assertFalse(second["new"])
+        self.assertEqual(bound["causal_episode_id"], "timing-2")
+        self.assertEqual(bound["market_wave_id"], "cash-wave-1")
+        self.assertEqual(economic_id, first["opportunity_id"])
+
+    def test_timing_fallback_cannot_supersede_owned_market_wave(self):
+        state = SimpleNamespace()
+        first = opportunity.observe(
+            state, {**go(), "causal_episode_id": "timing-1"},
+            qualified=True, now=100.0,
+            market_truth_wave=truth("cash-wave-1"),
+        )
+        fallback = {
+            "status": "ACTIVE", "causal_wave_id": "timing-2",
+            "market_wave_id": "timing-2",
+            "identity_authority": "TIMING_EPISODE_FALLBACK",
+        }
+        second = opportunity.observe(
+            state, {**go(), "causal_episode_id": "timing-2"},
+            qualified=True, now=101.0, market_truth_wave=fallback,
+        )
+        self.assertEqual(second["opportunity_id"], first["opportunity_id"])
+        self.assertEqual(
+            second["candidate_rejected"], "MARKET_TRUTH_WAVE_UNVERIFIED"
+        )
+
     def test_reservation_freezes_authority_proof(self):
         dependencies = {
             "version": "ENTRY_AUTHORITY_DEPENDENCIES_V1",

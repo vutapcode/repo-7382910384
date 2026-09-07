@@ -1423,6 +1423,7 @@ def _open_shadow(side, result, now):
         timing_attempt_id=result.get("timing_attempt_id"),
         economic_opportunity_id=result.get("economic_opportunity_id"),
         causal_episode_id=result.get("causal_episode_id"),
+        market_wave_id=result.get("market_wave_id"),
         authority_contracts=dict(result.get("authority_contracts") or {}),
         shadow_execution=execution or {
             "style": "MARKET",
@@ -1433,7 +1434,7 @@ def _open_shadow(side, result, now):
     _mark_opportunity_consumed(
         app.state,
         pos.canonical_opportunity_id,
-        causal_wave_id=pos.causal_episode_id,
+        causal_wave_id=(pos.market_wave_id or pos.causal_episode_id),
         timing_attempt_id=pos.timing_attempt_id,
         reason="SHADOW_EXECUTABLE_FILL_CAPTURED",
     )
@@ -1468,6 +1469,7 @@ def _open_shadow(side, result, now):
             "timing_attempt_id": pos.timing_attempt_id,
             "economic_opportunity_id": pos.economic_opportunity_id,
             "causal_episode_id": pos.causal_episode_id,
+            "market_wave_id": pos.market_wave_id,
             "authority_contracts": dict(pos.authority_contracts or {}),
             "feasibility": feasibility,
             "filter_status": (feasibility.get("execution_filters") or {}).get("mode"),
@@ -1701,6 +1703,7 @@ def _close_shadow(pos, guardian_result, now):
             "cycle_id": getattr(pos, "position_cycle_id", None),
             "decision_cycle_id": getattr(pos, "decision_cycle_id", None),
             "causal_episode_id": getattr(pos, "causal_episode_id", None),
+            "market_wave_id": getattr(pos, "market_wave_id", None),
             "timing_attempt_id": getattr(pos, "timing_attempt_id", None),
             "economic_opportunity_id": getattr(
                 pos, "economic_opportunity_id", None

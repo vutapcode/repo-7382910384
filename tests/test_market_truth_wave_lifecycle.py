@@ -84,13 +84,23 @@ class MarketTruthWaveLifecycleTests(unittest.TestCase):
     def test_bias_owned_acquisition_wave_is_authoritative(self):
         state = SimpleNamespace(bias_acquisition_handoff={
             "causal_wave_id": "wave-owned", "status": "SEALED",
+            "side": "LONG",
         })
         row = market_thesis.wave_lifecycle(state, {
-            "causal_episode_id": "wave-owned",
-            "ignition": {"causal_episode_id": "wave-owned"},
+            "side": "LONG", "causal_episode_id": "timing-attempt-2",
+            "ignition": {"causal_episode_id": "timing-attempt-2"},
         })
         self.assertEqual(row["status"], "ACTIVE")
         self.assertEqual(row["reason"], "BIAS_CASH_WAVE_OWNED")
+        self.assertEqual(row["market_wave_id"], "wave-owned")
+        self.assertEqual(row["timing_episode_id"], "timing-attempt-2")
+
+    def test_unowned_timing_episode_is_not_market_identity_authority(self):
+        row = market_thesis.wave_lifecycle(SimpleNamespace(), {
+            "side": "LONG", "causal_episode_id": "timing-only",
+            "ignition": {"causal_episode_id": "timing-only"},
+        })
+        self.assertEqual(row["identity_authority"], "TIMING_EPISODE_FALLBACK")
 
 
 if __name__ == "__main__":
