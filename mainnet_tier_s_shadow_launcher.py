@@ -369,6 +369,14 @@ def _emit_lifecycle_terminal(state, report, *, side=None, cycle_id=None):
     if not event:
         return False
     name, payload = event
+    if state is not app.state:
+        # Unit/replay state must never contaminate the durable runtime journal.
+        rows = list(
+            getattr(state, "entry_lifecycle_nonruntime_events", ()) or ()
+        )
+        rows.append((name, dict(payload or {})))
+        state.entry_lifecycle_nonruntime_events = rows[-32:]
+        return True
     _append_event(name, {
         "schema_version": "ENTRY_LIFECYCLE_RECORD_V3",
         "cycle_id": cycle_id,

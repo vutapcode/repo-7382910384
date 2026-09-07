@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import mainnet_tier_s_shadow_launcher as launcher
 
@@ -54,6 +55,22 @@ class LauncherReservationSafetyTests(unittest.TestCase):
         ))
         self.assertEqual(
             state.entry_economic_last_terminal["status"], "INVALIDATED"
+        )
+        self.assertEqual(
+            state.entry_lifecycle_nonruntime_events[-1][0],
+            "ECONOMIC_OPPORTUNITY_INVALIDATED",
+        )
+
+    def test_nonruntime_state_never_writes_durable_journal(self):
+        state = reserved_state()
+        with patch.object(launcher, "_append_event") as durable:
+            self.assertTrue(launcher._settle_reconciled_reservation(
+                state, "UNOWNED_POSITION_FLATTENED"
+            ))
+        durable.assert_not_called()
+        self.assertEqual(
+            state.entry_lifecycle_nonruntime_events[-1][0],
+            "ECONOMIC_OPPORTUNITY_CONSUMED",
         )
 
     def test_recovery_flat_releases_but_flattened_fill_is_consumed(self):
