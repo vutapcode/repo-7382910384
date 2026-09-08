@@ -13,7 +13,7 @@ from loi_he_thong import authority_contracts
 from loi_he_thong.market_event_contract import available_time_ms
 
 
-VERSION = "CANONICAL_RUNTIME_CONTRACT_REPLAY_V1"
+VERSION = "CANONICAL_RUNTIME_CONTRACT_REPLAY_V2_SEPARATE_CONFIG_IDENTITIES"
 AUTHORITY = False
 
 
@@ -64,6 +64,12 @@ def inspect_loaded_runtime(lean):
         "config_version": str(
             getattr(state, "strategy_config_version", "") or ""
         ),
+        "strategy_config_version": str(
+            getattr(state, "strategy_config_version", "") or ""
+        ),
+        # Recorder configuration is a separate process identity.  It is bound
+        # from the WAL/envelope, never guessed from strategy settings.
+        "recorder_config_version": None,
         "profile_version": str(profile.get("version") or ""),
         "module_versions": versions,
         "object_identity_checks": checks,
@@ -87,6 +93,7 @@ def bind_recording_identity(runtime_manifest, heartbeat):
     body["object_identity_checks"] = checks
     body["code_version"] = observed_code
     body["config_version"] = observed_config
+    body["strategy_config_version"] = observed_config
     body["recording_identity_source"] = "PRODUCTION_RUNTIME_HEARTBEAT"
     body["verified"] = all(checks.values())
     return {**body, "manifest_hash": _digest(body)}
@@ -102,6 +109,9 @@ class CanonicalRuntimeContractReplay:
         self.heartbeats = 0
         self.violations = []
         self.seen_cycles = {}
+        self.recorder_config_version = str(
+            self.manifest.get("recorder_config_version") or ""
+        )
 
     def _violation(self, reason, **detail):
         self.violations.append({"reason": reason, **detail})
@@ -129,7 +139,10 @@ class CanonicalRuntimeContractReplay:
             self._violation("DECISION_RECORD_HASH_INVALID")
 
         expected_code = str(self.manifest.get("code_version") or "")
-        expected_config = str(self.manifest.get("config_version") or "")
+        expected_config = str(
+            self.manifest.get("strategy_config_version")
+            or self.manifest.get("config_version") or ""
+        )
         observed_code = str(decision.get("strategy_code_version") or "")
         observed_config = str(decision.get("strategy_config_version") or "")
         if observed_code != expected_code or observed_config != expected_config:
@@ -142,8 +155,15 @@ class CanonicalRuntimeContractReplay:
         envelope_config = str(record.get("config_version") or "")
         if envelope_code and envelope_code != expected_code:
             self._violation("RECORDER_CODE_BOUNDARY_MISMATCH")
-        if envelope_config and envelope_config != expected_config:
-            self._violation("RECORDER_CONFIG_BOUNDARY_MISMATCH")
+        if envelope_config:
+            if not self.recorder_config_version:
+                self.recorder_config_version = envelope_config
+            elif envelope_config != self.recorder_config_version:
+                self._violation(
+                    "RECORDER_CONFIG_BOUNDARY_CHANGED",
+                    expected_recorder_config=self.recorder_config_version,
+                    observed_recorder_config=envelope_config,
+                )
 
         bundle = body.get("authority_contracts") or decision.get(
             "authority_contracts"
@@ -205,6 +225,11 @@ class CanonicalRuntimeContractReplay:
             "promotion_eligible": False,
             "status": status,
             "runtime_manifest_hash": self.manifest.get("manifest_hash"),
+            "strategy_config_version": str(
+                self.manifest.get("strategy_config_version")
+                or self.manifest.get("config_version") or ""
+            ),
+            "recorder_config_version": self.recorder_config_version or None,
             "decision_records": self.decision_records,
             "heartbeats": self.heartbeats,
             "violations": list(self.violations),

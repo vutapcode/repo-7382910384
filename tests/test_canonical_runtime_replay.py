@@ -24,16 +24,21 @@ def manifest():
     body = {
         "adapter_version": "x", "entrypoint": "x",
         "code_version": "code-1", "config_version": "config-1",
+        "strategy_config_version": "config-1",
+        "recorder_config_version": None,
         "profile_version": "profile", "module_versions": {},
         "object_identity_checks": {"same": True}, "verified": True,
     }
     return {**body, "manifest_hash": _digest(body)}
 
 
-def decision_event(*, action="WAIT_INFORMATION", decision="WAIT"):
+def decision_event(
+    *, action="WAIT_INFORMATION", decision="WAIT",
+    recorder_config="recorder-config-1", cycle="cycle-1",
+):
     contracts = bundle(action=action)
     record = {
-        "cycle_id": "cycle-1",
+        "cycle_id": cycle,
         "strategy_code_version": "code-1",
         "strategy_config_version": "config-1",
         "authority_contracts": contracts,
@@ -41,7 +46,7 @@ def decision_event(*, action="WAIT_INFORMATION", decision="WAIT"):
     }
     return {
         "stream": "bot_event", "available_time_ms": 1_000,
-        "code_version": "code-1", "config_version": "config-1",
+        "code_version": "code-1", "config_version": recorder_config,
         "payload": {
             "event": "DECISION_EVALUATED",
             "decision_record": record,
@@ -62,6 +67,24 @@ class CanonicalRuntimeReplayTests(unittest.TestCase):
         self.assertIn(
             "RAW_MARKET_DECISION_REEXECUTION_NOT_PROVEN", report["blockers"]
         )
+        self.assertEqual(
+            report["strategy_config_version"], "config-1",
+        )
+        self.assertEqual(
+            report["recorder_config_version"], "recorder-config-1",
+        )
+
+    def test_recorder_and_strategy_configs_are_distinct_boundaries(self):
+        replay = CanonicalRuntimeContractReplay(manifest())
+        replay.observe(decision_event(
+            recorder_config="recorder-a", cycle="cycle-a",
+        ))
+        replay.observe(decision_event(
+            recorder_config="recorder-b", cycle="cycle-b",
+        ))
+        reasons = {row["reason"] for row in replay.summary()["violations"]}
+        self.assertIn("RECORDER_CONFIG_BOUNDARY_CHANGED", reasons)
+        self.assertNotIn("STRATEGY_VERSION_BOUNDARY_MISMATCH", reasons)
 
     def test_corrupt_hash_and_action_contradiction_fail(self):
         event = decision_event(action="WAIT_INFORMATION", decision="GO")
@@ -115,6 +138,9 @@ class CanonicalRuntimeReplayTests(unittest.TestCase):
         })
         self.assertTrue(rebound["verified"])
         self.assertEqual(rebound["config_version"], "service-config")
+        self.assertEqual(
+            rebound["strategy_config_version"], "service-config",
+        )
 
     def test_recording_identity_rejects_old_running_code(self):
         runtime = manifest()
