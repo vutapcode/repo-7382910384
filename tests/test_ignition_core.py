@@ -338,6 +338,32 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertFalse(hasattr(s, "_ignition_acquisition_claimed_id"))
 
+    def test_persistent_wave_maturity_is_measured_from_original_onset(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        handoff = acquisition_handoff()
+        sealed = handoff["sealed_payload"]
+        sealed["segment_evidence"][0]["older_prices"] = {
+            "spot": 99.0, "coinbase": 99.0,
+        }
+        digest = ignition_core._canonical_json_hash(sealed)
+        handoff["handoff_hash"] = digest
+        handoff["causal_wave_id"] = "cash-acquisition:%s" % digest[:20]
+        s.bias_acquisition_handoff = handoff
+
+        eligible, observation = ignition_core._acquisition_handoff_observation(
+            s, self._acquisition_histories(), 100_000, "LONG",
+        )
+
+        self.assertTrue(eligible)
+        self.assertGreater(
+            observation["live_acquisition_displacement_bps"], 100.0,
+        )
+        self.assertEqual(
+            observation["acquisition_cash_displacement_bps"],
+            observation["live_acquisition_displacement_bps"],
+        )
+
     def test_bucket_availability_is_when_finalize_due_observes_it(self):
         venue = ignition_signals._Venue("binance_spot")
         venue.push(1_001, 991, 100.0, 0.01, True)

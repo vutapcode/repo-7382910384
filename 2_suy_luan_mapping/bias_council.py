@@ -443,6 +443,8 @@ def _compact_acquisition_segment(segment):
         "older_ts": segment.get("older_ts"),
         "newer_epochs": dict(segment.get("newer_epochs") or {}),
         "older_epochs": dict(segment.get("older_epochs") or {}),
+        "newer_prices": dict(segment.get("newer_prices") or {}),
+        "older_prices": dict(segment.get("older_prices") or {}),
         "price": dict(segment.get("price") or {}),
         "flow": dict(segment.get("flow") or {}),
     }

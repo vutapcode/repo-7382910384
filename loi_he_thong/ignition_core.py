@@ -2201,6 +2201,7 @@ def _current_cash_conversion(histories, side, now_ms):
         accepted[venue] = {
             "receive_time_ms": receive_ms,
             "age_ms": int(now_ms) - receive_ms,
+            "price": round(_f(latest.get("price")), 10),
             "imbalance": round(sign * _f(latest.get("imbalance")), 6),
             "price_conversion_bps": round(
                 sign * _f(latest.get("price_conversion_bps")), 6
@@ -2350,6 +2351,36 @@ def _acquisition_displacement_bps(handoff, side):
     return max(0.0, total)
 
 
+def _live_acquisition_displacement_bps(handoff, current_cash, side):
+    """Price a persistent wave from its immutable onset to cash now.
+
+    Reacquisition may occur after the two original Bias segments no longer
+    overlap the current observation windows.  Measuring only those original
+    segment returns would make a late retry look artificially early.  This
+    direct displacement is a timing/maturity guard only; it grants no Market
+    Truth or Entry direction authority.
+    """
+    evidence = list((handoff or {}).get("segment_evidence") or ())
+    if not evidence:
+        return 0.0
+    origins = dict((evidence[0] or {}).get("older_prices") or {})
+    venue_names = {
+        "binance_spot": "spot",
+        "coinbase_spot": "coinbase",
+    }
+    sign = _sign(side)
+    moves = []
+    for venue, origin_name in venue_names.items():
+        origin = _f(origins.get(origin_name))
+        latest = _f(
+            ((current_cash.get("venues") or {}).get(venue) or {}).get("price")
+        )
+        if origin <= 0.0 or latest <= 0.0:
+            return 0.0
+        moves.append(max(0.0, sign * _bps(latest, origin)))
+    return sum(moves) / len(moves) if len(moves) == len(CASH) else 0.0
+
+
 def _acquisition_handoff_observation(state, histories, now_ms, side=None):
     """Join sealed Market Truth to present cash timing, still authority-free."""
     raw = dict(getattr(state, "bias_acquisition_handoff", {}) or {})
@@ -2414,6 +2445,12 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
             )
             state._ignition_acquisition_handoff_observation = observation
             return False, observation
+    sealed_displacement = _acquisition_displacement_bps(
+        sealed, resolved_side,
+    )
+    live_displacement = _live_acquisition_displacement_bps(
+        sealed, current, resolved_side,
+    )
     observation.update(
         status="ELIGIBLE_SAME_WAVE_CURRENT_CASH_CONFIRMED",
         side=resolved_side,
@@ -2421,8 +2458,10 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
         handoff=sealed,
         current_cash_conversion=current,
         acquisition_cash_displacement_bps=round(
-            _acquisition_displacement_bps(sealed, resolved_side), 6
+            max(sealed_displacement, live_displacement), 6
         ),
+        sealed_acquisition_displacement_bps=round(sealed_displacement, 6),
+        live_acquisition_displacement_bps=round(live_displacement, 6),
     )
     state._ignition_acquisition_handoff_observation = observation
     return True, observation
