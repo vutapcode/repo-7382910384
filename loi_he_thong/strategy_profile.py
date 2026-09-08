@@ -3,8 +3,9 @@
 This module contains identity and invariants only. Trading thresholds stay in
 their owning strategy modules so metadata cannot silently override live logic.
 """
+from importlib import import_module
 
-PROFILE_VERSION = "IGNITION_CORE_ENTRY_ECONOMICS_V15_STABLE_ACQUISITION_WAVE"
+PROFILE_VERSION = "TIER_S_STRATEGY_PROFILE_V16_RUNTIME_BOUND"
 
 _PROFILE = {
     "name": "IGNITION_CORE_V1",
@@ -13,9 +14,6 @@ _PROFILE = {
     "market": "BTCUSDT",
     "canonical_entrypoint": "mainnet_tier_s_lean_launcher.py",
     "architecture": (
-        "BIAS_CAUSAL_CASH_WAVE_V14_STABLE_ACQUISITION_WAVE",
-        "IGNITION_PREDICT_PROBE_PROVE_V8_ACQUISITION_HANDOFF",
-        "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
         "MARKET_THESIS_V3_AUTHORITY_SEPARATED",
         "FOUR_AUTHORITY_CONTRACTS_V1",
         "ENTRY_THESIS_HANDOFF_V1",
@@ -34,7 +32,7 @@ _PROFILE = {
         "CAUSAL_ONLY",
         "FROZEN_PRE_IMPULSE_BIAS",
         "BIAS_DIRECTION_ROOTS_ARE_INDEPENDENT_CASH_ONLY",
-        "BIAS_LIVE_DIRECTION_COMES_FROM_NON_OVERLAPPING_CASH_WAVE_SEGMENTS",
+        "BIAS_LIVE_DIRECTION_COMES_FROM_ROLLING_CAUSAL_CASH_PERSISTENCE",
         "BIAS_HISTORICAL_LENSES_HAVE_ZERO_LIVE_DIRECTION_AUTHORITY",
         "BIAS_REQUIRES_EXECUTED_FLOW_TO_CONVERT_INTO_DUAL_CASH_PRICE",
         "BIAS_EMERGING_MICRO_WAVE_HAS_NO_ENTRY_HANDOFF_AUTHORITY",
@@ -69,10 +67,24 @@ _PROFILE = {
     ),
 }
 
+def _active_versions():
+    bias = import_module("2_suy_luan_mapping.bias_council")
+    ignition = import_module("loi_he_thong.ignition_core")
+    economics = import_module("loi_he_thong.entry_economics_v2")
+    return (
+        str(bias.VERSION),
+        str(ignition.INFERENCE_VERSION),
+        str(economics.CONTRACT_VERSION),
+    )
+
+
 def current_profile():
     """Return a detached snapshot suitable for heartbeat/runtime metadata."""
     profile = dict(_PROFILE)
-    profile["architecture"] = list(_PROFILE["architecture"])
+    active = _active_versions()
+    profile["architecture"] = [*active, *_PROFILE["architecture"]]
     profile["evidence"] = list(_PROFILE["evidence"])
     profile["invariants"] = list(_PROFILE["invariants"])
+    if any(version not in profile["architecture"] for version in active):
+        raise RuntimeError("STRATEGY_PROFILE_ACTIVE_VERSION_MISMATCH")
     return profile

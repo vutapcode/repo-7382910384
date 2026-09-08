@@ -60,8 +60,17 @@ class TierSKernelContractTests(unittest.TestCase):
         self.assertEqual(profile["mode"], "MAINNET_SHADOW")
         self.assertEqual(profile["market"], "BTCUSDT")
         self.assertIn(
-            "IGNITION_PREDICT_PROBE_PROVE_V8_ACQUISITION_HANDOFF",
+            "BIAS_COUNCIL_V16_LULL_TOLERANT_ROLLING_ACQUISITION",
             profile["architecture"],
+        )
+        self.assertIn(
+            "IGNITION_INFERENCE_V8_NEUTRAL_ACQUISITION_HANDOFF",
+            profile["architecture"],
+        )
+        self.assertIn("ENTRY_ECONOMICS_V8_TIME_TO_EVENT", profile["architecture"])
+        self.assertIn(
+            "BIAS_LIVE_DIRECTION_COMES_FROM_ROLLING_CAUSAL_CASH_PERSISTENCE",
+            profile["invariants"],
         )
         self.assertIn(
             "ACQUISITION_HANDOFF_LIVE_AUTHORITY_DISABLED",

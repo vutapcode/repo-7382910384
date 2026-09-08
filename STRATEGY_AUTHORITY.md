@@ -37,7 +37,7 @@ new authority merely because they exist.
      Collectors transport trades; they do not maintain a second cumulative CVD.
    - Reconnect/sequence epoch boundaries must not be bridged by Bias memory.
 
-3. Bias V12 — active causal cash wave
+3. Bias V16 — lull-tolerant rolling causal cash wave
    - Direction owner: `2_suy_luan_mapping/bias_council.py`.
    - Observation owner: `2_suy_luan_mapping/cash_wave_observation.py` remains
      authority-free and answers only: **what is the current independent cash
@@ -49,9 +49,11 @@ new authority merely because they exist.
      Both are required for independent cross-cash price authority. Directional
      executed flow must also convert into dual-cash price acceptance before an
      active wave can become `CONTROLLED`.
-   - Live causal observation uses non-overlapping newest-to-oldest segments:
-     `0-15s`, `15-60s`, `60-180s`, `180-600s`. They represent chronological
-     cash-wave evidence, not four votes and not four independent confirmations.
+   - Neutral acquisition is not owned by fixed `0-15s/15-60s` boundaries.
+     The first fresh dual-cash conversion creates `EMERGING_CONTROL`; a later
+     fresh conversion on the same unfalsified rolling cash wave establishes
+     `CONTROLLED`. A no-trade lull is not a data gap and does not by itself
+     terminate the wave. Epoch breaks, causal gaps and opposite cash reclaim do.
    - Historical overlapping lenses `15s / 60s / 180s / 10m / 30m / 60m` are
      compatibility/replay diagnostics only. They have **zero live directional
      authority** and may not keep an old Bias alive after recent cash conversion
@@ -99,7 +101,7 @@ new authority merely because they exist.
    - Cash may propose. Futures may alert, but cannot open without independent
      Binance Spot or Coinbase price plus executed-flow response within the
      Ignition causal episode.
-   - Fast control-transfer/reversal remains an Ignition question. Bias V12 does
+   - Fast control-transfer/reversal remains an Ignition question. Bias V16 does
      not make Ignition wait for a stale historical observation lens before
      recognizing a strict fast reversal.
    - PROVE remains failed reversion or persistent/accelerating cash execution
@@ -208,7 +210,7 @@ misunderstanding.
 ## Historical parameter provenance (non-authoritative)
 
 Historical threshold values in the repository are bootstrap/research metadata,
-not claims of predictive probability. Bias V12 treats long observation lenses
+not claims of predictive probability. Bias V16 treats long observation lenses
 as diagnostics only; live direction comes from causal cash-wave conversion and
 falsification. Any future replacement must record source windows and reset
 promotion evidence through the normal code/config version gate.
