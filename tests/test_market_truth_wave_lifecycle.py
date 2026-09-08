@@ -44,14 +44,16 @@ class MarketTruthWaveLifecycleTests(unittest.TestCase):
         self.assertEqual(row["falsifier"], "OPPOSITE_DUAL_CASH_CONTROL")
 
     def test_falsified_wave_cannot_resurrect_after_handoff_replacement(self):
-        state = SimpleNamespace(bias_acquisition_handoff={
+        state = SimpleNamespace()
+        terminated = {
             "causal_wave_id": "wave-dead",
             "status": "TERMINATED_CONTRADICTION",
             "termination_reason": "EXECUTED_FLOW_STOPPED_CONVERTING",
-        })
+        }
         dead = market_thesis.wave_lifecycle(state, {
             "causal_episode_id": "wave-dead",
             "ignition": {"causal_episode_id": "wave-dead"},
+            "bias_acquisition_handoff": terminated,
         })
         self.assertEqual(dead["status"], "FALSIFIED")
 
@@ -82,18 +84,39 @@ class MarketTruthWaveLifecycleTests(unittest.TestCase):
         self.assertEqual(later["status"], "ACTIVE")
 
     def test_bias_owned_acquisition_wave_is_authoritative(self):
-        state = SimpleNamespace(bias_acquisition_handoff={
+        state = SimpleNamespace()
+        handoff = {
             "causal_wave_id": "wave-owned", "status": "SEALED",
             "side": "LONG",
-        })
+        }
         row = market_thesis.wave_lifecycle(state, {
             "side": "LONG", "causal_episode_id": "timing-attempt-2",
             "ignition": {"causal_episode_id": "timing-attempt-2"},
+            "bias_acquisition_handoff": handoff,
         })
         self.assertEqual(row["status"], "ACTIVE")
         self.assertEqual(row["reason"], "BIAS_CASH_WAVE_OWNED")
         self.assertEqual(row["market_wave_id"], "wave-owned")
         self.assertEqual(row["timing_episode_id"], "timing-attempt-2")
+
+    def test_frozen_handoff_wins_over_newer_mutable_state(self):
+        state = SimpleNamespace(bias_acquisition_handoff={
+            "causal_wave_id": "wave-new", "status": "SEALED",
+            "side": "SHORT",
+        })
+        row = market_thesis.wave_lifecycle(state, {
+            "side": "LONG", "causal_episode_id": "timing-old",
+            "ignition": {"causal_episode_id": "timing-old"},
+            "bias_acquisition_handoff": {
+                "causal_wave_id": "wave-old",
+                "status": "TERMINATED_CAUSAL_FALSIFIER",
+                "termination_reason": "NO_RECENT_OLD_SIDE_CONVERSION",
+                "side": "LONG",
+            },
+        })
+        self.assertEqual(row["market_wave_id"], "wave-old")
+        self.assertEqual(row["status"], "FALSIFIED")
+        self.assertEqual(row["falsifier"], "NO_RECENT_OLD_SIDE_CONVERSION")
 
     def test_unowned_timing_episode_is_not_market_identity_authority(self):
         row = market_thesis.wave_lifecycle(SimpleNamespace(), {

@@ -89,12 +89,27 @@ def wave_lifecycle(state, result):
         or ""
     )
     side = _u(result.get("side") or ignition.get("side"), "ABSTAIN")
-    handoff = dict(getattr(state, "bias_acquisition_handoff", {}) or {})
+    # The launcher freezes the acquisition handoff onto the decision before
+    # any downstream owner runs.  Reading ``state.bias_acquisition_handoff``
+    # here would create a second observation time: Bias can advance between
+    # Entry evaluation and Market Truth classification, leaving Opportunity,
+    # Lifecycle and Recorder with mutually inconsistent wave identities.
+    #
+    # Missing evidence is intentionally UNKNOWN.  Do not fall back to mutable
+    # state, because an absent frozen handoff is not permission to borrow a
+    # newer one.
+    handoff = dict(result.get("bias_acquisition_handoff") or {})
     transition = dict(ignition.get("transition_authority") or {})
+    handoff_status = str(handoff.get("status") or "").upper()
+    handoff_wave_id = str(handoff.get("causal_wave_id") or "")
     handoff_owns_side = bool(
-        str(handoff.get("status") or "").upper() == "SEALED"
+        handoff_status == "SEALED"
         and str(handoff.get("side") or "").upper() == side
-        and str(handoff.get("causal_wave_id") or "")
+        and handoff_wave_id
+    )
+    handoff_terminates_wave = bool(
+        handoff_wave_id
+        and handoff_status.startswith(("TERMINATED_", "INVALIDATED_"))
     )
     transition_owns_side = bool(
         str(transition.get("status") or "").upper() == "REVERSAL_CONFIRMED"
@@ -102,8 +117,11 @@ def wave_lifecycle(state, result):
             == "CONTROL_OWNED"
         and str(transition.get("side") or "").upper() == side
     )
-    if handoff_owns_side:
-        market_wave_id = str(handoff.get("causal_wave_id"))
+    if handoff_owns_side or handoff_terminates_wave:
+        # A terminal handoff no longer owns direction, but it still owns the
+        # immutable identity of the wave it falsifies.  Falling back to the
+        # timing-attempt id here would strand the old canonical opportunity.
+        market_wave_id = handoff_wave_id
         identity_authority = "BIAS_CASH_WAVE_OWNERSHIP"
     elif transition_owns_side and timing_episode_id:
         market_wave_id = timing_episode_id
