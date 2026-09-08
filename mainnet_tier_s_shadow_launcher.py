@@ -733,12 +733,25 @@ def _apply_timing_retry_gate(state, result, quorum_ok):
                 blocked = True
                 result["decision"] = "WAIT"
                 result["reason"] = f"TIMING_RETRY_BLOCKED_{reject_reason}"
-                gate_outcome = entry_gate_outcome.structural(
-                    False, "TIMING_RETRY_BLOCKED",
+                gate_outcome = entry_gate_outcome.outcome(
+                    False, "TIMING", "TIMING_ATTEMPT_GATE",
+                    "TIMING_RETRY_BLOCKED",
                     {"error": reject_reason},
                 )
                 state.entry_gate_outcome = gate_outcome
     return result, bool(quorum_ok), gate_outcome, blocked
+
+
+def _blocking_stage(result, quorum_ok, gate_outcome):
+    """Render the canonical blocking owner without reclassifying it."""
+    if str((result or {}).get("decision") or "WAIT").upper() == "GO" and bool(
+        quorum_ok
+    ):
+        return "READY"
+    gate = dict(gate_outcome or {})
+    return str(
+        gate.get("stage") or gate.get("owner") or "UNATTRIBUTED_BLOCK"
+    ).upper()
 
 
 def _freeze_entry_handoff(result, causal_episode_id=None):
@@ -2393,14 +2406,9 @@ async def _entry_loop():
                 name: str((payload or {}).get("status", "MISSING"))
                 for name, payload in (result.get("s_votes") or {}).items()
             }
-            if result.get("decision") != "GO":
-                blocking_stage = "COUNCIL"
-            elif not quorum_ok:
-                blocking_stage = str(
-                    gate_outcome.get("stage") or "ENTRY_AUTHORIZATION"
-                )
-            else:
-                blocking_stage = "READY"
+            blocking_stage = _blocking_stage(
+                result, quorum_ok, gate_outcome,
+            )
             market_truth_wave = market_thesis.wave_lifecycle(s, result)
             result["market_truth_wave_lifecycle"] = market_truth_wave
             opportunity = canonical_opportunity.observe(
@@ -2422,7 +2430,9 @@ async def _entry_loop():
                 _apply_timing_retry_gate(s, result, quorum_ok)
             )
             if retry_blocked:
-                blocking_stage = "TIMING_ATTEMPT_GATE"
+                blocking_stage = _blocking_stage(
+                    result, quorum_ok, gate_outcome,
+                )
             # Seal only after every Timing owner mutation.  The immutable
             # Action contract must describe the final decision that reaches
             # Lifecycle/Recorder/Execution, never the provisional GO.
@@ -2452,6 +2462,9 @@ async def _entry_loop():
                         s, result, False,
                         result.get("causal_episode_id"),
                     )
+            blocking_stage = _blocking_stage(
+                result, quorum_ok, gate_outcome,
+            )
             lifecycle = entry_lifecycle.observe(
                 s, result, gate_outcome,
                 economic_opportunity_id=linked_opportunity_id,

@@ -59,6 +59,34 @@ def frozen_result(mode="IGNITION", proof="METAORDER_CONTINUATION"):
 
 
 class EntryContractParityTests(unittest.TestCase):
+    def test_blocking_stage_uses_canonical_gate_owner(self):
+        wait = {"decision": "WAIT", "reason": "BIAS_ABSTAIN"}
+        gate = {
+            "allowed": False, "owner": "THESIS",
+            "stage": "MARKET_TRUTH", "reason": "BIAS_ABSTAIN",
+        }
+        self.assertEqual(
+            launcher._blocking_stage(wait, False, gate), "MARKET_TRUTH",
+        )
+
+    def test_timing_retry_block_is_not_mislabeled_structural(self):
+        state = SimpleNamespace(
+            entry_gate_outcome={"allowed": True, "reason": "PASS"},
+            entry_timing_attempt_status="EXPIRED",
+        )
+        with patch.object(
+            launcher.entry_lifecycle, "can_create_attempt",
+            return_value=(False, "STALE_PROOF_REUSE"),
+        ):
+            result, allowed, gate, blocked = launcher._apply_timing_retry_gate(
+                state, {"decision": "GO", "reason": "PASS"}, True,
+            )
+        self.assertTrue(blocked)
+        self.assertFalse(allowed)
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertEqual(gate["owner"], "TIMING")
+        self.assertEqual(gate["stage"], "TIMING_ATTEMPT_GATE")
+
     def test_non_go_wait_never_enters_structural_validator(self):
         result = {"decision": "WAIT", "reason": "BIAS_NOT_READY"}
         state = SimpleNamespace(wstrade_live_armed=False)
