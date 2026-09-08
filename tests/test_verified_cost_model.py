@@ -184,6 +184,23 @@ class VerifiedCostModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(plan["ledger_fee_bps"], 10.0)
         self.assertTrue(plan["entry_execution_cost_embedded_in_fill"])
 
+    async def test_realistic_bbo_rounding_uses_one_canonical_micro_bps_sum(self):
+        state = SimpleNamespace(
+            execution_best_bid=77871.95,
+            execution_best_ask=77872.05,
+        )
+        await verified_cost_model.refresh_account_commission(FakeAPI(), state)
+
+        plan = verified_cost_model.shadow_execution_plan(
+            {"phase": "RELEASE"}, state, "MARKET",
+        )
+
+        self.assertEqual(plan["entry_slippage_bps"], 1.506421)
+        self.assertEqual(plan["exit_slippage_bps"], 1.506421)
+        self.assertEqual(plan["decision_total_cost_bps"], 13.012842)
+        valid, reason = verified_cost_model.validate_frozen_cost_plan(plan)
+        self.assertTrue(valid, reason)
+
     async def test_frozen_plan_is_one_cost_truth_for_risk_and_ledger(self):
         state = SimpleNamespace(execution_best_bid=99.99, execution_best_ask=100.01)
         await verified_cost_model.refresh_account_commission(FakeAPI(), state)

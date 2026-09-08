@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 
 VERSION = "VERIFIED_COST_MODEL_V3_SHADOW_ASSUMED_PROFILE"
@@ -9,6 +10,7 @@ DEFAULT_FALLBACK_FEE_BPS_PER_SIDE = 9.0
 MAX_SANE_FEE_BPS_PER_SIDE = 20.0
 FROZEN_COST_PLAN_VERSION = "FROZEN_COST_PLAN_V3_SINGLE_CHARGE"
 FROZEN_COST_IMMUTABILITY_CONTRACT = "FROZEN_COST_IMMUTABILITY_CONTRACT_V1"
+_BPS_QUANTUM = Decimal("0.000001")
 
 
 def _f(value, default=0.0):
@@ -16,6 +18,26 @@ def _f(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _bps_decimal(value, default=0.0):
+    """Canonical micro-bps representation shared by model and validator."""
+    try:
+        return Decimal(str(value)).quantize(
+            _BPS_QUANTUM, rounding=ROUND_HALF_UP,
+        )
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal(str(default)).quantize(
+            _BPS_QUANTUM, rounding=ROUND_HALF_UP,
+        )
+
+
+def _bps(value, default=0.0):
+    return float(_bps_decimal(value, default))
+
+
+def _bps_sum(*values):
+    return float(sum((_bps_decimal(value) for value in values), Decimal(0)))
 
 
 def fallback_fee_bps_per_side():
@@ -241,7 +263,14 @@ def estimate(result, state):
     exit_fee = taker
     entry_slippage = half_spread + market_slippage if execution_style == "TAKER" else 0.0
     exit_slippage = half_spread + market_slippage
-    total = entry_fee + exit_fee + entry_slippage + exit_slippage
+    entry_fee = _bps(entry_fee)
+    exit_fee = _bps(exit_fee)
+    half_spread = _bps(max(0.0, half_spread))
+    entry_slippage = _bps(entry_slippage)
+    exit_slippage = _bps(exit_slippage)
+    total = _bps_sum(
+        entry_fee, exit_fee, entry_slippage, exit_slippage,
+    )
     minimum_net = max(0.0, _f(os.getenv(
         "SMC_MAINNET_MARKET_MIN_NET_EDGE_BPS"
         if execution_style == "TAKER"
@@ -257,13 +286,13 @@ def estimate(result, state):
         ) if assumed else None,
         "commission_source": source,
         "commission_verification_reason": verification_reason,
-        "entry_fee_bps": round(entry_fee, 6),
-        "exit_fee_bps": round(exit_fee, 6),
-        "half_spread_bps": round(max(0.0, half_spread), 6),
-        "entry_slippage_bps": round(entry_slippage, 6),
-        "exit_slippage_bps": round(exit_slippage, 6),
-        "total_cost_bps": round(total, 6),
-        "minimum_net_edge_bps": round(minimum_net, 6),
+        "entry_fee_bps": entry_fee,
+        "exit_fee_bps": exit_fee,
+        "half_spread_bps": half_spread,
+        "entry_slippage_bps": entry_slippage,
+        "exit_slippage_bps": exit_slippage,
+        "total_cost_bps": total,
+        "minimum_net_edge_bps": _bps(minimum_net),
     }
 
 
@@ -415,9 +444,11 @@ def validate_frozen_cost_plan(plan):
     exit_fee = max(0.0, _f(plan.get("exit_fee_bps")))
     entry_impact = max(0.0, _f(plan.get("entry_slippage_bps")))
     exit_impact = max(0.0, _f(plan.get("exit_slippage_bps")))
-    expected_fees = entry_fee + exit_fee
-    expected_roundtrip = expected_fees + entry_impact + exit_impact
-    expected_recovery = expected_fees + exit_impact
+    expected_fees = _bps_sum(entry_fee, exit_fee)
+    expected_roundtrip = _bps_sum(
+        entry_fee, exit_fee, entry_impact, exit_impact,
+    )
+    expected_recovery = _bps_sum(entry_fee, exit_fee, exit_impact)
     fields = (
         (_f(plan.get("roundtrip_fee_bps"), -1.0), expected_fees),
         (_f(plan.get("ledger_fee_bps"), -1.0), expected_fees),
@@ -426,7 +457,10 @@ def validate_frozen_cost_plan(plan):
         (_f(plan.get("remaining_recovery_cost_bps"), -1.0), expected_recovery),
         (_f(plan.get("total_cost_bps"), -1.0), expected_recovery),
     )
-    if any(abs(actual - expected) > 1e-6 for actual, expected in fields):
+    if any(
+        _bps_decimal(actual, -1.0) != _bps_decimal(expected)
+        for actual, expected in fields
+    ):
         return False, "FROZEN_COST_DOUBLE_COUNT_OR_ALLOCATION_INVALID"
     if not bool(plan.get("entry_execution_cost_embedded_in_fill")):
         return False, "ENTRY_EXECUTION_COST_NOT_EMBEDDED_IN_FILL"
@@ -451,10 +485,10 @@ def shadow_execution_plan(result, state, execution_style):
     )
     # Actual fill embeds entry spread/slippage. Guardian starts from that fill,
     # so its remaining recovery floor must not charge entry impact twice.
-    remaining = (
-        float(modeled["entry_fee_bps"])
-        + float(modeled["exit_fee_bps"])
-        + float(modeled["exit_slippage_bps"])
+    remaining = _bps_sum(
+        modeled["entry_fee_bps"],
+        modeled["exit_fee_bps"],
+        modeled["exit_slippage_bps"],
     )
     plan = {
         "version": FROZEN_COST_PLAN_VERSION,
@@ -472,9 +506,8 @@ def shadow_execution_plan(result, state, execution_style):
         ),
         "entry_fee_bps": float(modeled["entry_fee_bps"]),
         "exit_fee_bps": float(modeled["exit_fee_bps"]),
-        "roundtrip_fee_bps": round(
-            float(modeled["entry_fee_bps"]) + float(modeled["exit_fee_bps"]),
-            6,
+        "roundtrip_fee_bps": _bps_sum(
+            modeled["entry_fee_bps"], modeled["exit_fee_bps"],
         ),
         "entry_slippage_bps": float(modeled["entry_slippage_bps"]),
         "exit_slippage_bps": float(modeled["exit_slippage_bps"]),
@@ -484,14 +517,13 @@ def shadow_execution_plan(result, state, execution_style):
         # executable exit fill exists; only the entry impact is already paid.
         "exit_execution_cost_embedded_in_fill": False,
         "roundtrip_cost_bps": float(modeled["total_cost_bps"]),
-        "remaining_recovery_cost_bps": round(remaining, 6),
-        "ledger_fee_bps": round(
-            float(modeled["entry_fee_bps"]) + float(modeled["exit_fee_bps"]),
-            6,
+        "remaining_recovery_cost_bps": remaining,
+        "ledger_fee_bps": _bps_sum(
+            modeled["entry_fee_bps"], modeled["exit_fee_bps"],
         ),
         # Compatibility field: Guardian/Risk recover only costs not already
         # embedded in the executable entry fill.
-        "total_cost_bps": round(remaining, 6),
+        "total_cost_bps": remaining,
         "minimum_net_edge_bps": float(modeled["minimum_net_edge_bps"]),
     }
     plan["contract_hash"] = frozen_cost_plan_hash(plan)
