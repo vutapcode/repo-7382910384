@@ -40,6 +40,7 @@ class Phase4ReplayDeterminismTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--verify-determinism", result.stdout)
+        self.assertIn("--canonical-runtime-contracts", result.stdout)
 
     def test_recorded_capture_and_consumption_validate(self):
         rows = [

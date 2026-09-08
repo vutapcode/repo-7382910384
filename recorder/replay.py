@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import heapq
 import json
+import os
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,10 @@ from recorder.liquidity_response import (
 )
 from recorder.causal_world_model import CausalWorldModel
 from recorder.phase4_lifecycle_replay import Phase4LifecycleReplay
+from recorder.canonical_runtime_replay import (
+    CanonicalRuntimeContractReplay, bind_recording_identity,
+    inspect_loaded_runtime,
+)
 from loi_he_thong import authority_contracts
 from loi_he_thong.market_event_contract import available_time_ms
 
@@ -202,7 +207,7 @@ def iter_merged_records(data_root, streams=None, start_ms=None, end_ms=None):
 class DeterministicReplay:
     def __init__(self, metrics_start_ms=None, setup_id=None, handlers=None,
                  wavefront=True, canonical_mirror=True,
-                 canonical_ablation=None):
+                 canonical_ablation=None, canonical_runtime_manifest=None):
         self.clock = ReplayClock()
         self.book = LocalOrderBook()
         self.metrics_start_ms = metrics_start_ms
@@ -264,6 +269,10 @@ class DeterministicReplay:
             self._emit_causal_world
         )
         self.phase4_lifecycle = Phase4LifecycleReplay()
+        self.canonical_runtime_replay = (
+            CanonicalRuntimeContractReplay(canonical_runtime_manifest)
+            if canonical_runtime_manifest is not None else None
+        )
 
     def _emit_wavefront(self, stream, payload, event_time_ms=None):
         self.wavefront_records.append({
@@ -327,6 +336,8 @@ class DeterministicReplay:
         # this replay tick. Exchange event time remains market metadata.
         self.clock.advance(available_time_ms(record))
         self.phase4_lifecycle.observe(record)
+        if self.canonical_runtime_replay is not None:
+            self.canonical_runtime_replay.observe(record)
         stream = str(record.get('stream', ''))
         payload = record.get('payload', {}) or {}
         in_metrics = self._in_metrics(record)
@@ -550,6 +561,10 @@ class DeterministicReplay:
                 self.causal_world_records, option=orjson.OPT_SORT_KEYS
             )).hexdigest(),
             'phase4_lifecycle': self.phase4_lifecycle.summary(),
+            'canonical_runtime_replay': (
+                self.canonical_runtime_replay.summary()
+                if self.canonical_runtime_replay is not None else None
+            ),
         }
 
 
@@ -570,8 +585,33 @@ def _run_from_args(args):
         args.data_root, streams=args.streams,
         start_ms=read_start, end_ms=end_ms,
     )
+    runtime_manifest = None
+    if getattr(args, 'canonical_runtime_contracts', False):
+        # Import the exact production graph without running service startup
+        # guards or the async main loop. Object identities are then checked by
+        # the adapter rather than inferred from similarly named source files.
+        old_smoke = os.environ.get('WSTRADE_CANONICAL_IMPORT_SMOKE')
+        os.environ['WSTRADE_CANONICAL_IMPORT_SMOKE'] = 'true'
+        try:
+            import mainnet_tier_s_lean_launcher as production_runtime
+            runtime_manifest = inspect_loaded_runtime(production_runtime)
+        finally:
+            if old_smoke is None:
+                os.environ.pop('WSTRADE_CANONICAL_IMPORT_SMOKE', None)
+            else:
+                os.environ['WSTRADE_CANONICAL_IMPORT_SMOKE'] = old_smoke
+        try:
+            heartbeat = json.loads(
+                Path(args.runtime_heartbeat).read_text(encoding='utf-8')
+            )
+        except (OSError, ValueError, TypeError):
+            heartbeat = {}
+        runtime_manifest = bind_recording_identity(
+            runtime_manifest, heartbeat,
+        )
     return DeterministicReplay(
-        metrics_start_ms=start_ms, setup_id=args.setup_id
+        metrics_start_ms=start_ms, setup_id=args.setup_id,
+        canonical_runtime_manifest=runtime_manifest,
     ).run(records)
 
 
@@ -587,6 +627,19 @@ def main(argv=None):
     parser.add_argument(
         '--verify-determinism', action='store_true',
         help='replay the same immutable input twice and compare output hashes',
+    )
+    parser.add_argument(
+        '--canonical-runtime-contracts', action='store_true',
+        help=(
+            'bind recorded decisions to the exact production object graph; '
+            'does not claim raw strategy re-execution'
+        ),
+    )
+    parser.add_argument(
+        '--runtime-heartbeat', default=(
+            '/home/ubuntu/smc2026_data/health/bot_runtime.json'
+        ),
+        help='production heartbeat supplying the exact recorded code/config identity',
     )
     args = parser.parse_args(argv)
     from loi_he_thong.runtime_lock import DuplicateInstanceError, acquire_runtime_lock
@@ -614,6 +667,11 @@ def main(argv=None):
             print(rendered)
         if args.verify_determinism and not result['replay_determinism']['verified']:
             return 3
+        runtime_replay = result.get('canonical_runtime_replay') or {}
+        if args.canonical_runtime_contracts and runtime_replay.get('status') in {
+            'FAIL', 'BLOCKED',
+        }:
+            return 4
         return 0 if result['depth_gaps'] == 0 else 2
     finally:
         lock.close()
