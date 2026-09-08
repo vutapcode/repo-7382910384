@@ -17,6 +17,52 @@ def _prefix(kind):
     )
 
 
+def assignment(edge_report):
+    """Seal the performance ledger from decision-scoped Economics evidence.
+
+    An arbitrary label can never promote a research trade.  Inconsistent or
+    incomplete metadata fails closed to an invalid assignment so the caller
+    can skip the physical demo fill instead of contaminating either cohort.
+    """
+    report = dict(edge_report or {})
+    requested = str(
+        report.get("shadow_ledger_type") or "RESEARCH_PROBE"
+    ).upper()
+    live_like = bool(
+        requested == "LIVE_LIKE_SHADOW"
+        and report.get("live_like_shadow_allowed")
+        and report.get("live_empirical_ok")
+        and report.get("cost_ok")
+        and report.get("commission_verified")
+        and str(report.get("forward_edge_status") or "").upper() == "ACTIVE"
+    )
+    research = bool(
+        requested == "RESEARCH_PROBE"
+        and report.get("research_probe_allowed")
+        and report.get("bootstrap_shadow_allowed")
+    )
+    if live_like:
+        ledger_type, valid, reason = (
+            "LIVE_LIKE_SHADOW", True, "EMPIRICAL_LIVE_EQUIVALENT",
+        )
+    elif research:
+        ledger_type, valid, reason = (
+            "RESEARCH_PROBE", True, "SHADOW_BOOTSTRAP_RESEARCH",
+        )
+    else:
+        ledger_type, valid, reason = (
+            "RESEARCH_PROBE", False, "LEDGER_EVIDENCE_INCONSISTENT",
+        )
+    return {
+        "version": "SHADOW_LEDGER_ASSIGNMENT_V1",
+        "valid": valid,
+        "ledger_type": ledger_type,
+        "requested_ledger_type": requested,
+        "promotion_eligible": bool(live_like),
+        "reason": reason,
+    }
+
+
 def state_fields():
     return tuple(
         "%s_%s" % (_prefix(kind), field)
@@ -70,7 +116,13 @@ def record_close(state, ledger_type, net_pnl, stress_delta=0.0):
 
 def snapshot(state):
     initialize(state)
-    out = {"version": VERSION}
+    out = {
+        "version": VERSION,
+        "aggregate_policy": (
+            "TOP_LEVEL_DEMO_TOTALS_INCLUDE_RESEARCH_"
+            "PROMOTION_USES_LIVE_LIKE_ONLY"
+        ),
+    }
     for kind, slug in LEDGERS.items():
         prefix = _prefix(kind)
         out[slug] = {

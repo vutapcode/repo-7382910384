@@ -5,6 +5,34 @@ from loi_he_thong import shadow_ledger_metrics as ledgers
 
 
 class ShadowLedgerMetricsTests(unittest.TestCase):
+    def test_live_like_label_requires_full_empirical_evidence(self):
+        row = ledgers.assignment({
+            "shadow_ledger_type": "LIVE_LIKE_SHADOW",
+            "live_like_shadow_allowed": True,
+            "live_empirical_ok": True,
+            "cost_ok": True,
+            "commission_verified": True,
+            "forward_edge_status": "ACTIVE",
+        })
+        self.assertTrue(row["valid"])
+        self.assertTrue(row["promotion_eligible"])
+
+        forged = ledgers.assignment({
+            "shadow_ledger_type": "LIVE_LIKE_SHADOW",
+            "live_like_shadow_allowed": False,
+        })
+        self.assertFalse(forged["valid"])
+        self.assertFalse(forged["promotion_eligible"])
+
+    def test_research_probe_requires_bootstrap_authorization(self):
+        row = ledgers.assignment({
+            "shadow_ledger_type": "RESEARCH_PROBE",
+            "research_probe_allowed": True,
+            "bootstrap_shadow_allowed": True,
+        })
+        self.assertTrue(row["valid"])
+        self.assertFalse(row["promotion_eligible"])
+
     def test_research_and_live_like_outcomes_are_separate(self):
         state = SimpleNamespace()
         ledgers.record_close(state, "RESEARCH_PROBE", -1.25, -2.0)

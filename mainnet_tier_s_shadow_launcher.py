@@ -1485,6 +1485,12 @@ def _open_shadow(side, result, now):
                 "shadow_ledger_type", "RESEARCH_PROBE"
             )
         ),
+        shadow_ledger_contract=dict(
+            result.get("shadow_ledger_contract")
+            or (result.get("edge_tier") or {}).get(
+                "shadow_ledger_contract"
+            ) or {}
+        ),
         would_live_authorize=bool(
             (result.get("edge_tier") or {}).get("live_like_shadow_allowed")
         ),
@@ -1535,6 +1541,7 @@ def _open_shadow(side, result, now):
             "confidence": result.get("confidence"),
             "edge_class": (result.get("edge_tier") or {}).get("edge_class"),
             "shadow_ledger_type": pos.shadow_ledger_type,
+            "shadow_ledger_contract": dict(pos.shadow_ledger_contract),
             "would_live_authorize": pos.would_live_authorize,
             "regime_at_entry": entry_regime,
             "entry_causal_thesis": pos.entry_causal_thesis,
@@ -1803,6 +1810,9 @@ def _close_shadow(pos, guardian_result, now):
             "net_pnl_r": net_r,
             "shadow_ledger_type": getattr(
                 pos, "shadow_ledger_type", "RESEARCH_PROBE"
+            ),
+            "shadow_ledger_contract": dict(
+                getattr(pos, "shadow_ledger_contract", {}) or {}
             ),
             "would_live_authorize": bool(
                 getattr(pos, "would_live_authorize", False)

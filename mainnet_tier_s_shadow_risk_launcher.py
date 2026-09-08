@@ -195,6 +195,23 @@ def _open_shadow(side, result, now):
     report = getattr(state, "entry_edge_tier", None) or edge.classify(result, state)
     result = dict(result)
     result["edge_tier"] = report
+    ledger_contract = shadow_ledger_metrics.assignment(report)
+    if not ledger_contract["valid"]:
+        state.mainnet_shadow_last_skip = ledger_contract["reason"]
+        base._append_event("ENTRY_SKIPPED", {
+            "cycle_id": result.get("decision_cycle_id"),
+            "causal_episode_id": result.get("causal_episode_id"),
+            "side": side,
+            "reason": ledger_contract["reason"],
+            "miss_taxonomy": "LEDGER_CONTRACT_INVALID",
+            "shadow_ledger_contract": ledger_contract,
+        })
+        return None
+    report = dict(report)
+    report["shadow_ledger_type"] = ledger_contract["ledger_type"]
+    report["shadow_ledger_contract"] = ledger_contract
+    result["edge_tier"] = report
+    result["shadow_ledger_contract"] = ledger_contract
     pos = _orig_open(side, result, now)
     if pos is not None:
         risk.arm(pos, pos.entry_price)

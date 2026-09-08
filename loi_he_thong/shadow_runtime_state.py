@@ -51,7 +51,7 @@ PERSIST_FIELDS = (
     "decision_cycle_id", "entry_regime", "entry_edge_class",
     "entry_causal_thesis", "authority_contracts",
     "shadow_cost_plan", "execution_cost_plan",
-    "shadow_ledger_type", "would_live_authorize",
+    "shadow_ledger_type", "shadow_ledger_contract", "would_live_authorize",
     "edge_first_positive_net_at", "edge_time_to_positive_net_seconds",
 )
 
