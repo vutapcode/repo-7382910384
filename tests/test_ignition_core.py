@@ -2907,6 +2907,11 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertTrue(
             proved["ignition"]["dual_cash_synchronous_acceptance"]
         )
+        valid, reason, detail = ignition_core.validate_frozen_entry_contract(
+            proved, authority_scope="SHADOW",
+        )
+        self.assertTrue(valid, reason)
+        self.assertTrue(detail["dual_cash_timing_authority"])
 
     def test_single_cash_still_requires_futures_echo(self):
         s = state()

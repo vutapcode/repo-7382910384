@@ -2881,9 +2881,19 @@ def validate_frozen_entry_contract(
     current_cash = dict(ignition.get("current_cash_conversion") or {})
     if not current_cash.get("confirmed"):
         return False, "CURRENT_CASH_CONVERSION_MISSING", {}
-    if acquisition and not current_cash.get(
-        "dual_cash_synchronous_acceptance"
-    ):
+    accepted_current_cash = {
+        str(value) for value in current_cash.get(
+            "accepted_cash_venues", ()
+        )
+    }
+    dual_cash_timing_authority = bool(
+        CASH.issubset(accepted_current_cash)
+        and (
+            current_cash.get("dual_cash_synchronous_acceptance")
+            or current_cash.get("dual_cash_control")
+        )
+    )
+    if acquisition and not dual_cash_timing_authority:
         return False, "ACQUISITION_CURRENT_DUAL_CASH_MISSING", {}
     if _f(ignition.get("consumed_fraction"), 1.0) > MAX_CONSUMED_FRACTION:
         return False, "IMPULSE_ALREADY_CONSUMED", {}
@@ -2895,7 +2905,9 @@ def validate_frozen_entry_contract(
     if proposer == "futures":
         if not ignition.get("futures_cash_response_ok"):
             return False, "FUTURES_PROPOSER_CASH_RESPONSE_MISSING", {}
-    elif not ignition.get("futures_follow_ok") and not transition_basis:
+    elif not ignition.get("futures_follow_ok") and not (
+        transition_basis or dual_cash_timing_authority
+    ):
         return False, "CASH_PROPOSER_FUTURES_FOLLOW_MISSING", {}
     has_authority = bool(
         result.get("authority_basis")
@@ -2910,6 +2922,7 @@ def validate_frozen_entry_contract(
         "entry_mode": mode,
         "proof_type": proof_type,
         "execution_policy": execution_policy,
+        "dual_cash_timing_authority": dual_cash_timing_authority,
         "authority_scope": scope,
         "shadow_bootstrap_authority": bool(
             mode == "PERSISTENT_METAORDER" or acquisition
