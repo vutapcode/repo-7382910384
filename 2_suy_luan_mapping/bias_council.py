@@ -26,6 +26,7 @@ persistent cash control.
 """
 
 from collections import deque
+from copy import deepcopy
 import hashlib
 from importlib import import_module
 import json
@@ -34,14 +35,16 @@ import time
 
 cash_wave_observation = import_module("2_suy_luan_mapping.cash_wave_observation")
 
-VERSION = "BIAS_COUNCIL_V14_STABLE_ACQUISITION_WAVE"
+VERSION = "BIAS_COUNCIL_V15_ROLLING_NEUTRAL_ACQUISITION"
 CONTRACT = "DIRECTION_ONLY_NO_ENTRY_TIMING"
 FORECAST_SCOPE = "MEANINGFUL_DIRECTIONAL_REGIME_NOT_FIXED_TIME_TARGET"
 ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
 
 # Long lenses are historical diagnostics only. They never own live direction.
 OBSERVATION_LENSES = (15.0, 60.0, 180.0, 600.0, 1800.0, 3600.0)
-# Non-overlapping segments form the active causal-wave observation tape.
+# Fixed lenses remain useful for an established owner's context/reversal.  A
+# neutral acquisition no longer uses the 15/60 boundary as persistence proof;
+# it is proven by a fresh post-observation conversion below.
 WAVE_SEGMENT_BOUNDARIES = (15.0, 60.0, 180.0, 600.0)
 MAX_CONTEXT_SECONDS = 3900
 SPOT_AGE = 3.0
@@ -423,6 +426,148 @@ def _segment_reports(current, buckets, now, threshold):
     return segments
 
 
+def _segment_between(newer, older, threshold):
+    """Build one availability-ordered, non-overlapping cash segment."""
+    return {
+        "start_age_seconds": 0.0,
+        "end_age_seconds": max(
+            0.0,
+            float((newer or {}).get("ts", 0.0) or 0.0)
+            - float((older or {}).get("ts", 0.0) or 0.0),
+        ),
+        "price": cash_price_vote(newer, older, threshold),
+        "flow": cash_flow_vote(newer, older),
+        "newer_ts": (newer or {}).get("ts"),
+        "older_ts": (older or {}).get("ts"),
+        "newer_epochs": _epochs(newer),
+        "older_epochs": _epochs(older),
+        "newer_prices": {
+            name: float((newer or {}).get(name, 0.0) or 0.0)
+            for name in ("spot", "coinbase", "futures")
+        },
+        "older_prices": {
+            name: float((older or {}).get(name, 0.0) or 0.0)
+            for name in ("spot", "coinbase", "futures")
+        },
+    }
+
+
+def _neutral_acquisition_segments(
+    state, current, historical_segments, threshold, previous_side,
+):
+    """Prove neutral acquisition with genuinely new cash conversion.
+
+    The first current 0-15s conversion opens an authority-free candidate.  A
+    later observation must convert both independent cash prices *and* executed
+    flow from that immutable observation point.  Thus the two pieces of
+    persistence do not overlap, and a historical 15-60s aggregate cannot make
+    a new wave actionable merely because of its clock boundary.
+    """
+    if previous_side in ("LONG", "SHORT"):
+        state._bias_pending_neutral_acquisition = {}
+        return list(historical_segments or ()), {
+            "status": "NOT_APPLICABLE_ESTABLISHED_OWNER",
+            "authority": False,
+        }
+
+    rows = list(historical_segments or ())
+    if not rows:
+        state._bias_pending_neutral_acquisition = {}
+        return [], {"status": "NO_CURRENT_CASH_SEGMENT", "authority": False}
+
+    latest_raw = dict(rows[0])
+    latest = cash_wave_observation.classify_segment(latest_raw)
+    pending = dict(
+        getattr(state, "_bias_pending_neutral_acquisition", {}) or {}
+    )
+    current_epochs = {
+        name: int(_epochs(current).get(name, 0) or 0)
+        for name in ("spot", "coinbase")
+    }
+
+    if pending:
+        pending_side = str(pending.get("side") or "ABSTAIN").upper()
+        same_epochs = dict(pending.get("venue_epochs") or {}) == current_epochs
+        anchor = dict(pending.get("anchor") or {})
+        ordered = bool(
+            float((current or {}).get("ts", 0.0) or 0.0)
+            > float(anchor.get("ts", 0.0) or 0.0)
+        )
+        if not same_epochs or not ordered:
+            pending = {}
+            state._bias_pending_neutral_acquisition = {}
+        else:
+            continuation_raw = _segment_between(current, anchor, threshold)
+            continuation = cash_wave_observation.classify_segment(
+                continuation_raw
+            )
+            latest_same = bool(
+                latest.get("state") == "CONVERTING"
+                and latest.get("side") == pending_side
+            )
+            continuation_same = bool(
+                continuation.get("state") == "CONVERTING"
+                and continuation.get("side") == pending_side
+            )
+            if latest_same and continuation_same:
+                state._bias_pending_neutral_acquisition = {}
+                return [
+                    continuation_raw,
+                    dict(pending.get("first_segment") or latest_raw),
+                ], {
+                    "status": "ROLLING_PERSISTENCE_CONFIRMED",
+                    "side": pending_side,
+                    "first_observed_at": anchor.get("ts"),
+                    "confirmed_at": (current or {}).get("ts"),
+                    "authority": False,
+                }
+
+            falsified = bool(
+                continuation.get("state") == "CONTRADICTED"
+                or (
+                    continuation.get("flow_side") == pending_side
+                    and continuation.get("state") == "FLOW_NONCONVERSION"
+                )
+                or (
+                    latest.get("state") == "CONVERTING"
+                    and latest.get("side") in ("LONG", "SHORT")
+                    and latest.get("side") != pending_side
+                )
+            )
+            if not falsified and latest_same:
+                return [latest_raw], {
+                    "status": "WAIT_FRESH_POST_OBSERVATION_CONVERSION",
+                    "side": pending_side,
+                    "first_observed_at": anchor.get("ts"),
+                    "authority": False,
+                }
+            pending = {}
+            state._bias_pending_neutral_acquisition = {}
+
+    if latest.get("state") == "CONVERTING" and latest.get("side") in (
+        "LONG", "SHORT",
+    ):
+        pending = {
+            "side": latest["side"],
+            "anchor": deepcopy(current),
+            "first_segment": deepcopy(latest_raw),
+            "venue_epochs": current_epochs,
+        }
+        state._bias_pending_neutral_acquisition = pending
+        return [latest_raw], {
+            "status": "EMERGING_WAIT_NEW_NONOVERLAPPING_EVIDENCE",
+            "side": latest["side"],
+            "first_observed_at": (current or {}).get("ts"),
+            "authority": False,
+        }
+
+    state._bias_pending_neutral_acquisition = {}
+    return [latest_raw], {
+        "status": "NO_CONVERTING_NEUTRAL_CANDIDATE",
+        "authority": False,
+    }
+
+
 def _canonical_hash(payload):
     encoded = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
@@ -782,9 +927,13 @@ def evaluate(state, now=None, force_full=False):
     threshold = thr(state, spot)
     lenses = _lens_reports(current, buckets, state, now, threshold) if spot_fresh and cb_fresh else []
     segments = _segment_reports(current, buckets, now, threshold) if spot_fresh and cb_fresh else []
+    previous_wave_side = _previous_wave_side(state)
+    segments, acquisition_tracker = _neutral_acquisition_segments(
+        state, current, segments, threshold, previous_wave_side,
+    )
     wave = cash_wave_observation.infer(
         segments,
-        previous_side=_previous_wave_side(state),
+        previous_side=previous_wave_side,
         # Live L2 is intentionally not promoted here. The observation owner can
         # consume execution-linked liquidity in matched replay without allowing
         # raw walls/cancels to create direction.
@@ -838,6 +987,7 @@ def evaluate(state, now=None, force_full=False):
     cash_control = {
         **wave,
         "regime_state": wave_state,
+        "neutral_acquisition_tracker": acquisition_tracker,
         "observation_segments": segments,
         "observation_lenses": lenses,
         "authority_roots": ["BINANCE_SPOT_CASH", "COINBASE_USD_CASH"],

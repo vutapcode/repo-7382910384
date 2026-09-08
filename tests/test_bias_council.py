@@ -59,11 +59,23 @@ def state():
     return s
 
 
+def _complete_acquisition(s, start=100.0, completed=101.0):
+    first = council.update_state(s, now=start)
+    assert first["bias"] == "ABSTAIN"
+    s.best_bid, s.best_ask, s.coinbase_price = 100.18, 100.20, 100.19
+    s.spot_cvd_buy_total += 2.0
+    s.coinbase_cvd_buy_total += 2.0
+    s.thoi_gian_tick_cuoi = completed
+    s.thoi_gian_coinbase_ticker_cuoi = completed
+    s.thoi_gian_coinbase_cuoi = completed
+    return council.update_state(s, now=completed)
+
+
 class BiasCouncilTests(unittest.TestCase):
     def test_overlapping_reacquisition_reuses_one_causal_wave(self):
         s = state()
         s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
-        first = council.update_state(s, now=100.0)
+        first = _complete_acquisition(s)
         first_id = first["acquisition_handoff"]["causal_wave_id"]
 
         reacquired = copy.deepcopy(first)
@@ -132,7 +144,7 @@ class BiasCouncilTests(unittest.TestCase):
     def test_causal_falsifier_allows_new_acquisition_wave(self):
         s = state()
         s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
-        first = council.update_state(s, now=100.0)
+        first = _complete_acquisition(s)
         first_id = first["acquisition_handoff"]["causal_wave_id"]
 
         failed = copy.deepcopy(first)
@@ -166,7 +178,18 @@ class BiasCouncilTests(unittest.TestCase):
         s = state()
         s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
 
-        report = council.update_state(s, now=100.0)
+        emerging = council.update_state(s, now=100.0)
+        self.assertEqual(emerging["bias"], "ABSTAIN")
+
+        # Persistence must be new evidence after the first converting
+        # observation, not the overlapping historical 15-60s lens.
+        s.best_bid, s.best_ask, s.coinbase_price = 100.18, 100.20, 100.19
+        s.spot_cvd_buy_total += 2.0
+        s.coinbase_cvd_buy_total += 2.0
+        s.thoi_gian_tick_cuoi = 101.0
+        s.thoi_gian_coinbase_ticker_cuoi = 101.0
+        s.thoi_gian_coinbase_cuoi = 101.0
+        report = council.update_state(s, now=101.0)
 
         self.assertEqual(report["bias"], "LONG")
         handoff = report["acquisition_handoff"]
@@ -177,14 +200,24 @@ class BiasCouncilTests(unittest.TestCase):
             handoff["directional_cash_roots"],
             ["BINANCE_SPOT_CASH", "COINBASE_USD_CASH"],
         )
-        self.assertEqual(handoff["first_converting_segment_onset_ms"], 40_000)
-        self.assertEqual(handoff["ownership_completed_ms"], 100_000)
+        self.assertEqual(handoff["first_converting_segment_onset_ms"], 85_000)
+        self.assertEqual(handoff["ownership_completed_ms"], 101_000)
         self.assertFalse(handoff["authority"])
         self.assertFalse(handoff["entry_authority"])
         self.assertEqual(
             handoff["handoff_hash"],
             council._canonical_hash(handoff["sealed_payload"]),
         )
+
+    def test_overlapping_historical_segments_cannot_fake_new_persistence(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+
+        report = council.update_state(s, now=100.0)
+
+        self.assertEqual(report["bias"], "ABSTAIN")
+        self.assertEqual(report["wave_state"], "EMERGING_CONTROL")
+        self.assertFalse(hasattr(s, "bias_acquisition_handoff"))
 
     def test_emerging_cash_control_does_not_seal_acquisition(self):
         s = state()
@@ -203,6 +236,13 @@ class BiasCouncilTests(unittest.TestCase):
         s = state()
         s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
         council.update_state(s, now=100.0)
+        s.best_bid, s.best_ask, s.coinbase_price = 100.18, 100.20, 100.19
+        s.spot_cvd_buy_total += 2.0
+        s.coinbase_cvd_buy_total += 2.0
+        s.thoi_gian_tick_cuoi = 101.0
+        s.thoi_gian_coinbase_ticker_cuoi = 101.0
+        s.thoi_gian_coinbase_cuoi = 101.0
+        council.update_state(s, now=101.0)
         sealed_hash = s.bias_acquisition_handoff["handoff_hash"]
 
         s.spot_flow_epoch = 1
@@ -247,7 +287,15 @@ class BiasCouncilTests(unittest.TestCase):
 
     def test_oi_is_context_not_second_direction_vote(self):
         s = state()
-        r = council.evaluate(s, now=100.0, force_full=False)
+        first = council.evaluate(s, now=100.0, force_full=False)
+        self.assertEqual(first["bias"], "ABSTAIN")
+        s.best_bid, s.best_ask, s.coinbase_price = 100.18, 100.20, 100.19
+        s.spot_cvd_buy_total += 2.0
+        s.coinbase_cvd_buy_total += 2.0
+        s.thoi_gian_tick_cuoi = 101.0
+        s.thoi_gian_coinbase_ticker_cuoi = 101.0
+        s.thoi_gian_coinbase_cuoi = 101.0
+        r = council.evaluate(s, now=101.0, force_full=False)
         self.assertEqual(r["s_votes"]["S1_cross_price"]["vote"], "LONG")
         self.assertEqual(r["s_votes"]["S2_price_x_oi"]["vote"], "ABSTAIN")
         self.assertEqual(r["s_votes"]["S2_price_x_oi"]["reason"], "POSITIONING_CONTEXT_ONLY")
