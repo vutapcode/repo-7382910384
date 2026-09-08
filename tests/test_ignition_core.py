@@ -1368,7 +1368,7 @@ class IgnitionCoreTests(unittest.TestCase):
             transition["old_side_continuing_venues"], ["coinbase_spot"],
         )
 
-    def test_material_old_attempt_then_dual_cash_reclaim_proves_failure(self):
+    def test_material_reclaim_proves_failure_but_not_new_control_twice(self):
         pending = {
             "side": "LONG", "started_receive_ms": 3_200,
             "pre_impulse_bias_snapshot": {"direction": "SHORT"},
@@ -1403,7 +1403,9 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(transition["old_side_attempt_buckets"], 2)
         self.assertTrue(transition["path_failure_confirmed"])
         self.assertTrue(transition["old_side_failure_confirmed"])
-        self.assertEqual(transition["status"], "REVERSAL_CONFIRMED")
+        self.assertEqual(transition["status"], "CONTROL_ONSET")
+        self.assertFalse(transition["control_owned"])
+        self.assertFalse(transition["post_failure_current_dual_acceptance"])
         self.assertEqual(
             transition["proof_nodes"]["old_side_failure"]["observed_at_ms"],
             3_500,
@@ -1449,7 +1451,7 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(transition["status"], "CONTROL_ONSET")
         self.assertFalse(transition["confirmed"])
 
-    def test_explicit_failure_plus_current_dual_cash_owns_control(self):
+    def test_explicit_failure_plus_later_dual_cash_owns_control(self):
         pending = {
             "side": "LONG", "started_receive_ms": 3_200,
             "pre_impulse_bias_snapshot": {"direction": "SHORT"},
@@ -1477,10 +1479,26 @@ class IgnitionCoreTests(unittest.TestCase):
             ignition_core, "_flow_efficiency_snapshot",
             return_value=current_old,
         ):
-            transition = ignition_core._transition_snapshot(
+            onset = ignition_core._transition_snapshot(
                 pending, histories, 3_550,
             )
+        self.assertFalse(onset["control_owned"])
+
+        later_binance = evidence_row(4_100, "LONG", 100.15)
+        later_coinbase = evidence_row(4_150, "LONG", 100.16)
+        later_coinbase["venue"] = "coinbase_spot"
+        histories["binance_spot"] += (later_binance,)
+        histories["coinbase_spot"] += (later_coinbase,)
+        with patch.object(
+            ignition_core, "_flow_efficiency_snapshot",
+            return_value=current_old,
+        ):
+            transition = ignition_core._transition_snapshot(
+                pending, histories, 4_200,
+            )
         self.assertTrue(transition["control_owned"])
+        self.assertFalse(transition["new_side_cash_control_confirmed"])
+        self.assertTrue(transition["post_failure_current_dual_acceptance"])
         self.assertEqual(
             transition["control_ownership_basis"],
             "EXPLICIT_OLD_FAILURE_CURRENT_DUAL_CASH",

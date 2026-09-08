@@ -1303,13 +1303,36 @@ def _transition_snapshot(pending, histories, now_ms):
         current_cash.get("dual_cash_synchronous_acceptance")
     )
     persistent_new_side_control = bool(new_side_cash_control_confirmed)
+    old_failure_observed_at_ms = (
+        int(stored_failure.get("observed_at_ms") or 0) or None
+    )
+    current_acceptance_times = [
+        int(((current_cash.get("venues") or {}).get(venue) or {}).get(
+            "receive_time_ms", 0,
+        ) or 0)
+        for venue in sorted(CASH)
+    ]
+    # Failure and ownership are separate causal facts.  A reclaim bucket may
+    # prove that the old side stopped converting, but the same bucket cannot
+    # also prove that the new side owns control.  A later accepted print from
+    # each independent cash venue supplies the missing post-failure evidence;
+    # alternatively, two contiguous buckets per venue already prove control.
+    post_failure_current_dual_acceptance = bool(
+        current_dual_cash_acceptance
+        and old_failure_observed_at_ms is not None
+        and len(current_acceptance_times) == len(CASH)
+        and all(
+            receive_ms > old_failure_observed_at_ms
+            for receive_ms in current_acceptance_times
+        )
+    )
     # A true old-side failure may transfer control quickly, but only while
-    # both independent cash venues are still accepting the new side.  This is
-    # deliberately narrower than treating any historical synchronous reclaim
-    # as present ownership.
+    # both independent cash venues subsequently accept the new side.  This is
+    # deliberately narrower than treating the failure-producing reclaim as
+    # present ownership.
     explicit_failure_fast_control = bool(
         old_side_failure_confirmed
-        and current_dual_cash_acceptance
+        and post_failure_current_dual_acceptance
         and new_flow_state not in non_owning_flow_states
     )
     control_onset = bool(
@@ -1372,9 +1395,6 @@ def _transition_snapshot(pending, histories, now_ms):
     else:
         control_phase = "STABLE_OLD_SIDE"
     old_failure_valid_until_ms = started_ms + EPISODE_MAX_MS
-    old_failure_observed_at_ms = (
-        int(stored_failure.get("observed_at_ms") or 0) or None
-    )
     latest_futures_alert_ms = max((
         int(row.get("receive_time_ms", 0) or 0)
         for row in futures_alerts
@@ -1430,6 +1450,10 @@ def _transition_snapshot(pending, histories, now_ms):
             "current_cash_control": bool(
                 current_cash.get("dual_cash_control")
             ),
+            "post_failure_current_dual_acceptance": (
+                post_failure_current_dual_acceptance
+            ),
+            "current_acceptance_times_ms": current_acceptance_times,
             "max_age_ms": FOLLOW_MAX_MS,
             "authority": "ENTRY_TIMING_ONLY",
         },
@@ -1446,6 +1470,9 @@ def _transition_snapshot(pending, histories, now_ms):
         "control_owned": control_owned,
         "control_onset": control_onset,
         "current_dual_cash_acceptance": current_dual_cash_acceptance,
+        "post_failure_current_dual_acceptance": (
+            post_failure_current_dual_acceptance
+        ),
         "control_ownership_basis": control_ownership_basis,
         "control_phase": control_phase,
         "side": side, "background_side": background,
