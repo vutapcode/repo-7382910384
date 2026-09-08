@@ -225,6 +225,34 @@ class EntryContractParityTests(unittest.TestCase):
         self.assertFalse(valid)
         self.assertEqual(reason, "FROZEN_EXECUTION_POLICY_INVALID")
 
+    def test_timing_retry_wait_is_sealed_as_wait_action(self):
+        result = frozen_result()
+        state = SimpleNamespace(
+            entry_timing_attempt_status="EXPIRED",
+            entry_gate_outcome={"allowed": True, "reason": "PASS"},
+            wstrade_live_armed=False,
+            execution_allowed=False,
+        )
+        with patch.object(
+            launcher.entry_lifecycle, "can_create_attempt",
+            return_value=(False, "PROOF_ALREADY_USED"),
+        ):
+            final, quorum_ok, gate, blocked = (
+                launcher._apply_timing_retry_gate(state, result, True)
+            )
+        self.assertTrue(blocked)
+        self.assertFalse(quorum_ok)
+        self.assertEqual(final["decision"], "WAIT")
+        self.assertEqual(gate["reason"], "TIMING_RETRY_BLOCKED")
+
+        bundle = launcher._authority_contract_bundle(
+            state, final, quorum_ok, final["causal_episode_id"],
+        )
+        self.assertEqual(
+            bundle["contracts"]["ACTION"]["action"],
+            "WAIT_INFORMATION",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

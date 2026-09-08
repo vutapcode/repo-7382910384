@@ -681,6 +681,30 @@ def _authority_contract_bundle(
     return authority_contracts.bundle(truth, action, execution, safety)
 
 
+def _apply_timing_retry_gate(state, result, quorum_ok):
+    """Apply the final timing-attempt mutation before Action is sealed."""
+    result = dict(result or {})
+    gate_outcome = dict(getattr(state, "entry_gate_outcome", {}) or {})
+    blocked = False
+    if result.get("decision") == "GO" and quorum_ok:
+        previous_status = getattr(state, "entry_timing_attempt_status", "")
+        if previous_status == "EXPIRED":
+            allowed, reject_reason = entry_lifecycle.can_create_attempt(
+                state, result,
+            )
+            if not allowed:
+                quorum_ok = False
+                blocked = True
+                result["decision"] = "WAIT"
+                result["reason"] = f"TIMING_RETRY_BLOCKED_{reject_reason}"
+                gate_outcome = entry_gate_outcome.structural(
+                    False, "TIMING_RETRY_BLOCKED",
+                    {"error": reject_reason},
+                )
+                state.entry_gate_outcome = gate_outcome
+    return result, bool(quorum_ok), gate_outcome, blocked
+
+
 def _freeze_entry_handoff(result, causal_episode_id=None):
     """Transfer the exact Action-approved Truth without re-adjudicating it."""
     result = dict(result or {})
@@ -2357,47 +2381,40 @@ async def _entry_loop():
                     result, opportunity,
                 )
             )
+            result, quorum_ok, gate_outcome, retry_blocked = (
+                _apply_timing_retry_gate(s, result, quorum_ok)
+            )
+            if retry_blocked:
+                blocking_stage = "TIMING_ATTEMPT_GATE"
+            # Seal only after every Timing owner mutation.  The immutable
+            # Action contract must describe the final decision that reaches
+            # Lifecycle/Recorder/Execution, never the provisional GO.
             result["authority_contracts"] = _authority_contract_bundle(
                 s, result, quorum_ok, result.get("causal_episode_id"),
             )
             if result.get("decision") == "GO" and quorum_ok:
-                prev_status = getattr(s, "entry_timing_attempt_status", "")
-                if prev_status == "EXPIRED":
-                    allowed, reject_reason = entry_lifecycle.can_create_attempt(s, result)
-                    if not allowed:
-                        quorum_ok = False
-                        blocking_stage = "TIMING_ATTEMPT_GATE"
-                        result["decision"] = "WAIT"
-                        result["reason"] = f"TIMING_RETRY_BLOCKED_{reject_reason}"
-                        gate_outcome = entry_gate_outcome.structural(
-                            False, "TIMING_RETRY_BLOCKED",
-                            {"error": reject_reason},
-                        )
-                        s.entry_gate_outcome = gate_outcome
-
-                if quorum_ok:
-                    try:
-                        result["entry_thesis_handoff"] = _freeze_entry_handoff(
-                            result, result.get("causal_episode_id"),
-                        )
-                    except ValueError as exc:
-                        quorum_ok = False
-                        blocking_stage = "FROZEN_ENTRY_CONTRACT"
-                        reason = str(exc) or "ENTRY_HANDOFF_CONTRACT_INVALID"
-                        s.entry_structural_contract = {
-                            "ok": False,
-                            "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
-                            "detail": reason,
-                        }
-                        gate_outcome = entry_gate_outcome.structural(
-                            False, "ENTRY_HANDOFF_CONTRACT_INVALID",
-                            {"error": reason},
-                        )
-                        s.entry_gate_outcome = gate_outcome
-                        result["authority_contracts"] = _authority_contract_bundle(
-                            s, result, False,
-                            result.get("causal_episode_id"),
-                        )
+                try:
+                    result["entry_thesis_handoff"] = _freeze_entry_handoff(
+                        result, result.get("causal_episode_id"),
+                    )
+                except ValueError as exc:
+                    quorum_ok = False
+                    blocking_stage = "FROZEN_ENTRY_CONTRACT"
+                    reason = str(exc) or "ENTRY_HANDOFF_CONTRACT_INVALID"
+                    s.entry_structural_contract = {
+                        "ok": False,
+                        "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
+                        "detail": reason,
+                    }
+                    gate_outcome = entry_gate_outcome.structural(
+                        False, "ENTRY_HANDOFF_CONTRACT_INVALID",
+                        {"error": reason},
+                    )
+                    s.entry_gate_outcome = gate_outcome
+                    result["authority_contracts"] = _authority_contract_bundle(
+                        s, result, False,
+                        result.get("causal_episode_id"),
+                    )
             lifecycle = entry_lifecycle.observe(
                 s, result, gate_outcome,
                 economic_opportunity_id=linked_opportunity_id,
