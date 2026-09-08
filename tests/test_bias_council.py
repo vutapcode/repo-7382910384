@@ -84,6 +84,51 @@ class BiasCouncilTests(unittest.TestCase):
             report["acquisition_handoff"]["reacquisition_observations"], 1,
         )
 
+    def test_nonoverlapping_reacquisition_keeps_unfalsified_wave(self):
+        existing = {
+            "status": "SEALED", "side": "LONG",
+            "venue_epochs": {"spot": 3, "coinbase": 4},
+            "first_converting_segment_onset_ms": 10_000,
+            "ownership_completed_ms": 70_000,
+        }
+        later = {
+            "status": "SEALED", "side": "LONG",
+            "venue_epochs": {"spot": 3, "coinbase": 4},
+            "first_converting_segment_onset_ms": 90_000,
+            "ownership_completed_ms": 150_000,
+        }
+
+        self.assertTrue(council._same_acquisition_wave(existing, later))
+
+        falsified = dict(existing, status="TERMINATED_CAUSAL_FALSIFIER")
+        self.assertFalse(council._same_acquisition_wave(falsified, later))
+
+    def test_reacquisition_cannot_bridge_epoch_or_replay_backwards(self):
+        existing = {
+            "status": "SEALED", "side": "SHORT",
+            "venue_epochs": {"spot": 3, "coinbase": 4},
+            "first_converting_segment_onset_ms": 10_000,
+            "ownership_completed_ms": 70_000,
+        }
+        epoch_changed = {
+            **existing,
+            "venue_epochs": {"spot": 4, "coinbase": 4},
+            "first_converting_segment_onset_ms": 90_000,
+            "ownership_completed_ms": 150_000,
+        }
+        replayed_old = {
+            **existing,
+            "first_converting_segment_onset_ms": 5_000,
+            "ownership_completed_ms": 60_000,
+        }
+
+        self.assertFalse(council._same_acquisition_wave(
+            existing, epoch_changed,
+        ))
+        self.assertFalse(council._same_acquisition_wave(
+            existing, replayed_old,
+        ))
+
     def test_causal_falsifier_allows_new_acquisition_wave(self):
         s = state()
         s.bias_state, s.bias_confidence = "ABSTAIN", 0.0

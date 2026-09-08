@@ -514,7 +514,13 @@ def _seal_acquisition_handoff(report, completed_at):
 
 
 def _same_acquisition_wave(existing, candidate):
-    """Same cash roots, epochs and overlapping evidence interval means one wave."""
+    """Preserve the active cash owner until Market Truth falsifies it.
+
+    Segment overlap is a sampling artifact, not causal identity.  A later
+    same-side acquisition on unchanged cash epochs remains an observation of
+    the active wave when that wave is still SEALED.  `_terminate_acquisition_wave`
+    is the sole owner of causal death before this helper is called.
+    """
     existing = dict(existing or {})
     candidate = dict(candidate or {})
     if str(existing.get("status") or "") != "SEALED":
@@ -530,8 +536,9 @@ def _same_acquisition_wave(existing, candidate):
     new_start = int(candidate.get("first_converting_segment_onset_ms", 0) or 0)
     new_end = int(candidate.get("ownership_completed_ms", 0) or 0)
     return bool(
-        old_start > 0 and new_start > 0
-        and max(old_start, new_start) <= min(old_end, new_end)
+        old_start > 0 and old_end >= old_start
+        and new_start > 0 and new_end >= new_start
+        and new_end >= old_end
     )
 
 
