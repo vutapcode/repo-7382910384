@@ -7,7 +7,7 @@ temporary execution failures may retry the same opportunity.
 """
 import time
 
-VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V8_MARKET_TIMING_SEPARATED"
+VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V9_ACTIVE_IDENTITY_ONLY"
 CAUSAL_PHASES = {
     "PROBE", "EARLY", "MATURE", "ACCEPTANCE", "RELEASE",
     "PRESSURE_BUILDING", "WAIT_CHASE",
@@ -50,6 +50,7 @@ def _reset_active(state):
     state.canonical_opportunity_active_qualified = False
     state.canonical_opportunity_last_evidence_at = 0.0
     state.canonical_opportunity_active_episode_id = None
+    state.canonical_opportunity_active_side = None
 
 
 def _snapshot(state, *, active, new, qualified_now, transition,
@@ -64,9 +65,19 @@ def _snapshot(state, *, active, new, qualified_now, transition,
         "qualified_now": bool(qualified_now),
         "qualified_ever": qualified_ever,
         "qualification_transition": bool(transition),
-        "opportunity_id": int(
+        # ``opportunity_id`` means the identity currently owned by this
+        # snapshot.  The monotonic counter is history, not an active identity.
+        "opportunity_id": (
+            int(getattr(state, "canonical_opportunity_count", 0) or 0)
+            if active else None
+        ),
+        "last_opportunity_id": int(
             getattr(state, "canonical_opportunity_count", 0) or 0
         ),
+        "side": (
+            str(getattr(state, "canonical_opportunity_active_side", "") or "")
+            or None
+        ) if active else None,
         "causal_episode_id": causal_episode_id,
         "market_wave_id": causal_episode_id,
         "grace_active": bool(grace_active),
@@ -110,6 +121,20 @@ def bind_result_identity(result, observation):
     rejected = str(observation.get("candidate_rejected") or "")
     if rejected:
         bound["canonical_opportunity_link_status"] = rejected
+        return bound, None
+    if not bool(observation.get("active")):
+        bound["canonical_opportunity_link_status"] = "NO_ACTIVE_OPPORTUNITY"
+        return bound, None
+    if not _candidate(bound):
+        bound["canonical_opportunity_link_status"] = "NOT_CAUSAL_CANDIDATE"
+        return bound, None
+    candidate_side = str(bound.get("side") or "ABSTAIN").upper()
+    canonical_side = str(observation.get("side") or "ABSTAIN").upper()
+    if (
+        canonical_side in {"LONG", "SHORT"}
+        and candidate_side != canonical_side
+    ):
+        bound["canonical_opportunity_link_status"] = "CANONICAL_SIDE_MISMATCH"
         return bound, None
     if canonical_wave:
         if candidate_wave and candidate_wave != canonical_wave:
@@ -242,6 +267,9 @@ def observe(state, result, qualified=False, now=None, market_truth_wave=None):
             or (result or {}).get("causal_episode_id")
             or f"tier-s:{int(getattr(state, 'canonical_opportunity_count', 0) or 0)}"
         )
+        state.canonical_opportunity_active_side = str(
+            (result or {}).get("side") or "ABSTAIN"
+        ).upper()
     state.canonical_opportunity_last_timing_episode_id = (
         (result or {}).get("causal_episode_id")
     )

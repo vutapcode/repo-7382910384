@@ -304,12 +304,77 @@ class CanonicalOpportunityTests(unittest.TestCase):
         )
         self.assertFalse(row["active"])
         self.assertFalse(row["new"])
+        self.assertIsNone(row["opportunity_id"])
+        self.assertEqual(row["last_opportunity_id"], 0)
         self.assertEqual(
             row["candidate_rejected"], "MARKET_TRUTH_WAVE_TERMINAL",
         )
         self.assertEqual(
             int(getattr(state, "canonical_opportunity_count", 0) or 0), 0,
         )
+
+    def test_inactive_snapshot_never_exposes_last_id_as_current(self):
+        state = SimpleNamespace()
+        live = opportunity.observe(
+            state, {**go(), "causal_episode_id": "wave-lived"},
+            qualified=True, now=100.0,
+            market_truth_wave=truth("wave-lived"),
+        )
+        dead = opportunity.observe(
+            state, {"decision": "WAIT", "causal_episode_id": "wave-lived"},
+            qualified=False, now=101.0,
+            market_truth_wave=truth(
+                "wave-lived", "FALSIFIED", "OPPOSITE_DUAL_CASH_CONTROL",
+            ),
+        )
+        bound, economic_id = opportunity.bind_result_identity(
+            {"decision": "WAIT", "side": "ABSTAIN"}, dead,
+        )
+        self.assertIsNone(dead["opportunity_id"])
+        self.assertEqual(dead["last_opportunity_id"], live["opportunity_id"])
+        self.assertEqual(
+            bound["canonical_opportunity_link_status"],
+            "NO_ACTIVE_OPPORTUNITY",
+        )
+        self.assertIsNone(economic_id)
+
+    def test_abstain_observation_cannot_borrow_active_opportunity(self):
+        state = SimpleNamespace()
+        opportunity.observe(
+            state, {**go(), "causal_episode_id": "wave-live"},
+            qualified=True, now=100.0,
+            market_truth_wave=truth("wave-live"),
+        )
+        wait = {"decision": "WAIT", "side": "ABSTAIN", "phase": "ARMED"}
+        observed = opportunity.observe(
+            state, wait, qualified=False, now=101.0,
+            market_truth_wave={"status": "UNKNOWN"},
+        )
+        bound, economic_id = opportunity.bind_result_identity(wait, observed)
+        self.assertTrue(observed["active"])
+        self.assertEqual(
+            bound["canonical_opportunity_link_status"],
+            "NOT_CAUSAL_CANDIDATE",
+        )
+        self.assertIsNone(economic_id)
+
+    def test_opposite_candidate_cannot_link_even_with_same_wave_id(self):
+        state = SimpleNamespace()
+        first = opportunity.observe(
+            state, {**go(), "causal_episode_id": "wave-one"},
+            qualified=True, now=100.0,
+            market_truth_wave=truth("wave-one"),
+        )
+        opposite = {
+            "decision": "WAIT", "side": "SHORT", "phase": "PROBE",
+            "causal_episode_id": "wave-one", "market_wave_id": "wave-one",
+        }
+        bound, economic_id = opportunity.bind_result_identity(opposite, first)
+        self.assertEqual(
+            bound["canonical_opportunity_link_status"],
+            "CANONICAL_SIDE_MISMATCH",
+        )
+        self.assertIsNone(economic_id)
 
     def test_falsified_other_candidate_does_not_kill_active_wave(self):
         state = SimpleNamespace()
