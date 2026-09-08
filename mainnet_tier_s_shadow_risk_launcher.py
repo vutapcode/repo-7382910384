@@ -389,7 +389,7 @@ futures_flow.install(base)
 _health_probe = health.install(base, risk, edge)
 
 # Preserve bias-side handoff reset on top of the health-gated evaluator.
-_health_eval = base.entry_council.evaluate
+_health_eval = base._entry_evaluate
 def _entry_evaluate_context_guard(state, now=None, side=None):
     now = time.time() if now is None else float(now)
     saturated = bool(getattr(state, "futures_flow_ring_saturated", False))
@@ -427,7 +427,7 @@ def _entry_evaluate_context_guard(state, now=None, side=None):
     result["operational_safety"] = safety
     return result
 
-base.entry_council.evaluate = _entry_evaluate_context_guard
+base._entry_evaluate = _entry_evaluate_context_guard
 
 if __name__ == "__main__":
     base.main()

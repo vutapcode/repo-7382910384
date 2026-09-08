@@ -13,7 +13,7 @@ def _retry_delay(consecutive_errors):
 def install(wrapper):
     base = wrapper.base
     state = base.app.state
-    original = base.entry_council.evaluate
+    original = getattr(base, "_entry_evaluate", base.entry_council.evaluate)
 
     def evaluate_with_flat_persistence_gate(state_obj, now=None, side=None):
         pos = getattr(state_obj, "mainnet_shadow_position", None)
@@ -73,5 +73,5 @@ def install(wrapper):
         result["operational_safety"] = safety
         return result
 
-    base.entry_council.evaluate = evaluate_with_flat_persistence_gate
+    base._entry_evaluate = evaluate_with_flat_persistence_gate
     return evaluate_with_flat_persistence_gate

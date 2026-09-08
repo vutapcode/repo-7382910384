@@ -25,7 +25,7 @@ def _measure(path):
 def install(wrapper):
     base = wrapper.base
     state = base.app.state
-    original = base.entry_council.evaluate
+    original = getattr(base, "_entry_evaluate", base.entry_council.evaluate)
 
     state.shadow_disk_check_after_mono = 0.0
     state.shadow_disk_pressure = False
@@ -75,5 +75,5 @@ def install(wrapper):
         result["operational_safety"] = safety
         return result
 
-    base.entry_council.evaluate = evaluate_with_disk_gate
+    base._entry_evaluate = evaluate_with_disk_gate
     return evaluate_with_disk_gate

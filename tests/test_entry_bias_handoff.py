@@ -31,7 +31,7 @@ class EntryBiasHandoffRegressionTests(unittest.TestCase):
             '_reset_entry_context(state, "ABSTAIN", "BIAS_INVALID_OR_EXPIRED", now, reset_causal=True)',
             source,
         )
-        self.assertIn("base.entry_council.evaluate = _entry_evaluate_context_guard", source)
+        self.assertIn("base._entry_evaluate = _entry_evaluate_context_guard", source)
 
     def test_emerging_cash_wave_is_early_information_not_entry_handoff(self):
         emerging = bias._compat_confidence(

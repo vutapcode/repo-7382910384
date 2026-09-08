@@ -71,6 +71,9 @@ entry_council = app.load_module(
     "ignition_core_mainnet_shadow",
     app.CURRENT_DIR / "loi_he_thong" / "ignition_core.py",
 )
+# Runtime wrappers compose around this call boundary. They must never replace
+# functions on the canonical Ignition module object shared with Edge/replay.
+_entry_evaluate = entry_council.evaluate
 bias_council = app.load_module(
     "bias_council_mainnet_shadow",
     app.CURRENT_DIR / "2_suy_luan_mapping" / "bias_council.py",
@@ -2302,7 +2305,7 @@ async def _entry_loop():
                 await asyncio.sleep(_authority_delay(s, ENTRY_POLL))
                 continue
             last_revision, last_eval_at = revision, now
-            result = entry_council.evaluate(s, now=now)
+            result = _entry_evaluate(s, now=now)
             persistent_shadow = dict(
                 getattr(s, "persistent_metaorder_shadow", {}) or {}
             )

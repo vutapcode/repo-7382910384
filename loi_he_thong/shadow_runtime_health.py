@@ -63,7 +63,7 @@ def safe_ref(hist,now,sec,lag):
     ts=float(out.get("ts",0) or 0)
     return out if 0<=target-ts<=lag else None
 def install(base,risk,edge):
-    orig_eval=base.entry_council.evaluate; orig_guard=base.guardian_s.update_state
+    orig_eval=getattr(base,"_entry_evaluate",base.entry_council.evaluate); orig_guard=base.guardian_s.update_state
     base.entry_council._ref=lambda h,n,a:safe_ref(h,n,a,ENTRY_FAST_LAG if float(a)<=.40 else ENTRY_SLOW_LAG)
     base.guardian_s._ref=lambda h,n,a:safe_ref(h,n,a,GUARD_LAGS[min(GUARD_LAGS,key=lambda x:abs(x-float(a)))])
     def reset_entry(s,reason,now):
@@ -79,7 +79,7 @@ def install(base,risk,edge):
             reset_entry(s,"SHADOW_FEED_NOT_READY",now)
             return {"version":getattr(base.entry_council,"VERSION","ENTRY"),"decision":"WAIT","entry_mode":"NONE","phase":"ARMED","confidence":0.,"reason":"SHADOW_FEED_NOT_READY","side":str(side or getattr(s,"bias_state","ABSTAIN")).upper(),"s_votes":{},"ts":now}
         return orig_eval(s,now=now,side=side)
-    base.entry_council.evaluate=entry_eval
+    base._entry_evaluate=entry_eval
     def guard_macro(s,pos,now):
         if fresh(getattr(s,"thoi_gian_vi_mo_cuoi",0),now,MACRO_AGE):return orig_guard(s,pos,now=now)
         h=getattr(s,"guardian_s_oi",None)
