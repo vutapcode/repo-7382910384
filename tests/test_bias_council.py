@@ -512,7 +512,7 @@ class BiasCouncilTests(unittest.TestCase):
         self.assertGreaterEqual(confidence, 0.55)
         self.assertEqual(reason, "HOLD_CONTEXT_THROUGH_ABSTAIN")
 
-    def test_exhausted_wave_does_not_use_long_lens_to_hold_bias(self):
+    def test_nonconverting_flow_releases_bias_without_falsifying_wave(self):
         s = state()
         s.bias_state, s.bias_confidence, s.bias_wave_state = "LONG", 0.70, "CONTROLLED"
         # Executed buyers persist but price is flat to the latest cash anchor;
@@ -528,8 +528,9 @@ class BiasCouncilTests(unittest.TestCase):
             _history_row(85.0, 99.0, 990.0, 20.0, 1.0),
         ], maxlen=1536)
         r = council.evaluate(s, now=100.0)
-        self.assertEqual(r["wave_state"], "EXHAUSTION")
+        self.assertEqual(r["wave_state"], "CONTROL_ERODING")
         self.assertEqual(r["bias"], "ABSTAIN")
+        self.assertIsNone(r["cash_control"]["falsifier"])
         self.assertFalse(r["cash_control"]["historical_lens_direction_authority"])
 
     def test_confirmed_flip_requires_evidence_not_elapsed_timer(self):

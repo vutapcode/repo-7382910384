@@ -861,6 +861,8 @@ def _hyst(state, report):
         if bool(cash.get("control_transfer_confirmed")) and raw in ("LONG", "SHORT") and raw != old:
             return raw, raw_conf, "EVIDENCE_CONFIRMED_CONTROL_TRANSFER"
         return "ABSTAIN", 0.0, "RELEASE_DURING_UNPROVEN_CONTROL_TRANSFER"
+    if raw == "ABSTAIN" and context == old and phase == "CONTROL_LULL":
+        return old, max(0.55, old_conf * 0.92), "HOLD_CONTEXT_THROUGH_CASH_LULL"
     if raw == old:
         return old, raw_conf, "STABLE_CASH_CONTROL"
     if raw == "ABSTAIN" and context == old and phase in ("ESTABLISHED_TREND", "CONTEXT_WITHOUT_CONFIRMATION"):
@@ -986,6 +988,8 @@ def evaluate(state, now=None, force_full=False):
             "EXHAUSTION": "OLD_CASH_WAVE_EXHAUSTED",
             "ABSORPTION": "OLD_CASH_WAVE_ABSORBED",
             "TRANSITION": "CASH_CONTROL_TRANSFER_UNPROVEN",
+            "CONTROL_ERODING": "OLD_CASH_CONTROL_ERODING",
+            "LULL": "ACTIVE_CASH_WAVE_LULL",
         }.get(wave_state, "ACTIVE_CASH_WAVE_OBSERVED")
 
     direction_mem = {

@@ -36,14 +36,25 @@ class CashWaveObservationTests(unittest.TestCase):
         self.assertEqual(result["raw_side"], "LONG")
         self.assertTrue(result["meaningful_for_action"])
 
-    def test_old_long_is_not_kept_alive_by_old_displacement_after_conversion_dies(self):
+    def test_old_long_nonconversion_is_erosion_not_a_terminal_falsifier(self):
         result = wave.infer([
             _segment(0, 15, "ABSTAIN", "LONG"),
             _segment(15, 60, "ABSTAIN", "ABSTAIN"),
             _segment(60, 180, "LONG", "LONG"),
         ], previous_side="LONG")
-        self.assertEqual(result["wave_state"], "EXHAUSTION")
+        self.assertEqual(result["wave_state"], "CONTROL_ERODING")
         self.assertEqual(result["raw_side"], "ABSTAIN")
+        self.assertIsNone(result["falsifier"])
+        self.assertFalse(result["meaningful_for_action"])
+
+    def test_absence_of_recent_conversion_is_a_lull_not_falsification(self):
+        result = wave.infer([
+            _segment(0, 15, "ABSTAIN", "ABSTAIN"),
+            _segment(15, 60, "ABSTAIN", "ABSTAIN"),
+        ], previous_side="LONG")
+        self.assertEqual(result["wave_state"], "LULL")
+        self.assertEqual(result["context_side"], "LONG")
+        self.assertIsNone(result["falsifier"])
         self.assertFalse(result["meaningful_for_action"])
 
     def test_executed_flow_nonconversion_plus_refill_is_absorption(self):
@@ -55,6 +66,7 @@ class CashWaveObservationTests(unittest.TestCase):
         ])
         self.assertEqual(result["wave_state"], "ABSORPTION")
         self.assertEqual(result["raw_side"], "ABSTAIN")
+        self.assertEqual(result["falsifier"], "EXECUTED_FLOW_ABSORBED")
 
     def test_opposite_price_without_opposite_flow_conversion_is_pullback(self):
         result = wave.infer([

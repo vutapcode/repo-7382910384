@@ -195,14 +195,22 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
 
         if latest["flow_side"] == previous and latest_state == "FLOW_NONCONVERSION":
             liquidity_state = _liquidity_state(liquidity, previous)
-            wave_state = "ABSORPTION" if liquidity_state in {"ABSORBED", "REFILLING"} else "EXHAUSTION"
+            # Material old-side flow failing to move price is evidence that
+            # control is eroding, but is not by itself proof that the market
+            # wave died.  Only execution-linked absorption may falsify here;
+            # otherwise a later opposite conversion can consume this as
+            # old-side-failure evidence without a timer/absence tombstone.
+            absorbed = liquidity_state in {"ABSORBED", "REFILLING"}
             return {
                 "version": VERSION, "authority": False,
-                "raw_side": "ABSTAIN", "wave_state": wave_state,
-                "phase": "OLD_CONTROL_FAILED_TO_CONVERT", "context_side": previous,
+                "raw_side": "ABSTAIN",
+                "wave_state": "ABSORPTION" if absorbed else "CONTROL_ERODING",
+                "phase": "OLD_CONTROL_ABSORBED" if absorbed else "OLD_CONTROL_ERODING",
+                "context_side": previous,
                 "candidate_side": "ABSTAIN", "control_transfer_confirmed": False,
                 "meaningful_for_action": False,
-                "falsifier": "EXECUTED_FLOW_STOPPED_CONVERTING",
+                "falsifier": "EXECUTED_FLOW_ABSORBED" if absorbed else None,
+                "old_side_failure_evidence": True,
                 "liquidity_state": liquidity_state,
                 "segments": observations,
             }
@@ -225,11 +233,11 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
         if not recent_old_conversion:
             return {
                 "version": VERSION, "authority": False,
-                "raw_side": "ABSTAIN", "wave_state": "EXHAUSTION",
-                "phase": "CONTROL_EXHAUSTED", "context_side": previous,
+                "raw_side": "ABSTAIN", "wave_state": "LULL",
+                "phase": "CONTROL_LULL", "context_side": previous,
                 "candidate_side": "ABSTAIN", "control_transfer_confirmed": False,
                 "meaningful_for_action": False,
-                "falsifier": "NO_RECENT_OLD_SIDE_CONVERSION",
+                "falsifier": None,
                 "segments": observations,
             }
 
