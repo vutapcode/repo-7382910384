@@ -89,6 +89,44 @@ NO_LIQUIDATION = {"phase": "QUIET", "burst": False, "decelerating": False}
 
 
 class EntryThesisGateTests(unittest.TestCase):
+    def test_legacy_s_vote_nonconversion_cannot_veto_causal_entry(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "CONTINUING_CONFIRMED",
+                "coinbase_spot": "CONTINUING_CONFIRMED",
+            },
+        )
+        candidate["s_votes"] = {
+            "S1_cross_venue_price_acceptance": {
+                "metrics": {
+                    "moves": {
+                        "spot": 0.01, "coinbase": 0.01,
+                        "futures": 0.20,
+                    },
+                },
+            },
+            "S2_multi_venue_executed_flow": {
+                "metrics": {
+                    "supporters": ["spot", "futures"],
+                    "venues": {
+                        "spot": {"signed_imbalance": 0.70},
+                        "futures": {"signed_imbalance": 0.70},
+                    },
+                },
+            },
+        }
+        allowed, report = entry_edge_tier.authorize(
+            candidate,
+            SimpleNamespace(
+                entry_economics_v6_replay_approved=False,
+                wstrade_live_armed=False,
+            ),
+        )
+
+        self.assertTrue(allowed)
+        self.assertNotIn("FLOW_PRICE_NONCONVERSION_VETO", report["hard_vetoes"])
+
     def test_same_evidence_root_cannot_count_as_dual_cash_corroboration(self):
         candidate = result(
             intent="POSITION_BUILD", consumed=0.20,
@@ -404,7 +442,7 @@ class EntryThesisGateTests(unittest.TestCase):
             flow["cross_venue_witness_venues"], ["coinbase_spot"]
         )
 
-    def test_v3_absorption_is_telemetry_until_canonical_replay_is_approved(self):
+    def test_unapproved_absorption_waits_for_recovery_without_hard_veto(self):
         audit = entry_thesis_gate.evaluate(
             SimpleNamespace(entry_economics_v6_replay_approved=False),
             result(
@@ -416,9 +454,13 @@ class EntryThesisGateTests(unittest.TestCase):
             ),
             PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
         )
-        self.assertEqual(audit["decision"], "PASS")
+        self.assertEqual(audit["decision"], "WAIT")
         self.assertNotIn(
             "FLOW_NONCONVERSION_COMPOSITE_VETO", audit["blocking_reasons"]
+        )
+        self.assertIn(
+            "WAIT_CAUSAL_FLOW_CONVERSION_RECOVERY",
+            audit["soft_wait_reasons"],
         )
 
     def test_position_build_is_not_relabelled_forced_unwind(self):

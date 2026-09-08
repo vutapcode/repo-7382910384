@@ -16,7 +16,7 @@ from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
 from loi_he_thong import verified_cost_model
 
-VERSION = "IGNITION_ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
+VERSION = "IGNITION_ENTRY_ECONOMICS_V9_CAUSAL_FLOW_AUTHORITY"
 EDGE_BPS = {
     "LOW_EDGE": 0.0, "NORMAL_EDGE": 13.0,
     "HIGH_EDGE": 20.0, "RUNNER_EDGE": 35.0,
@@ -69,13 +69,10 @@ def classify(result, state):
     v6_replay_approved = bool(
         getattr(state, "entry_economics_v6_replay_approved", False)
     )
-    # Preserve baseline demo semantics until a canonical replay explicitly
-    # approves V6. Once approved, the persistent cross-cash classifier replaces
-    # this single-snapshot legacy veto instead of stacking both vetoes.
-    if candidate and not v6_replay_approved and bool(
-        impact.get("flow_price_nonconversion")
-    ):
-        hard_vetoes.append("FLOW_PRICE_NONCONVERSION_VETO")
+    # Compatibility S-votes remain diagnostics only.  Current causal
+    # flow-efficiency, with per-venue provenance, is owned by Thesis below; do
+    # not let the retired snapshot heuristic count Spot+Futures as independent
+    # support and veto a cash-proven Ignition decision.
     if basis.get("perp_expansion"):
         hard_vetoes.append("PERP_LED_VETO")
 

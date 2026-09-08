@@ -86,8 +86,7 @@ class StrategyAuthorityContractTests(unittest.TestCase):
         self.assertIn('"causal_origin_proof"', active)
         self.assertIn('"current_execution_proof"', active)
         edge = self.text("loi_he_thong/entry_edge_tier.py")
-        self.assertIn("not v6_replay_approved", edge)
-        self.assertIn(
+        self.assertNotIn(
             'hard_vetoes.append("FLOW_PRICE_NONCONVERSION_VETO")', edge
         )
         self.assertIn("if would_enter and bool(basis.get", active)

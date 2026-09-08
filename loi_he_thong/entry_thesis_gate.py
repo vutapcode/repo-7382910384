@@ -9,7 +9,7 @@ market orders are large.
 from loi_he_thong import ignition_core
 from loi_he_thong import causal_mechanism
 
-VERSION = "ENTRY_THESIS_GATE_V7_OBSERVATION_NEUTRAL"
+VERSION = "ENTRY_THESIS_GATE_V8_CAUSAL_FLOW_RETRY"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -191,11 +191,8 @@ def _flow_question(result, ignition, impact):
     )
     strong_flow = bool(flow_strength >= FLOW_IMBALANCE)
     flow_price_nonconversion = bool(
-        (impact or {}).get("flow_price_nonconversion")
-        or (
-            strong_flow and rows
-            and recent_cash_progress < threshold * 0.70
-        )
+        strong_flow and rows
+        and recent_cash_progress < threshold * 0.70
     )
     efficiency = dict(ignition.get("flow_efficiency") or {})
     venue_efficiency = dict(efficiency.get("venues") or {})
@@ -401,6 +398,11 @@ def evaluate(state, result, impact, basis, liquidation):
     )
     if replay_approved and q3.get("composite_veto"):
         blockers.append("FLOW_NONCONVERSION_COMPOSITE_VETO")
+    elif q3.get("composite_veto"):
+        # Before empirical promotion, causal non-conversion is a retryable
+        # present-tense failure, not a legacy hard veto and not permission to
+        # hit TAKER.  A later converting window may reopen the same wave.
+        soft_waits.append("WAIT_CAUSAL_FLOW_CONVERSION_RECOVERY")
     if forced_tail_veto:
         blockers.append("UNWIND_TAIL_VETO")
     # Persistence proves that a causal wave existed; it does not prove that a
