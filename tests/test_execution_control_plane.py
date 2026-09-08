@@ -81,6 +81,20 @@ class ExecutionControlPlaneTests(unittest.TestCase):
         self.assertEqual(snapshot["health"], "EXIT_ONLY")
         self.assertFalse(snapshot["entry_allowed"])
 
+    def test_history_latency_is_observed_but_cannot_block_or_authorize_entry(self):
+        clock = Clock()
+        monitor = execution_control_plane.Monitor(
+            clock.monotonic, clock.time, latency_authority_enabled=True
+        )
+        token = monitor.begin("GET_INCOME_HISTORY")
+        clock.advance(3.0)
+        monitor.complete(token, 200)
+        snapshot = monitor.snapshot(opportunity_budget_ms=250.0)
+        self.assertEqual(snapshot["sample_count"], 0)
+        self.assertEqual(snapshot["all_control_sample_count"], 1)
+        self.assertEqual(snapshot["reason"], "NO_CONTROL_SAMPLES")
+        self.assertFalse(snapshot["entry_allowed"])
+
 
 if __name__ == "__main__":
     unittest.main()

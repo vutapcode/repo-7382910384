@@ -13,6 +13,15 @@ import time
 
 VERSION = "EXECUTION_CONTROL_PLANE_V1"
 MAX_SAMPLES = 256
+ENTRY_ADMISSION_OPERATIONS = frozenset({
+    "NEW_ORDER",
+    "QUERY_ORDER",
+    "CANCEL_ORDER",
+    "GET_POSITIONS",
+    "GET_OPEN_ORDERS",
+    "GET_OPEN_ALGO_ORDERS",
+    "BALANCE_DETAILS",
+})
 
 
 def _percentile(values, quantile):
@@ -68,13 +77,17 @@ class Monitor:
 
     def snapshot(self, *, opportunity_budget_ms=None, has_exposure=False):
         samples = list(self._samples)
-        success = [row for row in samples if row["success"]]
+        admission_samples = [
+            row for row in samples
+            if row["operation"] in ENTRY_ADMISSION_OPERATIONS
+        ]
+        success = [row for row in admission_samples if row["success"]]
         latencies = [row["latency_ms"] for row in success]
         p50 = _percentile(latencies, 0.50)
         p95 = _percentile(latencies, 0.95)
         p99 = _percentile(latencies, 0.99)
-        last = samples[-1] if samples else None
-        failures = sum(not row["success"] for row in samples)
+        last = admission_samples[-1] if admission_samples else None
+        failures = sum(not row["success"] for row in admission_samples)
         budget = (
             None if opportunity_budget_ms is None
             else max(0.0, float(opportunity_budget_ms))
@@ -83,7 +96,7 @@ class Monitor:
         reason = "NO_CONTROL_SAMPLES"
         health = "UNKNOWN"
         entry_allowed = False
-        if samples:
+        if admission_samples:
             if last and not last["success"]:
                 health = "EXIT_ONLY" if has_exposure else "UNSAFE_FOR_NEW_ENTRY"
                 reason = "LATEST_CONTROL_CALL_FAILED"
@@ -110,8 +123,13 @@ class Monitor:
                 reason = "MEASURED_CONTROL_PATH_HEALTHY"
                 entry_allowed = True
 
-        oldest = samples[0]["started_at"] if samples else None
-        newest = samples[-1]["completed_at"] if samples else None
+        oldest = (
+            admission_samples[0]["started_at"] if admission_samples else None
+        )
+        newest = (
+            admission_samples[-1]["completed_at"]
+            if admission_samples else None
+        )
         return {
             "version": VERSION,
             "health": health,
@@ -119,7 +137,9 @@ class Monitor:
             "entry_allowed": bool(entry_allowed),
             "latency_authority_enabled": self._latency_authority_enabled,
             "opportunity_budget_ms": budget,
-            "sample_count": len(samples),
+            "sample_count": len(admission_samples),
+            "all_control_sample_count": len(samples),
+            "latency_operation_scope": sorted(ENTRY_ADMISSION_OPERATIONS),
             "successful_samples": len(success),
             "failed_samples": failures,
             "inflight_count": len(self._inflight),

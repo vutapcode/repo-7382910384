@@ -50,6 +50,30 @@ class BinanceApiControlPlaneTests(unittest.TestCase):
             self.assertFalse(snapshot["entry_allowed"])
         asyncio.run(run())
 
+    def test_cancel_can_reconcile_unknown_ack_by_original_client_id(self):
+        class Client:
+            def __init__(self):
+                self.payload = None
+
+            def cancel_order(self, **kwargs):
+                self.payload = dict(kwargs)
+                return {"status": "CANCELED"}
+
+        async def run():
+            api = self.api()
+            api.client = Client()
+            result, status = await api.cancel_order(
+                "BTCUSDT", client_order_id="ws_maker_identity"
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(result["status"], "CANCELED")
+            self.assertEqual(api.client.payload, {
+                "symbol": "BTCUSDT",
+                "origClientOrderId": "ws_maker_identity",
+            })
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

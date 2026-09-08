@@ -6,7 +6,9 @@ must acquire a verified exchange hard stop or it is immediately flattened.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 import hashlib
+import heapq
 import math
 import os
 from types import SimpleNamespace
@@ -21,19 +23,141 @@ from loi_he_thong import execution_transaction
 from loi_he_thong import market_thesis
 
 
-VERSION = "WSTRADE_LIVE_EXECUTION_V1"
+VERSION = "WSTRADE_LIVE_EXECUTION_V2_DEADLINE"
 SYMBOL = "BTCUSDT"
 MAKER_TTL_SECONDS = 0.75
 CAUSAL_SUBMIT_MAX_AGE_SECONDS = 1.5
 BBO_SUBMIT_MAX_AGE_SECONDS = 1.0
+# Entry timing is deliberately short.  Recovery/protection gets a separate,
+# longer safety budget and is never subjected to entry-latency admission.
+ENTRY_TRANSPORT_CAP_SECONDS = CAUSAL_SUBMIT_MAX_AGE_SECONDS
+SAFETY_OPERATION_DEADLINE_SECONDS = CAUSAL_SUBMIT_MAX_AGE_SECONDS * 3.0
+SAFETY_TRANSPORT_CAP_SECONDS = CAUSAL_SUBMIT_MAX_AGE_SECONDS
+EXECUTION_DEADLINE_VERSION = "EXECUTION_DEADLINE_V1"
+
+
+class _PriorityExecutionLock:
+    """Single writer with exposure-reducing callers first in the wait queue."""
+
+    def __init__(self):
+        self._condition = asyncio.Condition()
+        self._active = False
+        self._sequence = 0
+        self._waiters = []
+
+    async def acquire(self, priority):
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        async with self._condition:
+            self._sequence += 1
+            ticket = [int(priority), self._sequence, future]
+            heapq.heappush(self._waiters, ticket)
+            try:
+                while self._active or self._waiters[0] is not ticket:
+                    await self._condition.wait()
+                heapq.heappop(self._waiters)
+                self._active = True
+            except BaseException:
+                future.cancel()
+                self._waiters = [row for row in self._waiters if row is not ticket]
+                heapq.heapify(self._waiters)
+                self._condition.notify_all()
+                raise
+
+    async def release(self):
+        async with self._condition:
+            self._active = False
+            self._condition.notify_all()
 
 
 def _execution_lock(state):
     lock = getattr(state, "_wstrade_live_execution_lock", None)
     if lock is None:
-        lock = asyncio.Lock()
+        lock = _PriorityExecutionLock()
         state._wstrade_live_execution_lock = lock
     return lock
+
+
+@asynccontextmanager
+async def _execution_guard(state, priority):
+    lock = _execution_lock(state)
+    await lock.acquire(priority)
+    try:
+        yield
+    finally:
+        await lock.release()
+
+
+def _deadline_after(seconds):
+    return time.monotonic() + max(0.0, float(seconds))
+
+
+def _deadline_error(operation, deadline_monotonic):
+    return {
+        "code": "EXECUTION_DEADLINE_EXCEEDED",
+        "message": "execution operation exceeded its sealed deadline",
+        "operation": str(operation),
+        "deadline_monotonic": float(deadline_monotonic),
+        "deadline_contract_version": EXECUTION_DEADLINE_VERSION,
+    }, 599
+
+
+def _maker_cancel_reserve_seconds(state, maker_deadline_monotonic):
+    window = max(0.0, float(maker_deadline_monotonic) - time.monotonic())
+    measured_p95 = float(
+        (getattr(state, "wstrade_execution_control_plane", {}) or {}).get(
+            "latency_p95_ms", 0.0
+        ) or 0.0
+    ) / 1000.0
+    # One polling quantum is the compatibility floor.  Production admission
+    # separately requires two measured round trips to fit the maker window.
+    requested = max(0.05, measured_p95)
+    return min(requested, max(0.001, window / 2.0))
+
+
+async def _api_call(
+    api, method_name, *args, deadline_monotonic, timeout_cap_seconds,
+    **kwargs,
+):
+    """Bound every execution await, including compatibility/test adapters."""
+    remaining = float(deadline_monotonic) - time.monotonic()
+    if remaining <= 0.0:
+        return _deadline_error(method_name, deadline_monotonic)
+    timeout = min(max(0.001, remaining), max(0.001, float(timeout_cap_seconds)))
+    method = getattr(api, method_name)
+    if bool(getattr(api, "supports_execution_deadline", False)):
+        return await method(
+            *args,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout,
+            **kwargs,
+        )
+    try:
+        return await asyncio.wait_for(
+            method(*args, **kwargs), timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        return _deadline_error(method_name, deadline_monotonic)
+
+
+async def _cancel_entry_order(
+    api, order_id, client_id, *, deadline_monotonic,
+):
+    if bool(getattr(api, "supports_execution_deadline", False)):
+        return await _api_call(
+            api, "cancel_order", SYMBOL,
+            order_id=order_id,
+            client_order_id=None if order_id is not None else client_id,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        )
+    # Compatibility adapters historically accept only a positional identity.
+    return await _api_call(
+        api, "cancel_order", SYMBOL,
+        order_id if order_id is not None else client_id,
+        deadline_monotonic=deadline_monotonic,
+        timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+    )
 
 
 def _transaction_event(state, event_callback):
@@ -387,82 +511,145 @@ async def promote(api, state):
                     os.environ[name] = value
 
 
-async def _query_fill(api, client_id, attempts=5, state=None):
+async def _query_fill(
+    api, client_id, attempts=5, state=None, *, deadline_monotonic=None,
+):
+    deadline_monotonic = (
+        _deadline_after(SAFETY_OPERATION_DEADLINE_SECONDS)
+        if deadline_monotonic is None else float(deadline_monotonic)
+    )
     latest = None
     for _ in range(attempts):
         streamed = private_user_stream.order_snapshot(state, client_id) if state else None
         if streamed and str(streamed.get("status", "")).upper() == "FILLED":
             return streamed
-        latest, status = await api.query_order(SYMBOL, client_id)
+        latest, status = await _api_call(
+            api, "query_order", SYMBOL, client_id,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        )
         if status == 200 and str((latest or {}).get("status", "")) == "FILLED":
             return latest
-        await asyncio.sleep(0.05)
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0.0:
+            break
+        await asyncio.sleep(min(0.05, remaining))
     return latest if isinstance(latest, dict) else None
 
 
-async def _market_entry(api, state, side, qty, now):
+async def _market_entry(
+    api, state, side, qty, now, *, deadline_monotonic,
+):
     client_id = _client_id(state, "entry", side, now)
     order_side = "BUY" if side == "LONG" else "SELL"
-    result, status = await api.new_order(
+    result, status = await _api_call(
+        api, "new_order",
         SYMBOL, order_side, "MARKET", qty,
         positionSide=side, newOrderRespType="RESULT", newClientOrderId=client_id,
+        deadline_monotonic=deadline_monotonic,
+        timeout_cap_seconds=ENTRY_TRANSPORT_CAP_SECONDS,
     )
     if status == 599:
-        recovered = await _query_fill(api, client_id, state=state)
+        recovery_deadline = _deadline_after(SAFETY_OPERATION_DEADLINE_SECONDS)
+        recovered = await _query_fill(
+            api, client_id, state=state,
+            deadline_monotonic=recovery_deadline,
+        )
         if recovered and str(recovered.get("status", "")).upper() == "FILLED":
             return recovered, 200, client_id
-        _seal_live(state, "MARKET_ENTRY_UNVERIFIED", recovery=True)
+        reason = (
+            "MARKET_ENTRY_DEADLINE_RECOVERY_REQUIRED"
+            if str((result or {}).get("code")) == "EXECUTION_DEADLINE_EXCEEDED"
+            else "MARKET_ENTRY_UNVERIFIED"
+        )
+        _seal_live(state, reason, recovery=True)
         return recovered or result, 599, client_id
     return result, status, client_id
 
 
-async def _hybrid_entry(api, state, side, result, qty, now):
+async def _hybrid_entry(
+    api, state, side, result, qty, now, *, deadline_monotonic,
+):
     if str(result.get("execution_policy", "MAKER")).upper() == "TAKER":
-        return await _market_entry(api, state, side, qty, now)
+        return await _market_entry(
+            api, state, side, qty, now,
+            deadline_monotonic=deadline_monotonic,
+        )
     bid = float(getattr(state, "execution_best_bid", 0.0) or 0.0)
     ask = float(getattr(state, "execution_best_ask", 0.0) or 0.0)
     price = bid if side == "LONG" else ask
     client_id = _client_id(state, "maker", side, now)
     order_side = "BUY" if side == "LONG" else "SELL"
-    placed, status = await api.new_order(
+    cancel_reserve = _maker_cancel_reserve_seconds(
+        state, deadline_monotonic
+    )
+    poll_deadline = max(
+        time.monotonic(), deadline_monotonic - cancel_reserve
+    )
+    placed, status = await _api_call(
+        api, "new_order",
         SYMBOL, order_side, "LIMIT", qty, positionSide=side,
         timeInForce="GTX", price=price, newOrderRespType="ACK",
         newClientOrderId=client_id,
+        deadline_monotonic=poll_deadline,
+        timeout_cap_seconds=ENTRY_TRANSPORT_CAP_SECONDS,
     )
     if status not in (200, 599):
         return placed, status, client_id
-    deadline = time.monotonic() + MAKER_TTL_SECONDS
     latest = None
-    while time.monotonic() < deadline:
+    while status == 200 and time.monotonic() < poll_deadline:
         streamed = private_user_stream.order_snapshot(state, client_id)
         if streamed and str(streamed.get("status", "")).upper() == "FILLED":
             return streamed, 200, client_id
-        latest, query_status = await api.query_order(SYMBOL, client_id)
+        latest, query_status = await _api_call(
+            api, "query_order", SYMBOL, client_id,
+            deadline_monotonic=poll_deadline,
+            timeout_cap_seconds=ENTRY_TRANSPORT_CAP_SECONDS,
+        )
         if query_status == 200 and str((latest or {}).get("status", "")) == "FILLED":
             return latest, 200, client_id
-        await asyncio.sleep(0.05)
+        remaining = poll_deadline - time.monotonic()
+        if remaining <= 0.0:
+            break
+        await asyncio.sleep(min(0.05, remaining))
     order_id = (latest or placed or {}).get("orderId")
-    if order_id is None:
-        _seal_live(state, "MAKER_ORDER_ID_UNVERIFIED", recovery=True)
-        return latest or placed, 599, client_id
-    cancel_result, cancel_status = await api.cancel_order(SYMBOL, order_id)
+    # Cancellation is a recovery action.  It uses the same idempotent client
+    # identity even when the POST ACK never arrived, and a separate safety
+    # deadline.  A failed/early cancel is never treated as proof of no order.
+    cancel_result, cancel_status = await _cancel_entry_order(
+        api, order_id, client_id,
+        deadline_monotonic=deadline_monotonic,
+    )
     if cancel_status not in (200, 599):
         _seal_live(state, "MAKER_CANCEL_FAILED", recovery=True)
         return latest or cancel_result or placed, 599, client_id
 
+    recovery_deadline = _deadline_after(SAFETY_OPERATION_DEADLINE_SECONDS)
     final = None
     for _ in range(5):
-        candidate, query_status = await api.query_order(SYMBOL, client_id)
+        candidate, query_status = await _api_call(
+            api, "query_order", SYMBOL, client_id,
+            deadline_monotonic=recovery_deadline,
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        )
         if query_status == 200 and isinstance(candidate, dict):
             final = candidate
             if str(candidate.get("status", "")).upper() in TERMINAL_ORDER_STATUSES:
                 break
-        await asyncio.sleep(0.05)
+        remaining = recovery_deadline - time.monotonic()
+        if remaining <= 0.0:
+            break
+        await asyncio.sleep(min(0.05, remaining))
     final_status = str((final or {}).get("status", "")).upper()
     if final_status == "FILLED":
         return final, 200, client_id
     if final_status not in TERMINAL_ORDER_STATUSES:
-        _seal_live(state, "MAKER_CANCEL_UNVERIFIED", recovery=True)
+        reason = (
+            "MAKER_DEADLINE_RECOVERY_REQUIRED"
+            if str((placed or {}).get("code")) == "EXECUTION_DEADLINE_EXCEEDED"
+            else "MAKER_CANCEL_UNVERIFIED"
+        )
+        _seal_live(state, reason, recovery=True)
         return final or cancel_result or placed, 599, client_id
     if _executed_qty(final) > 0.0:
         # Caller will flatten only after the remaining maker quantity is
@@ -472,7 +659,13 @@ async def _hybrid_entry(api, state, side, result, qty, now):
     # first evaluated in shadow against the same causal episode and Guardian.
     return final or placed, 409, client_id
 
-async def _place_stop(api, state, position, event_callback=None):
+async def _place_stop(
+    api, state, position, event_callback=None, *, deadline_monotonic=None,
+):
+    deadline_monotonic = (
+        _deadline_after(SAFETY_OPERATION_DEADLINE_SECONDS)
+        if deadline_monotonic is None else float(deadline_monotonic)
+    )
     client_id = _client_id(state, "stop", position.side, time.time())
     params = {
         "symbol": SYMBOL,
@@ -501,7 +694,12 @@ async def _place_stop(api, state, position, event_callback=None):
             "verification_status": None,
             "reason": "PROTECTION_INTENT_CHECKPOINT_FAILED",
         }
-    response, status = await api.new_algo_order(**params)
+    response, status = await _api_call(
+        api, "new_algo_order",
+        deadline_monotonic=deadline_monotonic,
+        timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        **params,
+    )
     if status == 200 and (response or {}).get("algoId") is not None:
         _transition_transaction(
             state, "PROTECTION_ACKNOWLEDGED", event_callback,
@@ -514,7 +712,11 @@ async def _place_stop(api, state, position, event_callback=None):
     open_status = 599
     recovered = None
     for attempt in range(3):
-        open_algos, open_status = await api.get_open_algo_orders(SYMBOL)
+        open_algos, open_status = await _api_call(
+            api, "get_open_algo_orders", SYMBOL,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        )
         recovered = next(
             (
                 row for row in open_algos
@@ -530,7 +732,10 @@ async def _place_stop(api, state, position, event_callback=None):
         ) if open_status == 200 and isinstance(open_algos, list) else None
         if recovered or attempt == 2:
             break
-        await asyncio.sleep(0.05)
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0.0:
+            break
+        await asyncio.sleep(min(0.05, remaining))
     if recovered:
         position.hard_sl_algo_id = recovered.get("algoId")
         position.hard_sl_client_algo_id = recovered.get(
@@ -561,13 +766,21 @@ async def _place_stop(api, state, position, event_callback=None):
 
 async def _emergency_flatten(
     api, state, side, qty, *, event_callback=None, transaction_reason=None,
+    deadline_monotonic=None,
 ):
+    deadline_monotonic = (
+        _deadline_after(SAFETY_OPERATION_DEADLINE_SECONDS)
+        if deadline_monotonic is None else float(deadline_monotonic)
+    )
     transaction = execution_transaction.snapshot(state) or {}
     existing_id = str(
         transaction.get("emergency_flatten_client_order_id") or ""
     )
     if existing_id:
-        recovered = await _query_fill(api, existing_id, state=state)
+        recovered = await _query_fill(
+            api, existing_id, state=state,
+            deadline_monotonic=deadline_monotonic,
+        )
         if recovered and str(recovered.get("status", "")).upper() == "FILLED":
             result, status = recovered, 200
         else:
@@ -599,13 +812,19 @@ async def _emergency_flatten(
                 )
                 # Persistence loss must never suppress the physical risk action.
                 # Continue with the idempotent client id and keep recovery sealed.
-        result, status = await api.new_order(
+        result, status = await _api_call(
+            api, "new_order",
             SYMBOL, "SELL" if side == "LONG" else "BUY", "MARKET", qty,
             positionSide=side, newOrderRespType="RESULT",
             newClientOrderId=client_id,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
         )
         if status == 599:
-            recovered = await _query_fill(api, client_id, state=state)
+            recovered = await _query_fill(
+                api, client_id, state=state,
+                deadline_monotonic=deadline_monotonic,
+            )
             if recovered and str(recovered.get("status", "")) == "FILLED":
                 result, status = recovered, 200
     if status != 200 or str((result or {}).get("status", "")) not in (
@@ -623,7 +842,11 @@ async def _emergency_flatten(
     elif transaction_reason:
         # A closing fill is not enough: independently verify the account is
         # flat before clearing exposure or publishing a terminal outcome.
-        positions, position_status = await api.get_positions(SYMBOL)
+        positions, position_status = await _api_call(
+            api, "get_positions", SYMBOL,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        )
         still_active = position_status != 200 or any(
             abs(float(row.get("positionAmt", 0.0) or 0.0)) > 0.0
             for row in (positions or [])
@@ -1002,18 +1225,47 @@ async def _open_position_locked(
     price = ask if side == "LONG" else bid
     if price <= 0.0:
         return None
+    execution_policy = str(
+        result.get("execution_policy") or "MAKER"
+    ).upper()
     hard_sl, risk_plan = _risk_geometry(state, side, price)
-    gate_ok, gate_reason, gate_detail = await mainnet_safety.exchange_entry_gate(
-        api, state, price, hard_sl, risk_plan=risk_plan
+    preflight_budget_seconds = (
+        _remaining_submit_budget_ms(result, time.time()) / 1000.0
     )
+    if preflight_budget_seconds <= 0.0:
+        state.wstrade_live_last_entry_gate = {
+            "ok": False,
+            "reason": "EXECUTION_DEADLINE_EXHAUSTED_BEFORE_PREFLIGHT",
+            "detail": {"deadline_contract_version": EXECUTION_DEADLINE_VERSION},
+        }
+        return None
+    try:
+        gate_ok, gate_reason, gate_detail = await asyncio.wait_for(
+            mainnet_safety.exchange_entry_gate(
+                api, state, price, hard_sl, risk_plan=risk_plan
+            ),
+            timeout=preflight_budget_seconds,
+        )
+    except asyncio.TimeoutError:
+        gate_ok, gate_reason, gate_detail = (
+            False,
+            "EXECUTION_PREFLIGHT_DEADLINE_EXCEEDED",
+            {"deadline_contract_version": EXECUTION_DEADLINE_VERSION},
+        )
     state.wstrade_live_last_entry_gate = {
         "ok": gate_ok, "reason": gate_reason, "detail": gate_detail,
     }
     if not gate_ok:
         return None
+    control_budget_ms = _remaining_submit_budget_ms(result, time.time())
+    if execution_policy != "TAKER":
+        # A safe maker timeout needs capacity for submit and cancellation.
+        # Compare measured one-call p95 with half the complete maker window.
+        control_budget_ms = min(
+            control_budget_ms, MAKER_TTL_SECONDS * 1000.0
+        ) / 2.0
     control_plane = _control_plane_snapshot(
-        api, state,
-        opportunity_budget_ms=_remaining_submit_budget_ms(result, time.time()),
+        api, state, opportunity_budget_ms=control_budget_ms,
     )
     state.wstrade_live_last_control_plane_gate = dict(control_plane)
     if control_plane.get("entry_allowed") is False:
@@ -1147,10 +1399,43 @@ async def _open_position_locked(
             reason="EXECUTION_INTENT_CHECKPOINT_FAILED_BEFORE_SUBMIT",
         )
         return None
+    remaining_submit_seconds = (
+        _remaining_submit_budget_ms(result, time.time()) / 1000.0
+    )
+    policy = execution_policy
+    entry_window_seconds = remaining_submit_seconds
+    if policy != "TAKER":
+        entry_window_seconds = min(
+            entry_window_seconds, max(0.0, float(MAKER_TTL_SECONDS))
+        )
+    if entry_window_seconds <= 0.0:
+        state.wstrade_live_last_entry_gate = {
+            "ok": False,
+            "reason": "EXECUTION_DEADLINE_EXHAUSTED_BEFORE_SUBMIT",
+            "detail": {
+                "remaining_submit_ms": remaining_submit_seconds * 1000.0,
+                "execution_policy": policy,
+                "deadline_contract_version": EXECUTION_DEADLINE_VERSION,
+            },
+        }
+        _transition_transaction(
+            state, "NO_POSITION", event_callback,
+            reason="EXECUTION_DEADLINE_EXHAUSTED_BEFORE_SUBMIT",
+        )
+        return None
+    entry_deadline_monotonic = _deadline_after(entry_window_seconds)
+    state.wstrade_live_execution_deadline = {
+        "version": EXECUTION_DEADLINE_VERSION,
+        "execution_policy": policy,
+        "started_monotonic": time.monotonic(),
+        "deadline_monotonic": entry_deadline_monotonic,
+        "sealed_budget_ms": round(entry_window_seconds * 1000.0, 6),
+    }
     _transition_transaction(
         state, "ORDER_SENT", event_callback,
-        execution_policy=str(result.get("execution_policy") or "MAKER").upper(),
+        execution_policy=policy,
         decision_to_submit_ms=_decision_to_submit_ms(result, time.time()),
+        deadline_contract=dict(state.wstrade_live_execution_deadline),
     )
     try:
         _checkpoint_runtime(state)
@@ -1163,7 +1448,10 @@ async def _open_position_locked(
             reason="ORDER_NOT_SUBMITTED_CHECKPOINT_FAILED",
         )
         return None
-    order, status, client_id = await _hybrid_entry(api, state, side, result, qty, now)
+    order, status, client_id = await _hybrid_entry(
+        api, state, side, result, qty, now,
+        deadline_monotonic=entry_deadline_monotonic,
+    )
     if status != 599 and (order or {}).get("orderId") is not None:
         _transition_transaction(
             state, "ACK_KNOWN", event_callback,
@@ -1394,16 +1682,23 @@ async def _close_position_locked(
     api, state, position, reason, now=None, event_callback=None
 ):
     now = time.time() if now is None else float(now)
+    deadline_monotonic = _deadline_after(SAFETY_OPERATION_DEADLINE_SECONDS)
     if position is None or not bool(getattr(position, "active", False)):
         return False
     client_id = _client_id(state, "close", position.side, now)
-    result, status = await api.new_order(
+    result, status = await _api_call(
+        api, "new_order",
         SYMBOL, "SELL" if position.side == "LONG" else "BUY", "MARKET",
         float(position.qty), positionSide=position.side, newOrderRespType="RESULT",
         newClientOrderId=client_id,
+        deadline_monotonic=deadline_monotonic,
+        timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
     )
     if status == 599:
-        recovered = await _query_fill(api, client_id, state=state)
+        recovered = await _query_fill(
+            api, client_id, state=state,
+            deadline_monotonic=deadline_monotonic,
+        )
         if recovered and str(recovered.get("status", "")) == "FILLED":
             result, status = recovered, 200
     if status != 200 or str((result or {}).get("status", "")) not in (
@@ -1419,7 +1714,11 @@ async def _close_position_locked(
     stop_cancel_verified = True
     if position.hard_sl_algo_id is not None:
         try:
-            _, cancel_status = await api.cancel_algo_order(position.hard_sl_algo_id)
+            _, cancel_status = await _api_call(
+                api, "cancel_algo_order", position.hard_sl_algo_id,
+                deadline_monotonic=deadline_monotonic,
+                timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+            )
             stop_cancel_verified = cancel_status == 200
         except Exception:
             stop_cancel_verified = False
@@ -1529,9 +1828,23 @@ async def _reconcile_locked(api, state, event_callback=None, now=None):
     ):
         return "SHADOW"
     now = time.time() if now is None else float(now)
+    deadline_monotonic = _deadline_after(SAFETY_OPERATION_DEADLINE_SECONDS)
     positions_result, algos_result, orders_result = await asyncio.gather(
-        api.get_positions(SYMBOL), api.get_open_algo_orders(SYMBOL),
-        api.get_open_orders(SYMBOL),
+        _api_call(
+            api, "get_positions", SYMBOL,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        ),
+        _api_call(
+            api, "get_open_algo_orders", SYMBOL,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        ),
+        _api_call(
+            api, "get_open_orders", SYMBOL,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        ),
     )
     positions, position_status = positions_result
     algos, algo_status = algos_result
@@ -1553,11 +1866,19 @@ async def _reconcile_locked(api, state, event_callback=None, now=None):
         # flattened. This ordering prevents a late maker fill from reopening
         # exposure after the emergency market order.
         if orders:
-            _, cancel_status = await api.cancel_all_open_orders(SYMBOL)
+            _, cancel_status = await _api_call(
+                api, "cancel_all_open_orders", SYMBOL,
+                deadline_monotonic=deadline_monotonic,
+                timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+            )
             if cancel_status != 200:
                 state.wstrade_reconciliation_status = "RECOVERY_CANCEL_UNVERIFIED"
                 return "RECOVERY_CANCEL_UNVERIFIED"
-            orders, order_status = await api.get_open_orders(SYMBOL)
+            orders, order_status = await _api_call(
+                api, "get_open_orders", SYMBOL,
+                deadline_monotonic=deadline_monotonic,
+                timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+            )
             if order_status != 200 or orders:
                 state.wstrade_reconciliation_status = "RECOVERY_ORDER_STILL_OPEN"
                 return "RECOVERY_ORDER_STILL_OPEN"
@@ -1581,7 +1902,13 @@ async def _reconcile_locked(api, state, event_callback=None, now=None):
             )
             last_flatten_order = flatten_order
             flattened = flattened and status == 200
-        verified, verified_status = await api.get_positions(SYMBOL)
+        verified, verified_status = await _api_call(
+            api, "get_positions", SYMBOL,
+            deadline_monotonic=_deadline_after(
+                SAFETY_OPERATION_DEADLINE_SECONDS
+            ),
+            timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+        )
         still_active = verified_status != 200 or any(
             abs(float(row.get("positionAmt", 0.0) or 0.0)) > 0.0
             for row in verified
@@ -1606,7 +1933,11 @@ async def _reconcile_locked(api, state, event_callback=None, now=None):
         return "UNOWNED_POSITION_FLATTENED"
     if not local_active:
         if algos:
-            _, cancel_status = await api.cancel_all_algo_orders(SYMBOL)
+            _, cancel_status = await _api_call(
+                api, "cancel_all_algo_orders", SYMBOL,
+                deadline_monotonic=deadline_monotonic,
+                timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+            )
             if cancel_status != 200:
                 state.wstrade_reconciliation_status = "ORPHAN_ALGO_CANCEL_FAILED"
                 return "ORPHAN_ALGO_CANCEL_FAILED"
@@ -1656,7 +1987,11 @@ async def _reconcile_locked(api, state, event_callback=None, now=None):
     ).upper() == local.side), None)
     if exchange_row is None:
         if algos:
-            _, cancel_status = await api.cancel_all_algo_orders(SYMBOL)
+            _, cancel_status = await _api_call(
+                api, "cancel_all_algo_orders", SYMBOL,
+                deadline_monotonic=deadline_monotonic,
+                timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+            )
             if cancel_status != 200:
                 state.wstrade_reconciliation_status = "EXIT_ORPHAN_ALGO_CANCEL_FAILED"
                 return "EXIT_ORPHAN_ALGO_CANCEL_FAILED"
@@ -1691,7 +2026,13 @@ async def _reconcile_locked(api, state, event_callback=None, now=None):
             transaction_reason="HARD_STOP_MISSING",
         )
         if close_status == 200:
-            verified, verified_status = await api.get_positions(SYMBOL)
+            verified, verified_status = await _api_call(
+                api, "get_positions", SYMBOL,
+                deadline_monotonic=_deadline_after(
+                    SAFETY_OPERATION_DEADLINE_SECONDS
+                ),
+                timeout_cap_seconds=SAFETY_TRANSPORT_CAP_SECONDS,
+            )
             still_active = verified_status != 200 or any(
                 abs(float(row.get("positionAmt", 0.0) or 0.0)) > 0.0
                 for row in verified
@@ -1779,14 +2120,16 @@ async def _reconcile_locked(api, state, event_callback=None, now=None):
 
 
 async def open_position(api, state, side, result, now=None, event_callback=None):
-    async with _execution_lock(state):
+    async with _execution_guard(state, priority=10):
         return await _open_position_locked(
             api, state, side, result, now=now, event_callback=event_callback
         )
 
 
 async def close_position(api, state, position, reason, now=None, event_callback=None):
-    async with _execution_lock(state):
+    # Exposure reduction wins the next single-writer slot.  It is never
+    # admitted/rejected by the entry latency control plane.
+    async with _execution_guard(state, priority=0):
         return await _close_position_locked(
             api, state, position, reason, now=now,
             event_callback=event_callback,
@@ -1794,7 +2137,7 @@ async def close_position(api, state, position, reason, now=None, event_callback=
 
 
 async def reconcile(api, state, event_callback=None, now=None):
-    async with _execution_lock(state):
+    async with _execution_guard(state, priority=20):
         return await _reconcile_locked(
             api, state, event_callback=event_callback, now=now
         )

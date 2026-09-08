@@ -742,7 +742,7 @@ class LiveExecutionTests(unittest.TestCase):
     def test_maker_partial_is_terminal_before_emergency_flatten(self):
         async def run():
             api, s = MakerApi(), state()
-            with patch.object(live, 'MAKER_TTL_SECONDS', 0.0), patch.object(
+            with patch.object(live, 'MAKER_TTL_SECONDS', 0.01), patch.object(
                 live.mainnet_safety, 'exchange_entry_gate',
                 new=AsyncMock(return_value=(True, 'PASS', {})),
             ), patch.object(
@@ -761,7 +761,7 @@ class LiveExecutionTests(unittest.TestCase):
     def test_nonterminal_maker_never_flattens_before_recovery_cancel(self):
         async def run():
             api, s = MakerApi(terminal='NEW', executed='0.0004'), state()
-            with patch.object(live, 'MAKER_TTL_SECONDS', 0.0), patch.object(
+            with patch.object(live, 'MAKER_TTL_SECONDS', 0.01), patch.object(
                 live.mainnet_safety, 'exchange_entry_gate',
                 new=AsyncMock(return_value=(True, 'PASS', {})),
             ), patch.object(

@@ -11,6 +11,8 @@ from loi_he_thong import execution_control_plane
 
 class BinanceAPI:
     BASE_URL = "https://fapi.binance.com"
+    supports_execution_deadline = True
+    DEADLINE_CONTRACT_VERSION = "BINANCE_TRANSPORT_DEADLINE_V1"
 
     def __init__(self, api_key, secret_key):
         self.base_url = self.BASE_URL
@@ -20,7 +22,13 @@ class BinanceAPI:
             base_url=self.base_url,
             timeout=10,
         )
-        self._control_plane = execution_control_plane.Monitor()
+        # Measurements are execution facts, not market alpha.  The production
+        # adapter is allowed to reject a *new entry* when its observed p95 no
+        # longer fits the sealed opportunity budget.  Exit/recovery callers do
+        # not pass through this admission gate.
+        self._control_plane = execution_control_plane.Monitor(
+            latency_authority_enabled=True,
+        )
 
     @staticmethod
     def _error_payload(exc):
@@ -28,22 +36,92 @@ class BinanceAPI:
             return {"code": exc.error_code, "message": exc.error_message}, exc.status_code
         return {"code": "NETWORK", "message": str(exc)}, 599
 
+    @staticmethod
+    def _deadline_error(operation, timeout_seconds):
+        return {
+            "code": "EXECUTION_DEADLINE_EXCEEDED",
+            "message": "transport did not complete inside the sealed deadline",
+            "operation": str(operation or "UNKNOWN"),
+            "timeout_seconds": round(max(0.0, float(timeout_seconds)), 6),
+            "deadline_contract_version": BinanceAPI.DEADLINE_CONTRACT_VERSION,
+        }, 599
+
+    def _deadline_client(self, timeout_seconds):
+        """Create a request-local client so concurrent calls cannot race timeout."""
+        source = self.client
+        return UMFutures(
+            key=getattr(source, "key", None),
+            secret=getattr(source, "secret", None),
+            base_url=getattr(source, "base_url", self.base_url),
+            timeout=max(0.001, float(timeout_seconds)),
+            proxies=getattr(source, "proxies", None),
+            show_limit_usage=bool(getattr(source, "show_limit_usage", False)),
+            show_header=bool(getattr(source, "show_header", False)),
+            private_key=getattr(source, "private_key", None),
+            private_key_passphrase=getattr(
+                source, "private_key_pass", None
+            ),
+        )
+
     async def _call(
-        self, func, *args, operation=None, control=False, **kwargs
+        self, func, *args, operation=None, control=False,
+        deadline_monotonic=None, timeout_cap_seconds=None, **kwargs
     ):
+        operation = operation or getattr(func, "__name__", "UNKNOWN")
+        timeout_seconds = None
+        if deadline_monotonic is not None:
+            timeout_seconds = max(
+                0.0, float(deadline_monotonic) - time.monotonic()
+            )
+        if timeout_cap_seconds is not None:
+            cap = max(0.0, float(timeout_cap_seconds))
+            timeout_seconds = (
+                cap if timeout_seconds is None else min(timeout_seconds, cap)
+            )
         monitor = getattr(self, "_control_plane", None)
         token = monitor.begin(
-            operation or getattr(func, "__name__", "UNKNOWN"),
+            operation,
             control=bool(control),
         ) if monitor is not None else None
 
+        if timeout_seconds is not None and timeout_seconds <= 0.0:
+            if monitor is not None:
+                monitor.complete(token, 599)
+            return self._deadline_error(operation, timeout_seconds)
+
         def invoke():
+            request_client = None
             try:
-                return func(*args, **kwargs), 200
+                target = func
+                # The connector stores timeout on its client, not per request.
+                # Never mutate that shared value: a concurrent safety call may
+                # have a different deadline.  A request-local client gives the
+                # underlying socket the same bound as the asyncio caller.
+                if (
+                    timeout_seconds is not None
+                    and getattr(func, "__self__", None) is self.client
+                ):
+                    request_client = self._deadline_client(timeout_seconds)
+                    target = getattr(request_client, func.__name__)
+                return target(*args, **kwargs), 200
             except Exception as exc:
                 return self._error_payload(exc)
+            finally:
+                session = getattr(request_client, "session", None)
+                if session is not None:
+                    session.close()
         try:
-            result, status = await asyncio.to_thread(invoke)
+            work = asyncio.to_thread(invoke)
+            if timeout_seconds is None:
+                result, status = await work
+            else:
+                result, status = await asyncio.wait_for(
+                    work, timeout=max(0.001, timeout_seconds)
+                )
+        except asyncio.TimeoutError:
+            if monitor is not None:
+                monitor.complete(token, 599)
+            return self._deadline_error(operation, timeout_seconds)
         except BaseException:
             if monitor is not None:
                 monitor.complete(token, 599)
@@ -148,19 +226,29 @@ class BinanceAPI:
     async def get_exchange_info(self):
         return await self._call(self.client.exchange_info)
 
-    async def get_positions(self, symbol=None):
+    async def get_positions(
+        self, symbol=None, *, deadline_monotonic=None,
+        timeout_cap_seconds=None,
+    ):
         params = {"symbol": symbol} if symbol else {}
         result, status = await self._call(
             self.client.get_position_risk, **params,
             operation="GET_POSITIONS", control=True,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
         return (result if status == 200 else []), status
 
-    async def get_open_orders(self, symbol=None):
+    async def get_open_orders(
+        self, symbol=None, *, deadline_monotonic=None,
+        timeout_cap_seconds=None,
+    ):
         params = {"symbol": symbol} if symbol else {}
         return await self._call(
             self.client.get_orders, **params,
             operation="GET_OPEN_ORDERS", control=True,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
 
     async def new_listen_key(self):
@@ -289,7 +377,10 @@ class BinanceAPI:
 
         return self._page_error("income history exceeded pagination safety limit")
 
-    async def new_order(self, symbol, side, type, quantity=None, **kwargs):
+    async def new_order(
+        self, symbol, side, type, quantity=None, *,
+        deadline_monotonic=None, timeout_cap_seconds=None, **kwargs
+    ):
         params = {"symbol": symbol, "side": side, "type": type}
         if quantity is not None:
             params["quantity"] = quantity
@@ -297,26 +388,50 @@ class BinanceAPI:
         return await self._call(
             self.client.new_order, **params,
             operation="NEW_ORDER", control=True,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
 
-    async def cancel_all_open_orders(self, symbol):
+    async def cancel_all_open_orders(
+        self, symbol, *, deadline_monotonic=None,
+        timeout_cap_seconds=None,
+    ):
         return await self._call(
             self.client.cancel_open_orders, symbol=symbol,
             operation="CANCEL_ALL_OPEN_ORDERS", control=True,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
 
-    async def cancel_order(self, symbol, order_id):
+    async def cancel_order(
+        self, symbol, order_id=None, *, client_order_id=None,
+        deadline_monotonic=None, timeout_cap_seconds=None,
+    ):
+        params = {"symbol": symbol}
+        if order_id is not None:
+            params["orderId"] = order_id
+        elif client_order_id:
+            params["origClientOrderId"] = str(client_order_id)
+        else:
+            return {"code": "ORDER_IDENTITY_REQUIRED"}, 400
         return await self._call(
-            self.client.cancel_order, symbol=symbol, orderId=order_id,
+            self.client.cancel_order, **params,
             operation="CANCEL_ORDER", control=True,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
 
-    async def query_order(self, symbol, client_order_id):
+    async def query_order(
+        self, symbol, client_order_id, *, deadline_monotonic=None,
+        timeout_cap_seconds=None,
+    ):
         return await self._call(
             self.client.query_order,
             operation="QUERY_ORDER", control=True,
             symbol=symbol,
             origClientOrderId=client_order_id,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
 
     async def get_account_trades(self, symbol, start_time=None):
@@ -328,7 +443,9 @@ class BinanceAPI:
             operation="GET_ACCOUNT_TRADES", control=True,
         )
 
-    async def new_algo_order(self, **params):
+    async def new_algo_order(
+        self, *, deadline_monotonic=None, timeout_cap_seconds=None, **params
+    ):
         payload = {"algoType": "CONDITIONAL", **params}
         return await self._call(
             self.client.sign_request,
@@ -336,6 +453,8 @@ class BinanceAPI:
             "/fapi/v1/algoOrder",
             payload,
             operation="NEW_ALGO_ORDER", control=True,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
 
     async def query_algo_order(self, algo_id):
@@ -347,7 +466,10 @@ class BinanceAPI:
             operation="QUERY_ALGO_ORDER", control=True,
         )
 
-    async def get_open_algo_orders(self, symbol=None):
+    async def get_open_algo_orders(
+        self, symbol=None, *, deadline_monotonic=None,
+        timeout_cap_seconds=None,
+    ):
         params = {"symbol": symbol} if symbol else {}
         return await self._call(
             self.client.sign_request,
@@ -355,24 +477,36 @@ class BinanceAPI:
             "/fapi/v1/openAlgoOrders",
             params,
             operation="GET_OPEN_ALGO_ORDERS", control=True,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
 
-    async def cancel_algo_order(self, algo_id):
+    async def cancel_algo_order(
+        self, algo_id, *, deadline_monotonic=None,
+        timeout_cap_seconds=None,
+    ):
         return await self._call(
             self.client.sign_request,
             "DELETE",
             "/fapi/v1/algoOrder",
             {"algoId": algo_id},
             operation="CANCEL_ALGO_ORDER", control=True,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
 
-    async def cancel_all_algo_orders(self, symbol):
+    async def cancel_all_algo_orders(
+        self, symbol, *, deadline_monotonic=None,
+        timeout_cap_seconds=None,
+    ):
         return await self._call(
             self.client.sign_request,
             "DELETE",
             "/fapi/v1/algoOpenOrders",
             {"symbol": symbol},
             operation="CANCEL_ALL_ALGO_ORDERS", control=True,
+            deadline_monotonic=deadline_monotonic,
+            timeout_cap_seconds=timeout_cap_seconds,
         )
 
     async def close(self):
