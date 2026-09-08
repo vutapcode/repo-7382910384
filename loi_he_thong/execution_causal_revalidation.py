@@ -227,9 +227,21 @@ def _material_streak(rows, side, *, minimum=2):
 def _opposing_ok(rows, side):
     """Submit-safety contradiction guard, never a second Entry council."""
     opposing = "SHORT" if str(side).upper() == "LONG" else "LONG"
+    futures_only_opposition = None
     for venue in ("binance_spot", "coinbase_spot", "futures"):
         streak = _material_streak(rows.get(venue, ()), opposing)
         if streak:
+            if venue == "futures":
+                futures_only_opposition = {
+                    "venue": venue,
+                    "side": opposing,
+                    "buckets": [
+                        int(row.get("bucket_start_ms", 0) or 0)
+                        for row in streak
+                    ],
+                    "authority": "DERIVATIVES_CONTEXT_ONLY",
+                }
+                continue
             return False, "POST_PROOF_OPPOSING_FLOW_2_BUCKETS", {
                 "venue": venue,
                 "buckets": [int(row.get("bucket_start_ms", 0) or 0) for row in streak],
@@ -274,7 +286,9 @@ def _opposing_ok(rows, side):
                     "coherence_gap_ms": abs(flow_bucket - price_bucket),
                     "coherence_limit_ms": ignition_core.EVIDENCE_GAP_MS,
                 }
-    return True, "PASS", {}
+    return True, "PASS", {
+        "futures_only_opposition": futures_only_opposition,
+    } if futures_only_opposition else {}
 
 
 def _submit_timing_telemetry(state, side, result, now):
@@ -381,6 +395,11 @@ def validate_submit(state, side, result, now):
                 "kind": "CASH_PRICE_FLOW_REVERSAL",
                 "venues": [venue] if venue else [],
             }
+        elif detail.get("futures_only_opposition"):
+            contradiction = {
+                "kind": "OPPOSING_FLOW",
+                "venues": ["futures"],
+            }
         facts = dict(physical_facts)
         if contradiction is not None:
             facts["post_go_contradiction"] = contradiction
@@ -457,6 +476,7 @@ def validate_submit(state, side, result, now):
         return verdict(ok, reason, detail)
     return verdict(True, "PASS", {
         **authority_detail,
+        **detail,
         "proof_age_seconds": round(proof_age, 6),
         "bbo_age_seconds": round(bbo_age, 6),
         "post_result_rows": {name: len(value) for name, value in rows.items()},

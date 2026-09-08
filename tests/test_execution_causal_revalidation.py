@@ -252,7 +252,7 @@ class ExecutionCausalRevalidationTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "POST_PROOF_OPPOSING_FLOW_2_BUCKETS")
 
-    def test_futures_only_opposition_is_tagged_for_phase6_ablation(self):
+    def test_futures_only_opposition_is_context_not_submit_veto(self):
         state, result = fixture()
         history = state._ignition_signal_engine.venues["futures"].history
         history.extend([
@@ -262,8 +262,12 @@ class ExecutionCausalRevalidationTests(unittest.TestCase):
         ok, reason, detail = recheck.validate_submit(
             state, "LONG", result, 10.0
         )
-        self.assertFalse(ok)
-        self.assertEqual(reason, "POST_PROOF_OPPOSING_FLOW_2_BUCKETS")
+        self.assertTrue(ok)
+        self.assertEqual(reason, "PASS")
+        self.assertEqual(
+            detail["futures_only_opposition"]["authority"],
+            "DERIVATIVES_CONTEXT_ONLY",
+        )
         comparison = detail["phase6_execution_shadow"]
         self.assertTrue(comparison["comparison_eligible"])
         self.assertTrue(comparison["shadow"]["ok"])
