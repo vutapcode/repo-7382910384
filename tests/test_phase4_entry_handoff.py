@@ -190,6 +190,26 @@ class Phase4EntryHandoffTests(unittest.TestCase):
         source = inspect.getsource(launcher._entry_loop)
         self.assertNotIn("_bias_or_transition_authorized(", source)
 
+    def test_shadow_readiness_has_one_owner_and_cannot_silently_drop_go(self):
+        async def run():
+            state = SimpleNamespace(
+                mainnet_shadow_ready=False,
+                wstrade_live_armed=False,
+            )
+            result = {"decision": "GO", "causal_episode_id": "episode-ready"}
+            with patch.object(launcher.app, "state", state), patch.object(
+                launcher, "_entry_handoff_valid", return_value=True,
+            ), patch.object(
+                launcher, "_open_shadow", return_value="SHADOW_HANDLED",
+            ) as open_shadow:
+                position = await launcher._open_position(
+                    "LONG", result, 1.0,
+                )
+            self.assertEqual(position, "SHADOW_HANDLED")
+            open_shadow.assert_called_once_with("LONG", result, 1.0)
+
+        asyncio.run(run())
+
 
 if __name__ == "__main__":
     unittest.main()

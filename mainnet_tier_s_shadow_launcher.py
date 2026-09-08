@@ -1873,9 +1873,6 @@ async def _open_position(side, result, now):
             "entry_thesis_handoff",
         )
         return None
-    if not bool(getattr(app.state, "mainnet_shadow_ready", False)):
-        app.state.mainnet_shadow_last_skip = "STALE_ENTRY_RUNTIME_HEALTH"
-        return None
     # Demo and live share the same causal submit contract. Live repeats this
     # check after account/REST latency; shadow performs it here so the sample
     # population cannot include decisions that real execution would reject.
