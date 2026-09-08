@@ -1,5 +1,4 @@
 """Canonical Entry Edge, Guardian-risk and persistence hardening wrapper."""
-import asyncio
 import logging
 import time
 
@@ -312,25 +311,11 @@ def _assess_and_persist(pos, px, guardian, market_state=None, now=None):
         _last_persist = t
     return out
 
-async def _bias_loop():
-    while True:
-        try:
-            s = base.app.state
-            result = base.bias_council.update_state(s, now=time.time())
-            s.bias_council = result
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logging.exception("[MAINNET-SHADOW] canonical Tier-S bias loop failure")
-            await asyncio.sleep(0.50)
-        await asyncio.sleep(base.BIAS_SCOUT)
-
 # Install core hardening first.
 risk.assess = _assess_and_persist
 base._shadow_account_init = _account_init
 base._entry_quorum_ok = _entry_quorum_ok
 base._open_shadow = _open_shadow
-base._bias_loop = _bias_loop
 
 # Keep a conservative fallback for missing authenticated commission data.  When
 # Binance commission is verified, each position carries its actual maker/taker

@@ -144,7 +144,8 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         self.assertIn("shadow_runtime_health_runtime", text)
         self.assertIn("shadow_runtime_state_runtime", text)
         self.assertIn("BIAS_INVALID_OR_EXPIRED", text)
-        self.assertIn("base._bias_loop = _bias_loop", text)
+        self.assertNotIn("base._bias_loop = _bias_loop", text)
+        self.assertNotIn("await asyncio.sleep(base.BIAS_SCOUT)", text)
         self.assertIn("async def _account_init()", text)
         self.assertIn("await _orig_account_init()", text)
         self.assertIn(
