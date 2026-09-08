@@ -16,12 +16,38 @@ from loi_he_thong import authority_contracts
 
 SYMBOL = "BTCUSDT"
 VN_TZ = timezone(timedelta(hours=7))
+ENTRY_OPERATIONAL_SAFETY_VERSION = "ENTRY_OPERATIONAL_SAFETY_V1"
+
+
+def set_entry_operational_blocker(state, reason, active, detail=None):
+    """Maintain independent execution-safety facts without rewriting Entry."""
+    reason = str(reason or "UNKNOWN_OPERATIONAL_BLOCKER").upper()
+    blockers = dict(getattr(state, "entry_operational_blockers", {}) or {})
+    if active:
+        blockers[reason] = dict(detail or {})
+    else:
+        blockers.pop(reason, None)
+    state.entry_operational_blockers = blockers
+    return entry_operational_safety(state)
+
+
+def entry_operational_safety(state):
+    blockers = dict(getattr(state, "entry_operational_blockers", {}) or {})
+    return {
+        "version": ENTRY_OPERATIONAL_SAFETY_VERSION,
+        "owner": "MAINNET_SAFETY",
+        "allowed": not bool(blockers),
+        "blockers": sorted(blockers),
+        "details": {name: blockers[name] for name in sorted(blockers)},
+        "market_thesis_rewritten": False,
+    }
 
 
 def safety_contract(state, causal_episode_id=None, *, has_exposure=False):
     """Snapshot operational safety only; never label a market thesis false."""
     runtime = dict(getattr(state, "mainnet_shadow_health", {}) or {})
     operational = list(runtime.get("operational_blockers") or ())
+    operational.extend(entry_operational_safety(state)["blockers"])
     if bool(getattr(state, "execution_unknown", False)):
         operational.append("execution_unknown")
     if bool(getattr(state, "wstrade_execution_recovery_required", False)):

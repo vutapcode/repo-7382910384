@@ -1,26 +1,14 @@
 """Fail closed on new entries while flat shadow persistence is dirty, and retry it safely."""
 import time
 
+from loi_he_thong import mainnet_safety
+
 _MIN_RETRY_SEC = 1.0
 _MAX_RETRY_SEC = 5.0
 
 def _retry_delay(consecutive_errors):
     exponent = max(0, min(3, int(consecutive_errors) - 1))
     return min(_MAX_RETRY_SEC, _MIN_RETRY_SEC * (2 ** exponent))
-
-def _wait_result(base, state, now, side):
-    current = str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
-    return {
-        "version": getattr(base.entry_council, "VERSION", "ENTRY"),
-        "decision": "WAIT",
-        "entry_mode": "NONE",
-        "phase": "ARMED",
-        "confidence": 0.0,
-        "reason": "PERSISTENCE_DIRTY_RETRY",
-        "side": current,
-        "s_votes": {},
-        "ts": float(time.time() if now is None else now),
-    }
 
 def install(wrapper):
     base = wrapper.base
@@ -69,10 +57,21 @@ def install(wrapper):
                     state_obj.shadow_persistence_retry_after_sec = 0.0
                     state_obj.shadow_persistence_last_ok_at = wall
 
-            if bool(getattr(state_obj, "shadow_persistence_dirty", False)):
-                return _wait_result(base, state_obj, now, side)
-
-        return original(state_obj, now=now, side=side)
+        dirty = bool(getattr(state_obj, "shadow_persistence_dirty", False))
+        safety = mainnet_safety.set_entry_operational_blocker(
+            state_obj, "PERSISTENCE_DIRTY_RETRY", dirty,
+            {
+                "last_error": getattr(
+                    state_obj, "shadow_persistence_last_error", None,
+                ),
+                "retry_after_sec": float(getattr(
+                    state_obj, "shadow_persistence_retry_after_sec", 0.0,
+                ) or 0.0),
+            },
+        )
+        result = dict(original(state_obj, now=now, side=side) or {})
+        result["operational_safety"] = safety
+        return result
 
     base.entry_council.evaluate = evaluate_with_flat_persistence_gate
     return evaluate_with_flat_persistence_gate

@@ -177,6 +177,12 @@ def _entry_quorum_outcome(result, state, now):
     gate = entry_gate_outcome.from_edge_report(
         allowed, report, live=(scope == "LIVE"),
     )
+    safety = base.mainnet_safety.entry_operational_safety(state)
+    if allowed and not safety["allowed"]:
+        gate = entry_gate_outcome.outcome(
+            False, "SAFETY", "OPERATIONAL_ENTRY_SAFETY",
+            safety["blockers"][0], safety,
+        )
     state.entry_gate_outcome = gate
     return gate
 
@@ -401,7 +407,8 @@ _health_probe = health.install(base, risk, edge)
 _health_eval = base.entry_council.evaluate
 def _entry_evaluate_context_guard(state, now=None, side=None):
     now = time.time() if now is None else float(now)
-    if bool(getattr(state, "futures_flow_ring_saturated", False)):
+    saturated = bool(getattr(state, "futures_flow_ring_saturated", False))
+    if saturated:
         previous = str(getattr(state, "_entry_causal_context_side", "ABSTAIN") or "ABSTAIN").upper()
         if previous in ("LONG", "SHORT"):
             _reset_entry_context(
@@ -411,17 +418,13 @@ def _entry_evaluate_context_guard(state, now=None, side=None):
         state.mainnet_shadow_ready = False
         state.system_ready = False
         state.last_readiness_reason = "SHADOW_FEED_DEGRADED:futures_flow_ring_saturated"
-        return {
-            "version": getattr(base.entry_council, "VERSION", "ENTRY"),
-            "decision": "WAIT",
-            "entry_mode": "NONE",
-            "phase": "ARMED",
-            "confidence": 0.0,
-            "reason": "FUTURES_FLOW_RING_SATURATED",
-            "side": str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper(),
-            "s_votes": {},
-            "ts": now,
-        }
+    safety = base.mainnet_safety.set_entry_operational_blocker(
+        state, "FUTURES_FLOW_RING_SATURATED", saturated,
+        {
+            "ring_size": int(getattr(state, "futures_flow_ring_size", 0) or 0),
+            "ring_maxlen": int(getattr(state, "futures_flow_ring_maxlen", 0) or 0),
+        },
+    )
     current = str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
     conf = float(getattr(state, "bias_confidence", 0.0) or 0.0)
     bias_ts = float(getattr(state, "bias_updated_at", 0.0) or 0.0)
@@ -435,7 +438,9 @@ def _entry_evaluate_context_guard(state, now=None, side=None):
     elif previous != current:
         reason = "BIAS_SIDE_CHANGE" if previous in ("LONG", "SHORT") else "BIAS_ACQUIRE"
         _reset_entry_context(state, current, reason, now)
-    return _health_eval(state, now=now, side=side)
+    result = dict(_health_eval(state, now=now, side=side) or {})
+    result["operational_safety"] = safety
+    return result
 
 base.entry_council.evaluate = _entry_evaluate_context_guard
 

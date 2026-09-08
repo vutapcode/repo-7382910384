@@ -3,6 +3,8 @@ import os
 import time
 from pathlib import Path
 
+from loi_he_thong import mainnet_safety
+
 _HEALTHY_CHECK_INTERVAL_SEC = 30.0
 _PRESSURE_RECHECK_INTERVAL_SEC = 5.0
 from loi_he_thong.storage_health import measure as measure_storage
@@ -18,21 +20,6 @@ def _journal_root():
 def _measure(path):
     status = measure_storage(path)
     return status["free_bytes"], status["free_ratio"]
-
-
-def _wait_result(base, state, now, side, reason):
-    current = str(side or getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
-    return {
-        "version": getattr(base.entry_council, "VERSION", "ENTRY"),
-        "decision": "WAIT",
-        "entry_mode": "NONE",
-        "phase": "ARMED",
-        "confidence": 0.0,
-        "reason": reason,
-        "side": current,
-        "s_votes": {},
-        "ts": float(time.time() if now is None else now),
-    }
 
 
 def install(wrapper):
@@ -69,9 +56,24 @@ def install(wrapper):
             interval = _PRESSURE_RECHECK_INTERVAL_SEC if pressure else _HEALTHY_CHECK_INTERVAL_SEC
             state_obj.shadow_disk_check_after_mono = mono + interval
 
-        if bool(getattr(state_obj, "shadow_disk_pressure", False)):
-            return _wait_result(base, state_obj, now, side, "DISK_PRESSURE")
-        return original(state_obj, now=now, side=side)
+        pressure = bool(getattr(state_obj, "shadow_disk_pressure", False))
+        safety = mainnet_safety.set_entry_operational_blocker(
+            state_obj, "DISK_PRESSURE", pressure,
+            {
+                "free_bytes": getattr(
+                    state_obj, "shadow_disk_free_bytes", None,
+                ),
+                "free_ratio": getattr(
+                    state_obj, "shadow_disk_free_ratio", None,
+                ),
+                "measurement_error": getattr(
+                    state_obj, "shadow_disk_check_error", None,
+                ),
+            },
+        )
+        result = dict(original(state_obj, now=now, side=side) or {})
+        result["operational_safety"] = safety
+        return result
 
     base.entry_council.evaluate = evaluate_with_disk_gate
     return evaluate_with_disk_gate
