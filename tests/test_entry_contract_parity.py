@@ -79,6 +79,34 @@ class EntryContractParityTests(unittest.TestCase):
             "NOT_APPLICABLE_UNTIL_GO",
         )
 
+    def test_wait_clears_previous_decision_economics(self):
+        state = SimpleNamespace(wstrade_live_armed=False)
+        with patch.object(
+            active_launcher.base.entry_council,
+            "validate_frozen_entry_contract",
+            return_value=(True, "PASS", {}),
+        ), patch.object(
+            active_launcher.edge, "authorize",
+            return_value=(True, {
+                "edge_class": "RESIDUAL_POSITIVE",
+                "cost_ok": True,
+                "execution_cost_contract": {"contract_id": "wave-a"},
+            }),
+        ):
+            self.assertTrue(active_launcher._entry_quorum_ok(
+                {"decision": "GO", "ignition": {}}, state, 1.0,
+            ))
+        self.assertEqual(state.entry_edge_class, "RESIDUAL_POSITIVE")
+
+        self.assertFalse(active_launcher._entry_quorum_ok(
+            {"decision": "WAIT", "reason": "BIAS_NOT_READY"}, state, 2.0,
+        ))
+        self.assertEqual(state.entry_edge_tier, {})
+        self.assertIsNone(state.entry_edge_class)
+        self.assertIsNone(state.entry_edge_cost_ok)
+        self.assertEqual(state.entry_edge_updated_at, 0.0)
+        self.assertEqual(state.entry_tier_s_volume_quality, {})
+
     def test_active_runtime_does_not_reinterpret_validated_ignition(self):
         result = {"decision": "GO", "ignition": {}}
         state = SimpleNamespace(wstrade_live_armed=False)

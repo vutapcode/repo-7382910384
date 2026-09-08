@@ -121,6 +121,14 @@ def _flow_volume_quorum_required(state, now, required=2):
 
 def _entry_quorum_outcome(result, state, now):
     """Evaluate each existing owner once and preserve the real blocker."""
+    # Economics is decision-scoped.  Clear the previous decision before any
+    # early return so a WAIT/structural reject cannot inherit another wave's
+    # cost plan, edge class or volume proof through shared runtime state.
+    state.entry_edge_tier = {}
+    state.entry_edge_class = None
+    state.entry_edge_cost_ok = None
+    state.entry_edge_updated_at = 0.0
+    state.entry_tier_s_volume_quality = {}
     if (result or {}).get("decision") != "GO":
         gate = entry_gate_outcome.from_entry_decision(result)
         state.entry_gate_outcome = gate
