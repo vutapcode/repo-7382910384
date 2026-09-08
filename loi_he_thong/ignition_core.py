@@ -3167,19 +3167,50 @@ def _proof(episode, histories):
                     // ignition_signals.BUCKET_MS - 1,
                 )
                 observed_between = len(intervening)
-                missing_between = max(0, expected_between - observed_between)
-                # Episode continuity on another venue cannot turn two
-                # disconnected cash impulses into one persistent metaorder.
-                # Reuse the existing causal evidence-decay contract.
+                silent_between = max(0, expected_between - observed_between)
+                proof_epoch = int(
+                    rows[-2].get("epoch")
+                    if rows[-2].get("epoch") is not None else -1
+                )
+                source_gap = bool(
+                    proof_epoch < 0
+                    or int(
+                        rows[-1].get("epoch")
+                        if rows[-1].get("epoch") is not None else -1
+                    ) != proof_epoch
+                    or any(
+                        int(
+                            row.get("epoch")
+                            if row.get("epoch") is not None else -1
+                        ) != proof_epoch
+                        or not row.get("clock_valid")
+                        # Historical WAL rows before the health field existed
+                        # are governed by their clock/epoch contract.  Active
+                        # V4 rows always publish source_health explicitly.
+                        or str(row.get("source_health") or "FRESH").upper()
+                        != "FRESH"
+                        for row in (rows[-2], *intervening, rows[-1])
+                    )
+                )
+                opposing_control = any(
+                    str(row.get("side") or "NEUTRAL").upper() != side
+                    and _material_flow(row)
+                    for row in intervening
+                )
+                # SignalEngine stores executed-trade buckets only.  Therefore
+                # an absent 100 ms row is market silence, not missing data.
+                # Epoch/clock/source health owns real gap detection; a material
+                # opposing bucket owns causal contradiction.
                 if (
                     second_bucket <= first_bucket
                     or second_bucket - first_bucket > EVIDENCE_GAP_MS
-                    or missing_between > 0
+                    or source_gap
+                    or opposing_control
                 ):
                     continue
                 proof = dict(rows[-1])
                 proof["_metaorder_evidence"] = {
-                    "version": "METAORDER_PROOF_QUALITY_V2_GAP_AUTHORITY",
+                    "version": "METAORDER_PROOF_QUALITY_V3_SILENCE_AWARE",
                     "proof_buckets": [first_bucket, second_bucket],
                     "proof_bucket_gap_ms": second_bucket - first_bucket,
                     "proof_buckets_adjacent": bool(
@@ -3190,9 +3221,14 @@ def _proof(episode, histories):
                     "intervening_nonmaterial_buckets": sum(
                         not _material_flow(row) for row in intervening
                     ),
-                    "intervening_missing_buckets": missing_between,
+                    "intervening_silent_buckets": silent_between,
+                    "intervening_missing_buckets": 0,
+                    "source_gap_detected": False,
+                    "opposing_control_detected": False,
                     "metadata_authority": True,
-                    "proof_policy": "OBSERVED_BRIEF_PAUSE_ONLY_MAX_CAUSAL_DECAY",
+                    "proof_policy": (
+                        "QUIET_BUCKET_ALLOWED_REAL_GAP_OR_OPPOSING_CONTROL_REJECTED"
+                    ),
                 }
                 candidates.append(("METAORDER_CONTINUATION", proof, venue))
         assessment = _failed_reversion_assessment(

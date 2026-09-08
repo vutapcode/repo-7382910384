@@ -2917,6 +2917,48 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertEqual(evidence["intervening_nonmaterial_buckets"], 1)
         self.assertTrue(evidence["metadata_authority"])
 
+    def test_metaorder_proof_treats_quiet_bucket_as_silence_not_feed_gap(self):
+        first = evidence_row(3_100, "LONG", 100.001)
+        second = evidence_row(3_300, "LONG", 100.003)
+        episode = {
+            "side": "LONG", "started_receive_ms": 3_000,
+            "signals": [first, second],
+        }
+
+        proof_type, proof_signal, proof_venue = ignition_core._proof(
+            episode,
+            {"binance_spot": (first, second)},
+        )
+
+        self.assertEqual(proof_type, "METAORDER_CONTINUATION")
+        self.assertEqual(proof_venue, "binance_spot")
+        evidence = proof_signal["_metaorder_evidence"]
+        self.assertEqual(evidence["intervening_silent_buckets"], 1)
+        self.assertEqual(evidence["intervening_missing_buckets"], 0)
+        self.assertFalse(evidence["source_gap_detected"])
+
+    def test_metaorder_proof_never_bridges_epoch_or_opposing_control(self):
+        first = evidence_row(3_100, "LONG", 100.001)
+        second = evidence_row(3_300, "LONG", 100.003)
+        episode = {
+            "side": "LONG", "started_receive_ms": 3_000,
+            "signals": [first, second],
+        }
+
+        second_epoch = dict(second, epoch=int(first.get("epoch", 0)) + 1)
+        self.assertIsNone(ignition_core._proof(
+            episode,
+            {"binance_spot": (first, second_epoch)},
+        )[0])
+
+        opposing = evidence_row(
+            3_200, "SHORT", 99.999, strong=True, material=True,
+        )
+        self.assertIsNone(ignition_core._proof(
+            episode,
+            {"binance_spot": (first, opposing, second)},
+        )[0])
+
     def test_metaorder_proof_does_not_stitch_disconnected_cash_impulses(self):
         first = evidence_row(3_100, "LONG", 100.001)
         second = evidence_row(3_600, "LONG", 100.006)
