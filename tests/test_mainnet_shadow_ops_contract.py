@@ -60,7 +60,8 @@ class MainnetShadowOpsContractTests(unittest.TestCase):
         )
         self.assertIn("bias_council.update_state(s, now=now)", text)
         self.assertNotIn("result = bias_council.evaluate(s, now=now)", text)
-        self.assertIn('"bias_acquisition_handoff": acquisition_handoff', text)
+        self.assertIn('"bias_acquisition_handoff": dict(', text)
+        self.assertIn("_DECISION_RECORD_DUPLICATE_FIELDS", text)
 
     def test_coinbase_rolling_flow_is_incremental(self):
         path = ROOT / "1_tai_du_lieu" / "tai_coinbase" / "tai_coinbase.py"
