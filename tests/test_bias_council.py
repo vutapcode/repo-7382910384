@@ -219,6 +219,65 @@ class BiasCouncilTests(unittest.TestCase):
         self.assertEqual(report["wave_state"], "EMERGING_CONTROL")
         self.assertFalse(hasattr(s, "bias_acquisition_handoff"))
 
+    def test_unfalsified_quiet_observation_does_not_erase_acquisition(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        council.update_state(s, now=100.0)
+        pending = copy.deepcopy(s._bias_pending_neutral_acquisition)
+
+        quiet_segment = {
+            "start_age_seconds": 0.0,
+            "end_age_seconds": 15.0,
+            "price": council.vote(reason="DUAL_CASH_PRICE_NO_PROGRESS"),
+            "flow": council.vote(reason="DUAL_CASH_FLOW_NEUTRAL"),
+            "newer_ts": 101.0,
+            "older_ts": 86.0,
+            "newer_epochs": {"spot": 0, "coinbase": 0, "futures": 0},
+            "older_epochs": {"spot": 0, "coinbase": 0, "futures": 0},
+            "newer_prices": {
+                "spot": 100.05, "coinbase": 100.05, "futures": 100.05,
+            },
+            "older_prices": {
+                "spot": 100.05, "coinbase": 100.05, "futures": 100.05,
+            },
+        }
+        current = copy.deepcopy(pending["anchor"])
+        current["ts"] = 101.0
+
+        segments, tracker = council._neutral_acquisition_segments(
+            s, current, [quiet_segment], council.MIN_MOVE, "ABSTAIN",
+        )
+
+        self.assertEqual(len(segments), 1)
+        self.assertEqual(
+            tracker["status"], "WAIT_THROUGH_UNFALSIFIED_CASH_LULL",
+        )
+        self.assertEqual(
+            s._bias_pending_neutral_acquisition["side"], pending["side"],
+        )
+
+    def test_neutral_acquisition_lull_cannot_bridge_safety_bound(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        council.update_state(s, now=100.0)
+        pending = copy.deepcopy(s._bias_pending_neutral_acquisition)
+        current = copy.deepcopy(pending["anchor"])
+        current["ts"] = 116.0
+        quiet_segment = {
+            "price": council.vote(reason="DUAL_CASH_PRICE_NO_PROGRESS"),
+            "flow": council.vote(reason="DUAL_CASH_FLOW_NEUTRAL"),
+            "newer_ts": 116.0,
+            "older_ts": 101.0,
+            "newer_epochs": {"spot": 0, "coinbase": 0, "futures": 0},
+            "older_epochs": {"spot": 0, "coinbase": 0, "futures": 0},
+        }
+
+        council._neutral_acquisition_segments(
+            s, current, [quiet_segment], council.MIN_MOVE, "ABSTAIN",
+        )
+
+        self.assertEqual(s._bias_pending_neutral_acquisition, {})
+
     def test_emerging_cash_control_does_not_seal_acquisition(self):
         s = state()
         s.bias_state, s.bias_confidence = "ABSTAIN", 0.0

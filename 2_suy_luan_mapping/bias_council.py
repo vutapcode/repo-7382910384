@@ -35,7 +35,7 @@ import time
 
 cash_wave_observation = import_module("2_suy_luan_mapping.cash_wave_observation")
 
-VERSION = "BIAS_COUNCIL_V15_ROLLING_NEUTRAL_ACQUISITION"
+VERSION = "BIAS_COUNCIL_V16_LULL_TOLERANT_ROLLING_ACQUISITION"
 CONTRACT = "DIRECTION_ONLY_NO_ENTRY_TIMING"
 FORECAST_SCOPE = "MEANINGFUL_DIRECTIONAL_REGIME_NOT_FIXED_TIME_TARGET"
 ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
@@ -489,11 +489,19 @@ def _neutral_acquisition_segments(
         pending_side = str(pending.get("side") or "ABSTAIN").upper()
         same_epochs = dict(pending.get("venue_epochs") or {}) == current_epochs
         anchor = dict(pending.get("anchor") or {})
+        pending_age = max(
+            0.0,
+            float((current or {}).get("ts", 0.0) or 0.0)
+            - float(anchor.get("ts", 0.0) or 0.0),
+        )
         ordered = bool(
             float((current or {}).get("ts", 0.0) or 0.0)
             > float(anchor.get("ts", 0.0) or 0.0)
         )
-        if not same_epochs or not ordered:
+        within_safety_bound = bool(
+            pending_age <= float(WAVE_SEGMENT_BOUNDARIES[0])
+        )
+        if not same_epochs or not ordered or not within_safety_bound:
             pending = {}
             state._bias_pending_neutral_acquisition = {}
         else:
@@ -534,11 +542,16 @@ def _neutral_acquisition_segments(
                     and latest.get("side") != pending_side
                 )
             )
-            if not falsified and latest_same:
+            if not falsified:
                 return [latest_raw], {
-                    "status": "WAIT_FRESH_POST_OBSERVATION_CONVERSION",
+                    "status": (
+                        "WAIT_FRESH_POST_OBSERVATION_CONVERSION"
+                        if latest_same
+                        else "WAIT_THROUGH_UNFALSIFIED_CASH_LULL"
+                    ),
                     "side": pending_side,
                     "first_observed_at": anchor.get("ts"),
+                    "age_seconds": pending_age,
                     "authority": False,
                 }
             pending = {}
