@@ -317,6 +317,39 @@ class IgnitionCoreTests(unittest.TestCase):
             "TIMING_ATTEMPT_STARTED_FROM_LIVE_WAVE",
         )
 
+    def test_sealed_live_wave_can_retry_while_current_bias_is_abstain(self):
+        s = state(now=100.0)
+        s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(completed_ms=90_000)
+
+        episode = ignition_core._start_acquisition_handoff_episode(
+            s, self._acquisition_histories(), 100_000, "ABSTAIN",
+        )
+
+        self.assertIsNotNone(episode)
+        self.assertEqual(episode["side"], "LONG")
+        self.assertEqual(
+            episode["causal_episode_id"],
+            s.bias_acquisition_handoff["causal_wave_id"],
+        )
+
+    def test_opposite_current_bias_cannot_reuse_sealed_wave(self):
+        s = state(now=100.0)
+        s.bias_state, s.bias_confidence = "SHORT", 0.70
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(side="LONG")
+
+        episode = ignition_core._start_acquisition_handoff_episode(
+            s, self._acquisition_histories(), 100_000, None,
+        )
+
+        self.assertIsNone(episode)
+        self.assertEqual(
+            s._ignition_acquisition_handoff_observation["status"],
+            "ACQUISITION_CURRENT_BIAS_CONTRADICTION",
+        )
+
     def test_same_owned_wave_is_not_one_shot_claimed(self):
         s = state(now=100.0)
         s.bias_version = "TEST"

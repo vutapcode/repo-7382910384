@@ -2384,7 +2384,11 @@ def _live_acquisition_displacement_bps(handoff, current_cash, side):
 def _acquisition_handoff_observation(state, histories, now_ms, side=None):
     """Join sealed Market Truth to present cash timing, still authority-free."""
     raw = dict(getattr(state, "bias_acquisition_handoff", {}) or {})
-    valid, reason, sealed = _validate_sealed_acquisition_handoff(raw, side)
+    requested_side = str(side or "ABSTAIN").upper()
+    expected_side = requested_side if requested_side in {"LONG", "SHORT"} else None
+    valid, reason, sealed = _validate_sealed_acquisition_handoff(
+        raw, expected_side,
+    )
     observation = {
         "version": "ACQUISITION_HANDOFF_OBSERVATION_V1",
         "authority": False,
@@ -2402,14 +2406,26 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
         observation.update(status="ACQUISITION_HANDOFF_FROM_FUTURE", age_ms=age_ms)
         state._ignition_acquisition_handoff_observation = observation
         return False, observation
-    if (
-        str(getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN").upper()
-            != resolved_side
-        or _f(getattr(state, "bias_confidence", 0.0)) < BIAS_MIN_CONF
-        or str(getattr(state, "bias_version", "") or "")
-            != str(sealed.get("bias_version") or "")
+    current_bias_side = str(
+        getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN"
+    ).upper()
+    current_bias_confidence = _f(getattr(state, "bias_confidence", 0.0))
+    if str(getattr(state, "bias_version", "") or "") != str(
+        sealed.get("bias_version") or ""
     ):
-        observation.update(status="ACQUISITION_BIAS_OWNERSHIP_CHANGED")
+        observation.update(status="ACQUISITION_BIAS_VERSION_CHANGED")
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
+    if (
+        current_bias_side in {"LONG", "SHORT"}
+        and current_bias_side != resolved_side
+        and current_bias_confidence >= BIAS_MIN_CONF
+    ):
+        observation.update(
+            status="ACQUISITION_CURRENT_BIAS_CONTRADICTION",
+            current_bias_side=current_bias_side,
+            current_bias_confidence=current_bias_confidence,
+        )
         state._ignition_acquisition_handoff_observation = observation
         return False, observation
     current = _current_cash_conversion(histories, resolved_side, now_ms)
