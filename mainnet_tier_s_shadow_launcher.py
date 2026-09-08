@@ -7,6 +7,7 @@ canonical root is `mainnet_tier_s_lean_launcher.py`.
 import asyncio
 from collections import deque
 import faulthandler
+import hashlib
 import json
 import logging
 import os
@@ -596,6 +597,38 @@ def _append_event(event, payload):
     }
     with EVENT_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def _decision_record_hash(record):
+    """Content address one immutable decision record for compact references."""
+    encoded = json.dumps(
+        record or {}, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+_DECISION_RECORD_DUPLICATE_FIELDS = frozenset({
+    "ignition", "persistent_metaorder_shadow", "bias_acquisition_handoff",
+    "acquisition_handoff_observation", "opportunity_research",
+    "evidence_groups", "flow_persistence", "price_impact", "forward_edge",
+    "time_to_edge", "spot_perp_basis", "phase6_action_shadow",
+    "entry_thesis_handoff",
+})
+
+
+def _journal_decision_payload(summary, decision_record):
+    """Store the immutable decision once; expose only compact index fields."""
+    payload = dict(summary or {})
+    for name in _DECISION_RECORD_DUPLICATE_FIELDS:
+        payload.pop(name, None)
+    payload.update({
+        "schema_version": "TIER_S_DECISION_RECORD_V8_CONTENT_ADDRESSED",
+        "decision_record_included": True,
+        "decision_record_hash": _decision_record_hash(decision_record),
+        "decision_record": decision_record,
+    })
+    return payload
 
 
 def _action_contract(result, quorum_ok, causal_episode_id=None):
@@ -2148,6 +2181,7 @@ async def _entry_loop():
     last_eval_at = 0.0
     last_decision_identity = None
     last_decision_event_at = 0.0
+    last_decision_record_hash = None
     last_acquisition_handoff_identity = None
     while True:
         try:
@@ -2487,11 +2521,11 @@ async def _entry_loop():
             )
             decision_event_emitted = False
             recorder_snapshot = None
-            if (
+            emit_full_decision = bool(
                 force_transition
                 or (decision_changed and now - last_decision_event_at >= 1.0)
-                or now - last_decision_event_at >= 15.0
-            ):
+            )
+            if emit_full_decision:
                 last_decision_identity = decision_identity
                 last_decision_event_at = now
                 if acquisition_handoff.get("causal_wave_id"):
@@ -2515,8 +2549,12 @@ async def _entry_loop():
                     opportunity=opportunity,
                 )
                 recorder_output = dict(recorder_snapshot.get("output") or {})
-                _append_event("DECISION_EVALUATED", {
-                    "schema_version": "TIER_S_DECISION_RECORD_V7_RESPONSE_TIME_SEMANTICS",
+                decision_record_hash = _decision_record_hash(
+                    recorder_snapshot
+                )
+                last_decision_record_hash = decision_record_hash
+                _append_event("DECISION_EVALUATED", _journal_decision_payload({
+                    "schema_version": "TIER_S_DECISION_RECORD_V8_CONTENT_ADDRESSED",
                     "cycle_id": decision_cycle_id,
                     "decision": recorder_output.get("decision", "WAIT"),
                     "reason": recorder_output.get("reason", "UNKNOWN"),
@@ -2547,23 +2585,14 @@ async def _entry_loop():
                     "qualification_transition": bool(
                         opportunity.get("qualification_transition")
                     ),
-                    "evidence_groups": (result.get("causal") or {}).get("evidence_groups"),
-                    "flow_persistence": (result.get("causal") or {}).get("persistence"),
                     "oi_intent": (result.get("causal") or {}).get("oi_intent"),
                     "cash_perp_handoff": (result.get("causal") or {}).get("handoff"),
                     "post_chase_retest": (result.get("causal") or {}).get(
                         "post_chase_retest"
                     ),
-                    "ignition": dict(result.get("ignition") or {}),
-                    "persistent_metaorder_shadow": persistent_shadow,
-                    "bias_acquisition_handoff": acquisition_handoff,
-                    "acquisition_handoff_observation": (
-                        acquisition_observation
-                    ),
                     "cross_cash_causal_wave": dict(
                         result.get("cross_cash_causal_wave") or {}
                     ),
-                    "opportunity_research": opportunity_research,
                     "ignition_state": (result.get("ignition") or {}).get("state"),
                     "ignition_proposer": (result.get("ignition") or {}).get("proposer"),
                     "ignition_leader": (result.get("ignition") or {}).get("leader"),
@@ -2579,16 +2608,12 @@ async def _entry_loop():
                     "exchange_independence": result.get(
                         "exchange_independence"
                     ),
-                    "price_impact": edge_report.get("price_impact"),
                     "entry_thesis_audit": edge_report.get("entry_thesis_audit"),
                     "economic_contract_version": edge_report.get(
                         "economic_contract_version"
                     ),
                     "forward_edge_status": edge_report.get("forward_edge_status"),
-                    "forward_edge": edge_report.get("forward_edge"),
                     "time_to_edge_status": edge_report.get("time_to_edge_status"),
-                    "time_to_edge": edge_report.get("time_to_edge"),
-                    "spot_perp_basis": edge_report.get("spot_perp_basis"),
                     "governor_mode": getattr(s, "governor_mode", None),
                     "miss_taxonomy": recorder_snapshot["output"]["miss_taxonomy"],
                     "blocking_reason": recorder_snapshot["output"][
@@ -2604,15 +2629,30 @@ async def _entry_loop():
                     "authority_contracts": recorder_snapshot[
                         "authority_contracts"
                     ],
-                    "phase6_action_shadow": recorder_snapshot[
-                        "phase6_action_shadow"
-                    ],
-                    "entry_thesis_handoff": recorder_snapshot[
-                        "entry_thesis_handoff"
-                    ],
-                    "decision_record": recorder_snapshot,
-                })
+                }, recorder_snapshot))
                 decision_event_emitted = True
+            elif (
+                last_decision_record_hash
+                and now - last_decision_event_at >= 15.0
+            ):
+                # Health heartbeat references the last immutable full record;
+                # it is not another decision and cannot create a candidate.
+                last_decision_event_at = now
+                _append_event("DECISION_HEARTBEAT", {
+                    "schema_version": (
+                        "TIER_S_DECISION_RECORD_V8_CONTENT_ADDRESSED"
+                    ),
+                    "cycle_id": decision_cycle_id,
+                    "side": result.get("side", "ABSTAIN"),
+                    "causal_episode_id": opportunity.get(
+                        "causal_episode_id"
+                    ),
+                    "decision_record_included": False,
+                    "decision_record_ref": last_decision_record_hash,
+                    "authority_contracts": dict(
+                        result.get("authority_contracts") or {}
+                    ),
+                })
 
             if not quorum_ok:
                 _record_post_go_rejection(

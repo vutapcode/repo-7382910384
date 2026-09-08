@@ -67,6 +67,8 @@ class DecisionOutcomeTracker:
         payload = record.get("payload") or {}
         event = str(payload.get("event", ""))
         if event == "DECISION_EVALUATED":
+            if payload.get("decision_record_included") is False:
+                return None
             decision = payload.get("decision_record") or {}
             output = decision.get("output") or {}
             counterfactual = decision.get("counterfactual") or {}
@@ -551,11 +553,15 @@ class DecisionOutcomeTracker:
         payload = record.get("payload") or {}
         if str(payload.get("event", "")) != "DECISION_EVALUATED":
             return None
-        report = payload.get("persistent_metaorder_shadow") or {}
+        decision = payload.get("decision_record") or {}
+        inputs = decision.get("inputs") or {}
+        report = (
+            payload.get("persistent_metaorder_shadow")
+            or inputs.get("persistent_metaorder_shadow") or {}
+        )
         side = str(report.get("candidate_side") or "").upper()
         if not report.get("transition") or side not in ("LONG", "SHORT"):
             return None
-        decision = payload.get("decision_record") or {}
         source_cf = decision.get("counterfactual") or {}
         reference = _f(source_cf.get("reference_price"))
         start_ms = int(record.get("event_time_ms", 0) or 0)
@@ -620,7 +626,12 @@ class DecisionOutcomeTracker:
         payload = record.get("payload") or {}
         if str(payload.get("event", "")) != "DECISION_EVALUATED":
             return None
-        handoff = dict(payload.get("bias_acquisition_handoff") or {})
+        decision = payload.get("decision_record") or {}
+        inputs = decision.get("inputs") or {}
+        handoff = dict(
+            payload.get("bias_acquisition_handoff")
+            or inputs.get("bias_acquisition_handoff") or {}
+        )
         if not (
             str(handoff.get("status") or "") == "SEALED"
             and handoff.get("sealed") is True
@@ -630,7 +641,6 @@ class DecisionOutcomeTracker:
             return None
         side = str(handoff.get("side") or "ABSTAIN").upper()
         candidate_id = str(handoff.get("causal_wave_id") or "")
-        decision = payload.get("decision_record") or {}
         source_cf = decision.get("counterfactual") or {}
         reference = _f(source_cf.get("decision_reference_price")) or _f(
             source_cf.get("reference_price")

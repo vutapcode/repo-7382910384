@@ -154,7 +154,12 @@ def _compact_event(row):
             },
         })
     elif event == "DECISION_EVALUATED":
-        persistent = _dict(row.get("persistent_metaorder_shadow"))
+        decision = _dict(row.get("decision_record"))
+        inputs = _dict(decision.get("inputs"))
+        persistent = _dict(
+            row.get("persistent_metaorder_shadow")
+            or inputs.get("persistent_metaorder_shadow")
+        )
         base.update({
             "decision": row.get("decision"), "reason": row.get("reason"),
             "entry_mode": row.get("entry_mode"), "phase": row.get("phase"),
