@@ -298,6 +298,22 @@ def _terminal_states(state):
     return rows
 
 
+def opportunity_scope(state, opportunity_id):
+    """Distinguish a Market-Wave observation from opened Economics."""
+    opportunity_id = int(opportunity_id or 0)
+    link = getattr(state, "entry_economic_opportunity_link", None)
+    linked_id = (
+        int(link[1] or 0)
+        if isinstance(link, tuple) and len(link) == 2 else 0
+    )
+    reserved_id = int(
+        getattr(state, "canonical_reserved_opportunity_id", 0) or 0
+    )
+    if opportunity_id > 0 and opportunity_id in {linked_id, reserved_id}:
+        return "ECONOMIC_EXECUTABLE"
+    return "MARKET_WAVE_RESEARCH"
+
+
 def _terminal(state, opportunity_id, status, *, causal_wave_id=None,
               timing_attempt_id=None, reason=None):
     opportunity_id = int(opportunity_id or 0)
@@ -330,6 +346,8 @@ def _terminal(state, opportunity_id, status, *, causal_wave_id=None,
         "causal_wave_id": str(causal_wave_id or "") or None,
         "timing_attempt_id": str(timing_attempt_id or "") or None,
         "status": status,
+        "opportunity_scope": "ECONOMIC_EXECUTABLE",
+        "timing_proof_present": bool(timing_attempt_id),
         "reason": str(reason or (
             "EXECUTABLE_FILL_CAPTURED"
             if status == "CONSUMED" else "CAUSAL_OPPORTUNITY_INVALIDATED"

@@ -25,6 +25,23 @@ def reserved_state(*, unknown=False, recovery=False):
 
 
 class LauncherReservationSafetyTests(unittest.TestCase):
+    def test_unlinked_market_wave_is_not_labeled_economic_invalidation(self):
+        state = SimpleNamespace(
+            canonical_reserved_opportunity_id=0,
+            entry_economic_opportunity_link=None,
+        )
+        emitted = launcher._invalidate_opportunity_or_defer(state, {
+            "opportunity_id": 8,
+            "causal_wave_id": "wave-research-8",
+            "reason": "OPPOSITE_DUAL_CASH_CONTROL",
+        })
+        self.assertTrue(emitted)
+        self.assertFalse(hasattr(state, "entry_economic_terminal_states"))
+        event, payload = state.entry_lifecycle_nonruntime_events[-1]
+        self.assertEqual(event, "MARKET_WAVE_OPPORTUNITY_INVALIDATED")
+        self.assertEqual(payload["opportunity_scope"], "MARKET_WAVE_RESEARCH")
+        self.assertIsNone(payload["economic_opportunity_id"])
+
     def test_unknown_execution_keeps_reservation(self):
         state = reserved_state(unknown=True)
         released = launcher._release_execution_reservation_if_safe(

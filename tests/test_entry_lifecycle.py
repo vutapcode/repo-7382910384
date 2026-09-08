@@ -176,6 +176,9 @@ class EntryLifecycleTests(unittest.TestCase):
         )
         self.assertTrue(report["accepted"])
         self.assertEqual(report["event"][0], "ECONOMIC_OPPORTUNITY_CONSUMED")
+        self.assertEqual(
+            report["terminal"]["opportunity_scope"], "ECONOMIC_EXECUTABLE",
+        )
         duplicate = entry_lifecycle.consume(state, 21)
         self.assertTrue(duplicate["accepted"])
         self.assertIsNone(duplicate["event"])
@@ -201,6 +204,18 @@ class EntryLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(
             getattr(state, "entry_economic_terminal_states", {}), {}
+        )
+
+    def test_opportunity_scope_requires_timing_link_or_reservation(self):
+        state = SimpleNamespace()
+        self.assertEqual(
+            entry_lifecycle.opportunity_scope(state, 31),
+            "MARKET_WAVE_RESEARCH",
+        )
+        state.entry_economic_opportunity_link = ("timing-31", 31)
+        self.assertEqual(
+            entry_lifecycle.opportunity_scope(state, 31),
+            "ECONOMIC_EXECUTABLE",
         )
 
 

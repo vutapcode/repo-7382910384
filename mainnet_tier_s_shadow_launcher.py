@@ -421,9 +421,27 @@ def _invalidate_opportunity_or_defer(state, invalidation, *, side=None,
     )
     if opportunity_id <= 0:
         return False
+    scope = entry_lifecycle.opportunity_scope(state, opportunity_id)
+    if scope == "MARKET_WAVE_RESEARCH":
+        # A Bias-owned wave may be observed and later falsified without ever
+        # producing immutable timing proof or entering Economics.  Recording
+        # that as ECONOMIC_OPPORTUNITY_INVALIDATED polluted the economic miss
+        # population with pre-Entry research observations.
+        return _emit_lifecycle_terminal(state, {
+            "event": ("MARKET_WAVE_OPPORTUNITY_INVALIDATED", {
+                "canonical_opportunity_id": opportunity_id,
+                "economic_opportunity_id": None,
+                "causal_wave_id": invalidation.get("causal_wave_id"),
+                "timing_attempt_id": None,
+                "opportunity_scope": scope,
+                "status": "INVALIDATED",
+                "reason": invalidation.get("reason"),
+            }),
+        }, side=side, cycle_id=cycle_id)
     if reserved_id == opportunity_id or _execution_recovery_active(state):
         state.entry_economic_pending_invalidation = {
             **invalidation,
+            "opportunity_scope": "ECONOMIC_EXECUTABLE",
             "timing_attempt_id": getattr(
                 state, "entry_timing_attempt_id", None
             ),
