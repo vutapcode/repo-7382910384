@@ -772,6 +772,7 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertTrue(report["dual_cash_synchronous_acceptance"])
         self.assertTrue(report["dual_cash_control"])
+        self.assertTrue(report["dual_cash_synchronous_control"])
         self.assertTrue(report["current_cross_cash_causal_survival"])
         self.assertEqual(
             report["surviving_control_venues"],
@@ -784,6 +785,7 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertTrue(one["dual_cash_synchronous_acceptance"])
         self.assertFalse(one["dual_cash_control"])
+        self.assertFalse(one["dual_cash_synchronous_control"])
         self.assertFalse(one["current_cross_cash_causal_survival"])
 
     def test_bias_wait_reasons_are_diagnostic_only(self):
@@ -2038,8 +2040,9 @@ class IgnitionCoreTests(unittest.TestCase):
             )
         self.assertEqual(result["decision"], "GO")
         self.assertTrue(
-            result["ignition"]["dual_cash_synchronous_control"]
+            result["ignition"]["dual_cash_synchronous_acceptance"]
         )
+        self.assertFalse(result["ignition"]["dual_cash_synchronous_control"])
         self.assertFalse(result["ignition"]["transition_confirmed"])
         self.assertEqual(result["authority_basis"], "BIAS_ALIGNED")
         self.assertTrue(result["authority_proof_hash"])

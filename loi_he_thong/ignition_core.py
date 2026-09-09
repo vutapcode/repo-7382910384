@@ -2264,9 +2264,11 @@ def _current_cash_conversion(histories, side, now_ms):
             if cross_cash_causal_survival else
             "UNPROVEN_CURRENT_CROSS_CASH_SURVIVAL"
         ),
-        # Deprecated compatibility field. Existing consumers are moved to
-        # the accurately named acceptance field in this schema boundary.
-        "dual_cash_synchronous_control": dual_acceptance,
+        # Deprecated name retained for journal readers, but its value must
+        # retain CONTROL semantics.  One-bucket dual acceptance is exposed by
+        # the accurately named field above and must never masquerade as
+        # surviving cross-cash control.
+        "dual_cash_synchronous_control": dual_control,
         "acceptance_span_ms": span,
         "max_age_ms": FOLLOW_MAX_MS,
         "authority": "ENTRY_TIMING_ONLY",
@@ -4147,7 +4149,7 @@ def _persistent_entry_result(state, snapshot, histories, freshness, now):
         ),
         "dual_cash_control": bool(current_cash.get("dual_cash_control")),
         "dual_cash_synchronous_control": bool(
-            current_cash.get("dual_cash_synchronous_acceptance")
+            current_cash.get("dual_cash_control")
         ),
         "bounded_wave_ledger": dict(
             (snapshot or {}).get("bounded_wave_ledger") or {}
@@ -4602,7 +4604,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
         ),
         "dual_cash_control": bool(current_cash.get("dual_cash_control")),
         "dual_cash_synchronous_control": bool(
-            current_cash.get("dual_cash_synchronous_acceptance")
+            current_cash.get("dual_cash_control")
         ),
         "bounded_wave_ledger": {
             "version": "BOUNDED_WAVE_LEDGER_V1",
