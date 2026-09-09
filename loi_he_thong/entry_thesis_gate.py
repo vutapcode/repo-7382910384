@@ -9,7 +9,7 @@ market orders are large.
 from loi_he_thong import ignition_core
 from loi_he_thong import causal_mechanism
 
-VERSION = "ENTRY_THESIS_GATE_V9_DERIVATIVES_CONTEXT_ONLY"
+VERSION = "ENTRY_THESIS_GATE_V10_MECHANISM_STATE_ACTION"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -152,6 +152,8 @@ def _intent_question(ignition, liquidation):
             classification = "LIQUIDATION_CASCADE"
     elif mech_class == "CASH_CONTROL_AFTER_UNWIND":
         classification = "CASH_CONTROL_AFTER_UNWIND"
+    elif mech_class == "CASH_CONTROL_POSITIONING_UNKNOWN":
+        classification = "CASH_CONTROL_POSITIONING_UNKNOWN"
     else:
         classification = "NEUTRAL_OR_UNVERIFIED"
 
@@ -162,6 +164,8 @@ def _intent_question(ignition, liquidation):
         "oi_fresh": fresh, "oi_verification_status": verification_status,
         "oi_causal_class": oi.get("causal_class"),
         "force_order_phase": phase, "forced_closing_risk": forced,
+        "direction_authority": False,
+        "positioning_unknown_is_cash_falsifier": False,
     }
 
 
@@ -390,6 +394,7 @@ def evaluate(state, result, impact, basis, liquidation):
         str((result or {}).get("phase") or "").upper() == "RELEASE"
         and proof_type in {"METAORDER_CONTINUATION", "PERSISTENT_METAORDER"}
     )
+    failed_reversion = proof_type == "FAILED_REVERSION"
 
     # Preserve good cash-led unwind opportunities. Forced closure becomes a
     # veto only when at least one independent symptom says the wave is ending:
@@ -443,6 +448,39 @@ def evaluate(state, result, impact, basis, liquidation):
             "WAIT_PERSISTENT_REACCELERATION_CONFIRMATION"
             if persistent else "WAIT_IGNITION_REACCELERATION_CONFIRMATION"
         )
+    current_cash = dict(ignition.get("current_cash_conversion") or {})
+    timing_conversion_alive = bool(
+        q3.get("converts")
+        or (
+            failed_reversion
+            and current_cash.get("confirmed")
+            and current_cash.get("accepted_cash_venues")
+        )
+    )
+    mechanism_state = {
+        "version": "CAUSAL_ENTRY_MECHANISM_CONTRACT_V1",
+        "owner": "ENTRY_THESIS_GATE",
+        "direction_owner": "MARKET_THESIS",
+        "mechanism": q2["mechanism_classification"],
+        "positioning_state": q2["status"],
+        "cash_control_state": q6["status"],
+        "flow_conversion_state": q3["status"],
+        "current_flow_price_conversion": timing_conversion_alive,
+        "forced_tail_falsifier": forced_tail_veto,
+        "action_candidate": bool(
+            q1["status"] == "PASS"
+            and timing_conversion_alive
+            and q6["status"] in {
+                "DUAL_CASH_CROSS_VENUE_CORROBORATION",
+                "SINGLE_CASH_ANCHOR",
+            }
+            and not blockers
+            and not soft_waits
+        ),
+        "statistics_used": False,
+        "falsifiers": tuple(blockers + soft_waits),
+        "pipeline": "RAW_DATA_TO_MECHANISM_TO_STATE_TO_ACTION_TO_FALSIFICATION",
+    }
     return {
         "version": VERSION,
         "decision": "WAIT" if blockers or soft_waits else "PASS",
@@ -454,22 +492,34 @@ def evaluate(state, result, impact, basis, liquidation):
         "blocking_reasons": blockers,
         "soft_wait_reasons": soft_waits,
         "forced_unwind_tail": forced_tail_veto,
+        "causal_mechanism_contract": mechanism_state,
         "entry_economics_v6_replay_approved": replay_approved,
         "policy": "COMPOSITE_CAUSAL_VETO_NO_SINGLE_SIGNAL_DIRECTION",
     }
 
 
 def attach_economics(report, *, total_cost_bps, reserve_bps, economic_ok,
-                     forward_edge=None):
+                     physical_edge_ok=None, forward_edge=None):
     output = dict(report or {})
     questions = dict(output.get("questions") or {})
     questions["q7_economics"] = {
         "question": "NET_EDGE_AFTER_EXECUTABLE_COST",
-        "status": "PASS" if economic_ok else "BOOTSTRAP_OR_FAIL",
+        "status": (
+            "PASS_MEASURED_EDGE"
+            if physical_edge_ok is True
+            else "FAIL_EDGE_BELOW_FROZEN_COST"
+            if physical_edge_ok is False
+            else "UNVERIFIED_NO_CAUSAL_FORECAST"
+        ),
         "total_cost_bps": round(_f(total_cost_bps), 6),
         "minimum_net_reserve_bps": round(_f(reserve_bps), 6),
-        "authority": "RESIDUAL_EDGE_EMPIRICAL_COHORT",
+        "authority": "ACTION_POLICY_CURRENT_RESIDUAL_MINUS_FROZEN_COST",
         "forward_edge": dict(forward_edge or {}),
+        "statistics_role": "FALSIFICATION_ONLY",
+        "statistics_can_create_action": False,
+        "action_passed_without_forecast": bool(
+            economic_ok and physical_edge_ok is None
+        ),
         "cost_counted_once": True,
     }
     output["questions"] = questions

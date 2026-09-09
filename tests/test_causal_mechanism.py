@@ -92,6 +92,14 @@ class CausalMechanismTests(unittest.TestCase):
                     "UNRESOLVED",
                 )
 
+    def test_stale_oi_preserves_cash_control_without_guessing_positioning(self):
+        result = causal_mechanism.classify(
+            {"status": "STALE_UNKNOWN"},
+            {"burst": False, "decelerating": False},
+            self.converting_cash(),
+        )
+        self.assertEqual(result, "CASH_CONTROL_POSITIONING_UNKNOWN")
+
 
 if __name__ == "__main__":
     unittest.main()

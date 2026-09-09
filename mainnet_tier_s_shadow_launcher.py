@@ -956,9 +956,10 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         diagnostic.append("PRICE_QUORUM_FAIL")
     if s2 and str(s2.get("status", "MISSING")) != "PASS":
         diagnostic.append("FLOW_QUORUM_FAIL")
-    # Bootstrap shadow is intentionally allowed to trade so outcomes can make
-    # the empirical gate measurable.  It is not a miss merely because the old
-    # structural residual proxy is zero.  Only a final rejected GO is tagged.
+    # An absent causal forward-edge forecast is UNKNOWN, not zero. Shadow may
+    # exercise a valid mechanism so it can be falsified by actual executable
+    # cost + Guardian outcome. A measured edge failure or an active empirical
+    # falsifier still blocks it; sample count never creates Market Truth.
     if (
         would_enter and not quorum_ok
         and "FLOW_NONCONVERSION_COMPOSITE_VETO" not in (
@@ -966,12 +967,14 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         )
         and not (edge_report or {}).get("soft_wait_reasons")
     ):
-        bootstrap = bool((edge_report or {}).get("bootstrap_shadow_allowed"))
-        empirical = bool((edge_report or {}).get("live_empirical_ok"))
-        if not bootstrap and not empirical:
-            failed.append("EMPIRICAL_ALPHA_NOT_READY")
-        elif not bool((edge_report or {}).get("cost_ok")) and not bootstrap:
+        shadow_action = bool(
+            (edge_report or {}).get("causal_shadow_allowed")
+            or (edge_report or {}).get("bootstrap_shadow_allowed")
+        )
+        if (edge_report or {}).get("cost_ok") is False:
             failed.append("EDGE_COST_FAIL")
+        elif not shadow_action:
+            failed.append("ENTRY_AUTHORITY_CONTRACT_FAIL")
     if would_enter and not quorum_ok and not failed:
         failed.append("ENTRY_AUTHORITY_CONTRACT_FAIL")
     priority = (
@@ -988,6 +991,7 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         "FLOW_NONCONVERSION_COMPOSITE_VETO", "PERP_LED_VETO",
         "LIQUIDATION_TAIL_VETO",
         "UNWIND_TAIL_VETO", "CROSS_VENUE_CORROBORATION_FAIL",
+        "EMPIRICAL_OUTCOME_FALSIFIER",
         "EMPIRICAL_ALPHA_NOT_READY",
         "EDGE_COST_FAIL",
         "BIAS_THESIS_FAIL", "BIAS_ALIGNMENT_FAIL", "BIAS_NOT_READY",

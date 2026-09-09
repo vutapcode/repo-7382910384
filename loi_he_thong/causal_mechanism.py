@@ -2,7 +2,7 @@
 
 This module answers one question only: what mechanism is producing the
 observed move? It classifies POSITION_BUILD, UNWIND, FORCED_CLOSING,
-CASH_CONTROL_AFTER_UNWIND, or UNRESOLVED.
+CASH_CONTROL_AFTER_UNWIND, CASH_CONTROL_POSITIONING_UNKNOWN, or UNRESOLVED.
 
 It never creates LONG/SHORT direction. OI explains opening vs closing,
 not direction. forceOrder never creates direction. Futures/perpetual flow
@@ -51,7 +51,13 @@ def classify(oi_verification, liquidation_snapshot, cash_conversion_evidence):
     continuing_cash_control = _verified_dual_cash_conversion(cash)
 
     if not status.startswith("FRESH_"):
-        return "UNRESOLVED"
+        # Missing REST positioning context must not erase current independent
+        # cash control. It only limits what can be claimed about opening vs
+        # closing flow.
+        return (
+            "CASH_CONTROL_POSITIONING_UNKNOWN"
+            if continuing_cash_control else "UNRESOLVED"
+        )
 
     if status == "FRESH_POSITION_BUILD":
         return "POSITION_BUILD"

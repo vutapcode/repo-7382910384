@@ -16,7 +16,7 @@ from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
 from loi_he_thong import verified_cost_model
 
-VERSION = "IGNITION_ENTRY_ECONOMICS_V10_DERIVATIVES_CONTEXT_ONLY"
+VERSION = "IGNITION_ENTRY_ECONOMICS_V11_MECHANISM_FIRST"
 EDGE_BPS = {
     "LOW_EDGE": 0.0, "NORMAL_EDGE": 13.0,
     "HIGH_EDGE": 20.0, "RUNNER_EDGE": 35.0,
@@ -98,6 +98,9 @@ def classify(result, state):
         result, state
     )
     residual = max(0.0, _f(ignition.get("residual_edge_proxy_bps")))
+    residual_source = str(
+        ignition.get("residual_edge_source") or "UNSPECIFIED"
+    ).upper()
     frozen_budgets = dict(cost_contract.get("budgets_bps") or {})
     cost_budget = max(0.0, _f(
         frozen_budgets.get(costs.get("execution_style")),
@@ -112,19 +115,28 @@ def classify(result, state):
         candidate and forward_edge.get("status") == "ACTIVE"
         and not forward_edge.get("positive_net")
     ):
-        hard_vetoes.append("EMPIRICAL_FORWARD_EDGE_FAIL")
+        hard_vetoes.append("EMPIRICAL_OUTCOME_FALSIFIER")
     expected_net = residual - cost_budget
-    empirical_forward_ok = bool(
-        forward_edge.get("status") == "ACTIVE"
-        and forward_edge.get("positive_net")
+    # Ignition deliberately stopped fabricating a cash/perpetual residual.
+    # Its zero value with EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED means UNKNOWN,
+    # not a measured zero-edge forecast. Do not silently turn absence of a
+    # model into either permission or a veto.
+    residual_measured = residual_source not in {
+        "EMPIRICAL_GUARDIAN_OUTCOME_REQUIRED",
+        "UNSPECIFIED",
+        "UNKNOWN",
+    }
+    physical_edge_ok = (
+        bool(expected_net >= reserve) if residual_measured else None
     )
     economic_ok = bool(
         not hard_vetoes and not soft_waits
-        and (empirical_forward_ok or expected_net >= reserve)
+        and physical_edge_ok is not False
     )
     thesis_audit = entry_thesis_gate.attach_economics(
         thesis_audit, total_cost_bps=cost_budget,
         reserve_bps=reserve, economic_ok=economic_ok,
+        physical_edge_ok=physical_edge_ok,
         forward_edge=forward_edge,
     )
 
@@ -134,10 +146,12 @@ def classify(result, state):
         edge_class = "WAIT_EVIDENCE"
     elif hard_vetoes:
         edge_class = "HARD_VETO"
-    elif economic_ok:
+    elif economic_ok and physical_edge_ok is True:
         edge_class = "RESIDUAL_POSITIVE"
+    elif economic_ok:
+        edge_class = "CAUSAL_EDGE_UNVERIFIED"
     else:
-        edge_class = "BOOTSTRAP_UNVERIFIED"
+        edge_class = "EDGE_BELOW_FROZEN_COST"
 
     calibration = edge_calibration_v2.factor(
         state, mode, str(regime.get("regime") or "NORMAL"), side, edge_class,
@@ -199,11 +213,22 @@ def classify(result, state):
         and forward_edge.get("status") == "ACTIVE"
         and forward_edge.get("level") == "EXACT"
         and forward_edge.get("positive_net")
+        and physical_edge_ok is not False
         and not soft_waits
     )
-    bootstrap_shadow_allowed = bool(
-        contract_ok and not hard_vetoes and not soft_waits and not live
+    mechanism_contract = dict(
+        thesis_audit.get("causal_mechanism_contract") or {}
     )
+    causal_shadow_allowed = bool(
+        candidate
+        and contract_ok
+        and mechanism_contract.get("action_candidate")
+        and economic_ok
+        and not live
+    )
+    # Compatibility field retained for journal readers. It no longer permits
+    # an edge-negative physical demo fill merely to manufacture a cohort.
+    bootstrap_shadow_allowed = causal_shadow_allowed
     research_probe_allowed = bool(bootstrap_shadow_allowed)
     ledger_type = "LIVE_LIKE_SHADOW" if live_empirical_ok else "RESEARCH_PROBE"
     execution_urgency = {
@@ -229,9 +254,19 @@ def classify(result, state):
         "expected_excursion_bps_model": round(residual, 6),
         "cost_budget_bps_model": round(cost_budget, 6),
         "expected_net_bps_model": round(expected_net, 6),
+        "residual_edge_status": (
+            "MEASURED_PASS"
+            if physical_edge_ok is True
+            else "MEASURED_FAIL"
+            if physical_edge_ok is False
+            else "UNVERIFIED_NO_CAUSAL_FORECAST"
+        ),
+        "residual_edge_source": residual_source,
         "min_net_edge_bps": round(reserve, 6),
         "cost_multiple_model": round(residual / cost_budget, 6) if cost_budget > 0.0 else 999.0,
-        "cost_ok": economic_ok, "bootstrap_shadow_allowed": bootstrap_shadow_allowed,
+        "cost_ok": economic_ok,
+        "bootstrap_shadow_allowed": bootstrap_shadow_allowed,
+        "causal_shadow_allowed": causal_shadow_allowed,
         "research_probe_allowed": research_probe_allowed,
         "live_like_shadow_allowed": live_empirical_ok,
         "shadow_ledger_type": ledger_type,
@@ -256,7 +291,7 @@ def classify(result, state):
         "forward_edge": forward_edge,
         "time_to_edge_status": (
             "ACTIVE" if forward_edge.get("time_to_positive_net_p80_seconds") is not None
-            else "BOOTSTRAP_UNVERIFIED"
+            else "NO_EMPIRICAL_MODEL"
         ),
         "time_to_edge": {
             "p80_seconds": forward_edge.get("time_to_positive_net_p80_seconds"),
@@ -291,18 +326,42 @@ def classify(result, state):
             "status": calibration.get("status"),
             "cost_gate_telemetry": cost_gate_telemetry,
         },
+        "causal_action_contract": {
+            "version": "CAUSAL_ACTION_CONTRACT_V1",
+            "mechanism": dict(
+                thesis_audit.get("causal_mechanism_contract") or {}
+            ),
+            "current_physical_edge_ok": physical_edge_ok,
+            "expected_net_bps_after_frozen_cost": (
+                round(expected_net, 6) if residual_measured else None
+            ),
+            "minimum_net_reserve_bps": round(reserve, 6),
+            "actionable_in_shadow": causal_shadow_allowed,
+            "statistics_role": "FALSIFICATION_ONLY",
+            "statistics_can_create_market_truth": False,
+            "statistics_can_create_action": False,
+            "unverified_edge_can_run_shadow": True,
+            "mainnet_policy_separate": True,
+        },
+        "empirical_falsification": {
+            "status": forward_edge.get("status"),
+            "active_falsifier": (
+                "EMPIRICAL_OUTCOME_FALSIFIER" in hard_vetoes
+            ),
+            "samples": forward_edge.get("samples", 0),
+            "role": "FALSIFICATION_ONLY",
+        },
         "live_empirical_ok": live_empirical_ok,
-        "policy": "SHADOW_BOOTSTRAP_LIVE_EMPIRICAL_GUARDIAN_OUTCOME_LCB",
+        "policy": "MECHANISM_FIRST_CURRENT_EDGE_STATISTICS_FALSIFY_ONLY",
     }
 
 
 def authorize(result, state):
     report = classify(result, state)
     if bool(getattr(state, "wstrade_live_armed", False)):
-        # Completed shadow outcomes are already net of executable fills, fees
-        # and slippage.  Requiring the structural proxy again would recreate
-        # the cash/Futures convergence contradiction fixed above.
+        # Mainnet promotion stays separately fail-closed. Statistical evidence
+        # may reject a belief, but it never supplies current Market Truth.
         allowed = bool(report["live_empirical_ok"])
     else:
-        allowed = bool(report["cost_ok"] or report["bootstrap_shadow_allowed"])
+        allowed = bool(report["causal_shadow_allowed"])
     return bool((result or {}).get("decision") == "GO" and allowed), report

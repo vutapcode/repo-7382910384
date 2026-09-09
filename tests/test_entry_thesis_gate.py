@@ -89,6 +89,87 @@ NO_LIQUIDATION = {"phase": "QUIET", "burst": False, "decelerating": False}
 
 
 class EntryThesisGateTests(unittest.TestCase):
+    def test_no_empirical_cohort_does_not_block_valid_causal_shadow(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "CONTINUING_CONFIRMED",
+                "coinbase_spot": "CONTINUING_CONFIRMED",
+            },
+        )
+        allowed, report = entry_edge_tier.authorize(
+            candidate,
+            SimpleNamespace(
+                entry_economics_v6_replay_approved=False,
+                wstrade_live_armed=False,
+            ),
+        )
+        self.assertTrue(allowed)
+        self.assertEqual(
+            report["forward_edge_status"], "NO_EMPIRICAL_FALSIFIER"
+        )
+        self.assertEqual(
+            report["residual_edge_status"],
+            "UNVERIFIED_NO_CAUSAL_FORECAST",
+        )
+        self.assertTrue(report["causal_shadow_allowed"])
+        self.assertFalse(
+            report["causal_action_contract"][
+                "statistics_can_create_market_truth"
+            ]
+        )
+
+    def test_measured_edge_below_frozen_cost_blocks_shadow(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "CONTINUING_CONFIRMED",
+                "coinbase_spot": "CONTINUING_CONFIRMED",
+            },
+        )
+        candidate["ignition"].update({
+            "residual_edge_proxy_bps": 1.0,
+            "residual_edge_source": "CAUSAL_RESIDUAL_BOUND_V1",
+        })
+        allowed, report = entry_edge_tier.authorize(
+            candidate,
+            SimpleNamespace(
+                entry_economics_v6_replay_approved=False,
+                wstrade_live_armed=False,
+            ),
+        )
+        self.assertFalse(allowed)
+        self.assertFalse(report["cost_ok"])
+        self.assertEqual(report["residual_edge_status"], "MEASURED_FAIL")
+
+    def test_active_negative_outcomes_falsify_but_do_not_create_direction(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "CONTINUING_CONFIRMED",
+                "coinbase_spot": "CONTINUING_CONFIRMED",
+            },
+        )
+        empirical_falsifier = {
+            "status": "ACTIVE", "level": "EXACT", "samples": 30,
+            "positive_net": False, "expected_guardian_net_bps": -2.0,
+            "lower_confidence_bound_bps": -4.0,
+        }
+        with patch.object(
+            entry_edge_tier.entry_economics_v2,
+            "estimate", return_value=empirical_falsifier,
+        ):
+            allowed, report = entry_edge_tier.authorize(
+                candidate,
+                SimpleNamespace(
+                    entry_economics_v6_replay_approved=True,
+                    wstrade_live_armed=False,
+                ),
+            )
+        self.assertFalse(allowed)
+        self.assertIn("EMPIRICAL_OUTCOME_FALSIFIER", report["hard_vetoes"])
+        self.assertTrue(report["empirical_falsification"]["active_falsifier"])
+
     def test_legacy_s_vote_nonconversion_cannot_veto_causal_entry(self):
         candidate = result(
             intent="POSITION_BUILD", consumed=0.20,

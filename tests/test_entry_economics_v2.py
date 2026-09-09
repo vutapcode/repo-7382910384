@@ -150,7 +150,10 @@ class EntryEconomicsV2Tests(unittest.TestCase):
 
     def test_insufficient_data_never_invents_forward_edge(self):
         report = entry_economics_v2.estimate(SimpleNamespace(), snapshot())
-        self.assertEqual(report["status"], "BOOTSTRAP_UNVERIFIED")
+        self.assertEqual(report["status"], "NO_EMPIRICAL_FALSIFIER")
+        self.assertEqual(report["role"], "FALSIFICATION_ONLY")
+        self.assertFalse(report["can_create_market_truth"])
+        self.assertFalse(report["can_create_action"])
         self.assertIsNone(report["expected_guardian_net_bps"])
         self.assertFalse(report["authority"])
 
@@ -259,7 +262,7 @@ class EntryEconomicsV2Tests(unittest.TestCase):
             snapshot(execution_style="MAKER"),
         ):
             report = entry_economics_v2.estimate(state, changed)
-            self.assertEqual(report["status"], "BOOTSTRAP_UNVERIFIED")
+            self.assertEqual(report["status"], "NO_EMPIRICAL_FALSIFIER")
             self.assertEqual(report["parent_samples"], 0)
 
     def test_parent_excludes_the_queried_exact_cohort(self):
@@ -277,7 +280,7 @@ class EntryEconomicsV2Tests(unittest.TestCase):
                 net_bps=-8.0, execution_cost_bps=10.0,
             )
         report = entry_economics_v2.estimate(state, snapshot())
-        self.assertEqual(report["status"], "BOOTSTRAP_UNVERIFIED")
+        self.assertEqual(report["status"], "NO_EMPIRICAL_FALSIFIER")
         self.assertEqual(report["samples"], 29)
         self.assertEqual(report["parent_samples"], 21)
 

@@ -2,7 +2,8 @@
 
 The model never converts MFE into alpha.  It learns only executable shadow
 positions closed by the active Guardian and stores net bps after the frozen
-execution cost.  Unknown cohorts remain bootstrap telemetry.
+execution cost. Unknown cohorts remain telemetry and cannot create or erase
+Market Truth.
 """
 
 import math
@@ -260,7 +261,8 @@ def estimate(state, snapshot):
         return {
             "version": VERSION,
             "economic_contract_version": CONTRACT_VERSION,
-            "status": "BOOTSTRAP_UNVERIFIED",
+            "status": "NO_EMPIRICAL_FALSIFIER",
+            "compatibility_status": "BOOTSTRAP_UNVERIFIED",
             "level": "NONE",
             "samples": len(exact),
             "parent_samples": len(parent),
@@ -272,6 +274,9 @@ def estimate(state, snapshot):
             "time_to_positive_net_competing_terminations": 0,
             "time_to_positive_net_calibration_status": "UNRESOLVED_NO_COHORT",
             "authority": False,
+            "role": "FALSIFICATION_ONLY",
+            "can_create_market_truth": False,
+            "can_create_action": False,
             "exact_key": "|".join(exact_key),
             "parent_key": "|".join(parent_key),
         }
@@ -287,6 +292,9 @@ def estimate(state, snapshot):
         "minimum_samples": minimum,
         "parent_samples": len(parent),
         "authority": replay_approved,
+        "role": "FALSIFICATION_ONLY",
+        "can_create_market_truth": False,
+        "can_create_action": False,
         "exact_key": "|".join(exact_key),
         "parent_key": "|".join(parent_key),
         "policy": "EXECUTABLE_GUARDIAN_NET_NOT_MFE_ALPHA",

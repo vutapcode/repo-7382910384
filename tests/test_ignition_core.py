@@ -3308,7 +3308,14 @@ class IgnitionCoreTests(unittest.TestCase):
         allowed, report = entry_edge_tier.authorize(result, s)
         self.assertTrue(allowed)
         self.assertTrue(report["bootstrap_shadow_allowed"])
-        self.assertFalse(report["cost_ok"])
+        self.assertTrue(report["cost_ok"])
+        self.assertEqual(
+            report["residual_edge_status"],
+            "UNVERIFIED_NO_CAUSAL_FORECAST",
+        )
+        self.assertEqual(
+            report["edge_class"], "CAUSAL_EDGE_UNVERIFIED"
+        )
         s.wstrade_live_armed = True
         allowed, report = entry_edge_tier.authorize(result, s)
         self.assertFalse(allowed)
