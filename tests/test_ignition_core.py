@@ -351,7 +351,7 @@ class IgnitionCoreTests(unittest.TestCase):
             "TIMING_ATTEMPT_STARTED_FROM_LIVE_WAVE",
         )
 
-    def test_old_owned_wave_can_start_fresh_timing_attempt(self):
+    def test_disconnected_old_ownership_cannot_seed_fresh_timing(self):
         s = state(now=100.0)
         s.bias_version = "TEST"
         s.bias_acquisition_handoff = acquisition_handoff(completed_ms=90_000)
@@ -361,17 +361,13 @@ class IgnitionCoreTests(unittest.TestCase):
             s, histories, 100_000, "LONG",
         )
 
-        self.assertIsNotNone(episode)
-        self.assertEqual(
-            episode["causal_episode_id"],
-            s.bias_acquisition_handoff["causal_wave_id"],
-        )
+        self.assertIsNone(episode)
         self.assertEqual(
             s._ignition_acquisition_handoff_observation["status"],
-            "TIMING_ATTEMPT_STARTED_FROM_LIVE_WAVE",
+            "ACQUISITION_TIMING_CHAIN_DISCONNECTED",
         )
 
-    def test_sealed_live_wave_can_retry_while_current_bias_is_abstain(self):
+    def test_abstain_cannot_reactivate_disconnected_old_acquisition(self):
         s = state(now=100.0)
         s.bias_state, s.bias_confidence = "ABSTAIN", 0.0
         s.bias_version = "TEST"
@@ -381,12 +377,19 @@ class IgnitionCoreTests(unittest.TestCase):
             s, self._acquisition_histories(), 100_000, "ABSTAIN",
         )
 
-        self.assertIsNotNone(episode)
-        self.assertEqual(episode["side"], "LONG")
+        self.assertIsNone(episode)
         self.assertEqual(
-            episode["causal_episode_id"],
-            s.bias_acquisition_handoff["causal_wave_id"],
+            s._ignition_acquisition_handoff_observation["status"],
+            "ACQUISITION_TIMING_CHAIN_DISCONNECTED",
         )
+
+    def test_current_cash_reports_causal_chain_onset(self):
+        report = ignition_core._current_cash_conversion(
+            self._acquisition_histories(), "LONG", 100_000,
+        )
+
+        self.assertTrue(report["current_cross_cash_causal_survival"])
+        self.assertEqual(report["causal_chain_started_ms"], 99_450)
 
     def test_opposite_current_bias_cannot_reuse_sealed_wave(self):
         s = state(now=100.0)

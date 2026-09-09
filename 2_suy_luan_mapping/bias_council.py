@@ -674,12 +674,13 @@ def _seal_acquisition_handoff(report, completed_at):
 
 
 def _same_acquisition_wave(existing, candidate):
-    """Preserve the active cash owner until Market Truth falsifies it.
+    """Reuse identity only when acquisition evidence is causally contiguous.
 
-    Segment overlap is a sampling artifact, not causal identity.  A later
-    same-side acquisition on unchanged cash epochs remains an observation of
-    the active wave when that wave is still SEALED.  `_terminate_acquisition_wave`
-    is the sole owner of causal death before this helper is called.
+    Long-lived ownership and timing-wave provenance are different facts.  An
+    unfalsified owner may remain LONG/SHORT through a lull, but a later burst
+    cannot inherit the acquisition onset merely because side and epochs match.
+    The new acquisition evidence must touch the previously sealed completion
+    boundary; no elapsed-time tolerance is invented here.
     """
     existing = dict(existing or {})
     candidate = dict(candidate or {})
@@ -699,6 +700,7 @@ def _same_acquisition_wave(existing, candidate):
         old_start > 0 and old_end >= old_start
         and new_start > 0 and new_end >= new_start
         and new_end >= old_end
+        and new_start <= old_end
     )
 
 

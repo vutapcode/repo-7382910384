@@ -96,7 +96,7 @@ class BiasCouncilTests(unittest.TestCase):
             report["acquisition_handoff"]["reacquisition_observations"], 1,
         )
 
-    def test_nonoverlapping_reacquisition_keeps_unfalsified_wave(self):
+    def test_nonoverlapping_reacquisition_is_not_same_timing_wave(self):
         existing = {
             "status": "SEALED", "side": "LONG",
             "venue_epochs": {"spot": 3, "coinbase": 4},
@@ -110,10 +110,28 @@ class BiasCouncilTests(unittest.TestCase):
             "ownership_completed_ms": 150_000,
         }
 
-        self.assertTrue(council._same_acquisition_wave(existing, later))
+        self.assertFalse(council._same_acquisition_wave(existing, later))
 
         falsified = dict(existing, status="TERMINATED_CAUSAL_FALSIFIER")
         self.assertFalse(council._same_acquisition_wave(falsified, later))
+
+    def test_boundary_overlapping_reacquisition_keeps_same_timing_wave(self):
+        existing = {
+            "status": "SEALED", "side": "LONG",
+            "venue_epochs": {"spot": 3, "coinbase": 4},
+            "first_converting_segment_onset_ms": 10_000,
+            "ownership_completed_ms": 70_000,
+        }
+        continuation = {
+            "status": "SEALED", "side": "LONG",
+            "venue_epochs": {"spot": 3, "coinbase": 4},
+            "first_converting_segment_onset_ms": 69_900,
+            "ownership_completed_ms": 70_100,
+        }
+
+        self.assertTrue(council._same_acquisition_wave(
+            existing, continuation,
+        ))
 
     def test_reacquisition_cannot_bridge_epoch_or_replay_backwards(self):
         existing = {

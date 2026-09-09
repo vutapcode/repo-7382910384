@@ -2216,8 +2216,18 @@ def _current_cash_conversion(histories, side, now_ms):
             ),
             "epoch": int(latest.get("epoch", 0) or 0),
             "acceptance_buckets": len(rows),
+            "acceptance_started_ms": int(
+                latest.get("bucket_start_ms", receive_ms) or receive_ms
+            ),
             "control_survived": control_survived,
             "control_span_ms": control_span_ms,
+            "control_started_ms": (
+                int(control_rows[0].get(
+                    "bucket_start_ms",
+                    control_rows[0].get("receive_time_ms", 0),
+                ) or 0)
+                if control_survived else None
+            ),
         }
     times = [row["receive_time_ms"] for row in accepted.values()]
     span = max(times) - min(times) if len(times) == len(CASH) else None
@@ -2248,6 +2258,19 @@ def _current_cash_conversion(histories, side, now_ms):
     cross_cash_causal_survival = bool(
         dual_acceptance and surviving_control_venues
     )
+    chain_starts = [
+        int(
+            row.get("control_started_ms")
+            if row.get("control_survived")
+            else row.get("acceptance_started_ms", 0)
+        )
+        for row in accepted.values()
+    ]
+    causal_chain_started_ms = (
+        min(chain_starts)
+        if cross_cash_causal_survival and len(chain_starts) == len(CASH)
+        else None
+    )
     return {
         "version": "CURRENT_CASH_CONVERSION_V2_ACCEPTANCE_CONTROL",
         "side": side,
@@ -2259,6 +2282,7 @@ def _current_cash_conversion(histories, side, now_ms):
         "dual_cash_control_span_ms": control_span,
         "surviving_control_venues": surviving_control_venues,
         "current_cross_cash_causal_survival": cross_cash_causal_survival,
+        "causal_chain_started_ms": causal_chain_started_ms,
         "causal_survival_basis": (
             "SURVIVING_PRIMARY_CONTROL_PLUS_FRESH_INDEPENDENT_ACCEPTANCE"
             if cross_cash_causal_survival else
@@ -2545,6 +2569,25 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
             policy=(
                 "RETRY_SAME_MARKET_WAVE_REQUIRES_SURVIVING_CONTROL_PLUS_"
                 "FRESH_INDEPENDENT_CASH_ACCEPTANCE"
+            ),
+        )
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
+    # A sealed acquisition is provenance for the acquisition boundary, not a
+    # perpetual timing token.  Present cash control must be the continuation
+    # that overlaps ownership completion.  If the observed bucket chain began
+    # later, Bias may still own direction, but normal Ignition must prove this
+    # new timing attempt without borrowing the historical onset.
+    chain_started_ms = int(current.get("causal_chain_started_ms", 0) or 0)
+    if chain_started_ms <= 0 or chain_started_ms > completed_ms:
+        observation.update(
+            status="ACQUISITION_TIMING_CHAIN_DISCONNECTED",
+            current_cash_conversion=current,
+            ownership_completed_ms=completed_ms,
+            causal_chain_started_ms=chain_started_ms or None,
+            policy=(
+                "LONG_LIVED_BIAS_OWNERSHIP_DOES_NOT_REUSE_DISCONNECTED_"
+                "ACQUISITION_TIMING_PROVENANCE"
             ),
         )
         state._ignition_acquisition_handoff_observation = observation
