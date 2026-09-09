@@ -7,7 +7,8 @@ temporary execution failures may retry the same opportunity.
 """
 import time
 
-VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V9_ACTIVE_IDENTITY_ONLY"
+VERSION = "CANONICAL_ENTRY_OPPORTUNITY_V10_CONSUMED_WAVE_FENCE"
+MAX_CONSUMED_MARKET_WAVES = 256
 CAUSAL_PHASES = {
     "PROBE", "EARLY", "MATURE", "ACCEPTANCE", "RELEASE",
     "PRESSURE_BUILDING", "WAIT_CHASE",
@@ -38,6 +39,33 @@ def _candidate(result):
     return bool(
         side in ("LONG", "SHORT")
         and (result.get("decision") == "GO" or phase in CAUSAL_PHASES)
+    )
+
+
+def _consumed_market_waves(state):
+    raw = getattr(state, "canonical_consumed_market_waves", None)
+    if not isinstance(raw, list):
+        raw = []
+        state.canonical_consumed_market_waves = raw
+    return raw
+
+
+def _remember_consumed_market_wave(state, market_wave_id):
+    market_wave_id = str(market_wave_id or "")
+    if not market_wave_id:
+        return
+    waves = _consumed_market_waves(state)
+    if market_wave_id in waves:
+        return
+    waves.append(market_wave_id)
+    del waves[:-MAX_CONSUMED_MARKET_WAVES]
+
+
+def _market_wave_consumed(state, market_wave_id):
+    market_wave_id = str(market_wave_id or "")
+    return bool(
+        market_wave_id
+        and market_wave_id in _consumed_market_waves(state)
     )
 
 
@@ -224,6 +252,30 @@ def observe(state, result, qualified=False, now=None, market_truth_wave=None):
         )
 
     signature = _signature(result, market_truth_wave)
+    explicit_wave_id = str(
+        truth_wave_id
+        or (result or {}).get("market_wave_id")
+        or (result or {}).get("causal_episode_id")
+        or ""
+    )
+    if _market_wave_consumed(state, explicit_wave_id):
+        active = bool(getattr(state, "canonical_opportunity_active", False))
+        row = _snapshot(
+            state, active=active, new=False, qualified_now=False,
+            transition=False,
+            causal_episode_id=(
+                getattr(state, "canonical_opportunity_active_episode_id", None)
+                if active else None
+            ),
+            grace_active=False,
+            signature=(
+                getattr(state, "canonical_opportunity_signature", None)
+                if active else signature
+            ),
+        )
+        row["candidate_rejected"] = "MARKET_WAVE_ALREADY_CONSUMED"
+        row["consumed_market_wave_id"] = explicit_wave_id
+        return row
     previous = tuple(
         getattr(state, "canonical_opportunity_signature", ()) or ()
     )
@@ -450,8 +502,14 @@ def mark_captured(state, opportunity_id):
     )
     if opportunity_id <= 0 or opportunity_id <= last:
         return False
+    captured_market_wave_id = None
+    if int(getattr(state, "canonical_opportunity_count", 0) or 0) == opportunity_id:
+        captured_market_wave_id = getattr(
+            state, "canonical_opportunity_active_episode_id", None
+        )
     if not commit(state, opportunity_id):
         return False
+    _remember_consumed_market_wave(state, captured_market_wave_id)
     state.canonical_last_captured_opportunity_id = opportunity_id
     state.canonical_opportunity_captured = int(
         getattr(state, "canonical_opportunity_captured", 0) or 0

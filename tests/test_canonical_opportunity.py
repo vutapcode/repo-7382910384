@@ -407,6 +407,66 @@ class CanonicalOpportunityTests(unittest.TestCase):
         self.assertFalse(opportunity.mark_captured(state, row["opportunity_id"]))
         self.assertEqual(state.canonical_opportunity_captured, 1)
 
+    def test_captured_market_wave_cannot_reopen_with_a_new_opportunity_id(self):
+        state = SimpleNamespace()
+        first_result = {
+            **go(), "causal_episode_id": "timing-1",
+            "market_wave_id": "cash-wave-1",
+        }
+        first = opportunity.observe(
+            state, first_result, qualified=True, now=100.0,
+            market_truth_wave=truth("cash-wave-1"),
+        )
+        self.assertTrue(opportunity.mark_captured(
+            state, first["opportunity_id"],
+        ))
+
+        retry_result = {
+            **go(), "causal_episode_id": "timing-2",
+            "market_wave_id": "cash-wave-1",
+        }
+        retry = opportunity.observe(
+            state, retry_result, qualified=True, now=101.0,
+            market_truth_wave=truth("cash-wave-1"),
+        )
+        bound, economic_id = opportunity.bind_result_identity(
+            retry_result, retry,
+        )
+
+        self.assertFalse(retry["active"])
+        self.assertIsNone(retry["opportunity_id"])
+        self.assertEqual(
+            retry["candidate_rejected"], "MARKET_WAVE_ALREADY_CONSUMED",
+        )
+        self.assertEqual(
+            bound["canonical_opportunity_link_status"],
+            "MARKET_WAVE_ALREADY_CONSUMED",
+        )
+        self.assertIsNone(economic_id)
+        self.assertEqual(state.canonical_opportunity_count, 1)
+
+    def test_different_market_wave_can_open_after_capture(self):
+        state = SimpleNamespace()
+        first = opportunity.observe(
+            state, {**go(), "market_wave_id": "cash-wave-1"},
+            qualified=True, now=100.0,
+            market_truth_wave=truth("cash-wave-1"),
+        )
+        self.assertTrue(opportunity.mark_captured(
+            state, first["opportunity_id"],
+        ))
+
+        second = opportunity.observe(
+            state, {**go(), "market_wave_id": "cash-wave-2"},
+            qualified=True, now=101.0,
+            market_truth_wave=truth("cash-wave-2"),
+        )
+
+        self.assertTrue(second["active"])
+        self.assertTrue(second["new"])
+        self.assertEqual(second["market_wave_id"], "cash-wave-2")
+        self.assertEqual(second["opportunity_id"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()
