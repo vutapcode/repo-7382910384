@@ -79,7 +79,17 @@ class MarketTruthWaveLifecycleTests(unittest.TestCase):
         self.assertEqual(unknown["status"], "UNKNOWN")
         later = market_thesis.wave_lifecycle(state, {
             "decision": "GO", "causal_episode_id": "wave-unknown",
-            "ignition": {"causal_episode_id": "wave-unknown"},
+            "ignition": {
+                "causal_episode_id": "wave-unknown",
+                "proof_type": "METAORDER_CONTINUATION",
+                "current_cash_conversion": {
+                    "confirmed": True,
+                    "accepted_cash_venues": ["binance_spot"],
+                },
+                "clock_quality": {
+                    "binance_spot": {"valid": True, "epoch": 1},
+                },
+            },
         })
         self.assertEqual(later["status"], "ACTIVE")
 

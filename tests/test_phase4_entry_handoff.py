@@ -29,6 +29,12 @@ def approved_result():
             "proof_type": "PERSISTENT_METAORDER",
             "proposer": "coinbase_spot",
             "cash_venues": ["binance_spot", "coinbase_spot"],
+            "current_cash_conversion": {
+                "confirmed": True,
+                "accepted_cash_venues": [
+                    "binance_spot", "coinbase_spot",
+                ],
+            },
             "bias_snapshot": {
                 "direction": "LONG",
                 "confidence": 0.8,
