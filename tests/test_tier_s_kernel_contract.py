@@ -67,7 +67,7 @@ class TierSKernelContractTests(unittest.TestCase):
             "IGNITION_INFERENCE_V9_CAUSAL_ACQUISITION_TIMING",
             profile["architecture"],
         )
-        self.assertIn("ENTRY_ECONOMICS_V8_TIME_TO_EVENT", profile["architecture"])
+        self.assertIn("ENTRY_ECONOMICS_V9_DUAL_MATURITY", profile["architecture"])
         self.assertIn(
             "BIAS_LIVE_DIRECTION_COMES_FROM_ROLLING_CAUSAL_CASH_PERSISTENCE",
             profile["invariants"],

@@ -348,7 +348,7 @@ def restore(base):
             dict(row) for row in economics_rows[-1024:]
             if isinstance(row, dict)
             and row.get("economic_contract_version")
-            == "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
+            == "ENTRY_ECONOMICS_V9_DUAL_MATURITY"
         ]
     else:
         state._entry_economics_v2_rows = []

@@ -55,7 +55,7 @@ class ShadowRuntimeStateTests(unittest.TestCase):
 
     def test_entry_economics_rows_are_version_bound(self):
         row = {
-            "economic_contract_version": "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
+            "economic_contract_version": "ENTRY_ECONOMICS_V9_DUAL_MATURITY",
             "valid": True, "side": "LONG",
             "net_pnl_bps_after_frozen_cost": 3.0,
         }

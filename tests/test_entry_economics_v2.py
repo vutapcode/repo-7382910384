@@ -16,7 +16,10 @@ def snapshot(**overrides):
         "side": "LONG", "entry_mode": "IGNITION", "regime": "NORMAL",
         "proof_type": "METAORDER_CONTINUATION",
         "proposer": "BINANCE_SPOT", "execution_style": "TAKER",
-        "bias_phase": "ESTABLISHED_TREND", "consumed_band": "EARLY_15_25",
+        "bias_phase": "ESTABLISHED_TREND",
+        "timing_attempt_consumed_band": "EARLY_15_25",
+        "market_wave_consumed_band": "EARLY_15_25",
+        "consumed_band": "EARLY_15_25",
         "oi_quality": "UNKNOWN",
         "flow_efficiency_state": "CONTINUING_CONFIRMED",
     }
@@ -25,6 +28,29 @@ def snapshot(**overrides):
 
 
 class EntryEconomicsV2Tests(unittest.TestCase):
+    def test_market_wave_maturity_is_separate_from_timing_attempt(self):
+        result = {
+            "side": "LONG", "entry_mode": "IGNITION",
+            "ignition": {
+                "proposer": "binance_spot",
+                "proof_type": "METAORDER_CONTINUATION",
+                "consumed_fraction": 0.25,
+                "phase_measurement": {
+                    "consumed_fraction": 0.25,
+                    "market_wave_consumed_fraction": 0.90,
+                },
+                "flow_efficiency": {"venues": {
+                    "binance_spot": {"state": "CONTINUING_CONFIRMED"},
+                }},
+            },
+        }
+        row = entry_economics_v2.feature_snapshot(
+            result, {"regime": "NORMAL"}, "TAKER"
+        )
+        self.assertEqual(row["timing_attempt_consumed_band"], "EARLY_15_25")
+        self.assertEqual(row["market_wave_consumed_band"], "MATURE")
+        self.assertEqual(row["consumed_band"], "MATURE")
+
     def test_composite_cash_witness_state_is_used_for_economic_cohort(self):
         result = {
             "side": "SHORT", "entry_mode": "PERSISTENT_METAORDER",

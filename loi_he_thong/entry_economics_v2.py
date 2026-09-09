@@ -10,8 +10,8 @@ import math
 from loi_he_thong import verified_cost_model
 
 
-VERSION = "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
-CONTRACT_VERSION = "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
+VERSION = "ENTRY_ECONOMICS_V9_DUAL_MATURITY"
+CONTRACT_VERSION = "ENTRY_ECONOMICS_V9_DUAL_MATURITY"
 MAX_ROWS = 1024
 EXACT_MIN = 30
 PARENT_MIN = 50
@@ -64,6 +64,15 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
         oi_status = "UNKNOWN" if not raw_oi.get("fresh") else _u(raw_oi.get("intent"))
     else:
         oi_status = _u(oi.get("status"))
+    phase = dict(ignition.get("phase_measurement") or {})
+    timing_consumed = phase.get(
+        "consumed_fraction", ignition.get("consumed_fraction")
+    )
+    market_wave_consumed = phase.get(
+        "market_wave_consumed_fraction", timing_consumed
+    )
+    timing_band = consumed_band(timing_consumed)
+    market_wave_band = consumed_band(market_wave_consumed)
     return {
         "economic_contract_version": CONTRACT_VERSION,
         "frozen_cost_plan_version": verified_cost_model.FROZEN_COST_PLAN_VERSION,
@@ -74,7 +83,13 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
         "proposer": proposer,
         "execution_style": _u(execution_style),
         "bias_phase": _u(context.get("phase")),
-        "consumed_band": consumed_band(ignition.get("consumed_fraction")),
+        "timing_attempt_consumed_fraction": _f(timing_consumed, 1.0),
+        "timing_attempt_consumed_band": timing_band,
+        "market_wave_consumed_fraction": _f(market_wave_consumed, 1.0),
+        "market_wave_consumed_band": market_wave_band,
+        # Compatibility readers receive economic maturity, not the restarted
+        # timing-attempt maturity that contaminated V8 cohorts.
+        "consumed_band": market_wave_band,
         "oi_quality": oi_status,
         # Cohorts must learn the state that actually authorized Entry.  When
         # the proposer is ambiguous but an independent cash venue confirms,
@@ -110,7 +125,8 @@ def _rows(state):
 def _exact_key(snapshot):
     names = (
         "side", "entry_mode", "regime", "proof_type", "proposer",
-        "execution_style", "bias_phase", "consumed_band", "oi_quality",
+        "execution_style", "bias_phase", "market_wave_consumed_band",
+        "oi_quality",
         "flow_efficiency_state", "transition_class",
     )
     return tuple(_u(snapshot.get(name)) for name in names)
