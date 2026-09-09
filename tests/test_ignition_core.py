@@ -468,6 +468,31 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertFalse(hasattr(s, "_ignition_acquisition_claimed_id"))
 
+    def test_captured_owned_wave_cannot_start_another_timing_attempt(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff()
+        histories = self._acquisition_histories()
+
+        first = ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        )
+        self.assertIsNotNone(first)
+        self.assertTrue(ignition_core.capture_episode(
+            s, first["causal_episode_id"], side="LONG",
+            last_evidence_ms=100_000,
+        ))
+
+        second = ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        )
+
+        self.assertIsNone(second)
+        self.assertEqual(
+            s._ignition_acquisition_handoff_observation["status"],
+            "ACQUISITION_WAVE_ALREADY_CAPTURED",
+        )
+
     def test_persistent_wave_maturity_is_measured_from_original_onset(self):
         s = state(now=100.0)
         s.bias_version = "TEST"

@@ -2128,6 +2128,14 @@ def _tombstone(state, episode_id):
         lookup.pop(order.popleft(), None)
 
 
+def _is_tombstoned(state, episode_id):
+    episode_id = str(episode_id or "")
+    if not episode_id:
+        return False
+    lookup = getattr(state, "_ignition_tombstones", None)
+    return bool(isinstance(lookup, dict) and lookup.get(episode_id))
+
+
 def _material_flow(row):
     venue = str(row.get("venue") or "")
     return bool(
@@ -2429,6 +2437,14 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
         state._ignition_acquisition_handoff_observation = observation
         return False, observation
     resolved_side = str(sealed.get("side") or "ABSTAIN").upper()
+    causal_wave_id = str(sealed.get("causal_wave_id") or "")
+    if _is_tombstoned(state, causal_wave_id):
+        observation.update(
+            status="ACQUISITION_WAVE_ALREADY_CAPTURED",
+            side=resolved_side,
+        )
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
     completed_ms = int(sealed.get("ownership_completed_ms", 0) or 0)
     age_ms = int(now_ms) - completed_ms
     if age_ms < 0:
