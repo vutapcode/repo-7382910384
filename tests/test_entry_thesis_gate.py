@@ -160,6 +160,42 @@ class EntryThesisGateTests(unittest.TestCase):
         flow = audit["questions"]["q3_flow_efficiency"]
         self.assertFalse(flow["cross_venue_cash_continuation"])
         self.assertEqual(flow["cross_venue_witness_venues"], [])
+
+    def test_historical_dual_roots_do_not_fake_current_corroboration(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20, recent_progress=0.20,
+        )
+        candidate["ignition"]["evidence_provenance"] = {
+            "nodes": [
+                {
+                    "evidence_id": f"node-{venue}",
+                    "parent_evidence_ids": [f"raw-{venue}"],
+                    "root_evidence_id": f"root-{venue}",
+                    "evidence_role": "CASH_VENUE_WAVE",
+                    "venue": venue,
+                }
+                for venue in ("binance_spot", "coinbase_spot")
+            ]
+        }
+        candidate["ignition"]["current_cash_conversion"] = {
+            "confirmed": True,
+            "accepted_cash_venues": ["binance_spot"],
+        }
+
+        audit = entry_thesis_gate.evaluate(
+            SimpleNamespace(), candidate,
+            PASS_IMPACT, PASS_BASIS, NO_LIQUIDATION,
+        )
+        corroboration = audit["questions"]["q6_cross_venue_corroboration"]
+        self.assertEqual(corroboration["status"], "SINGLE_CASH_ANCHOR")
+        self.assertEqual(
+            corroboration["historical_cash_venues"],
+            ["binance_spot", "coinbase_spot"],
+        )
+        self.assertEqual(
+            corroboration["current_cash_venues"], ["binance_spot"],
+        )
+
     def test_entry_contract_requires_present_tense_cash_conversion(self):
         candidate = result(consumed=0.20, recent_progress=0.20)
         candidate["ignition"].pop("current_cash_conversion")

@@ -321,8 +321,20 @@ def _maturity_question(ignition):
 def _independence_question(ignition, basis):
     cash = set(ignition.get("cash_venues") or ()) & CASH
     evidence_roots, provenance_status = _cash_evidence_roots(ignition)
-    corroborated_cash = {
+    current_cash = dict(ignition.get("current_cash_conversion") or {})
+    current_acceptances = {
+        str(venue) for venue in current_cash.get(
+            "accepted_cash_venues", ()
+        )
+    } & CASH
+    historical_cash = {
         venue for venue in cash if evidence_roots.get(venue)
+    }
+    # Provenance proves where the episode came from; it does not prove that a
+    # venue still accepts the wave now. Present-tense corroboration is the
+    # intersection of immutable cash roots and current flow->price acceptance.
+    corroborated_cash = {
+        venue for venue in historical_cash if venue in current_acceptances
     }
     unique_cash_roots = {
         evidence_roots[venue] for venue in corroborated_cash
@@ -343,12 +355,15 @@ def _independence_question(ignition, basis):
         "question": "CROSS_VENUE_CORROBORATION",
         "status": status, "cash_venues": sorted(cash),
         "corroborated_cash_venues": sorted(corroborated_cash),
+        "historical_cash_venues": sorted(historical_cash),
+        "current_cash_venues": sorted(current_acceptances),
         "cash_evidence_root_ids": evidence_roots,
         "evidence_provenance_status": provenance_status,
         "unique_cash_root_count": len(unique_cash_roots),
         "proposer": proposer, "futures_self_led": futures_self_led,
         "perp_expansion_context": bool((basis or {}).get("perp_expansion")),
         "spot_perp_basis": dict(basis or {}),
+        "policy": "HISTORICAL_PROVENANCE_INTERSECT_CURRENT_CASH_ACCEPTANCE",
     }
 
 
