@@ -365,7 +365,10 @@ def _entry_thesis_break(state,pos,now,s1,s2,s3):
     else:
         selected={primary} if primary in active_anchors else active_anchors
         anchor_price=bool(selected&price_adverse)
-        cause=bool(selected&flow_adverse or "futures" in flow_adverse or s3.get("status")=="ADVERSE")
+        # Market Truth is owned by executed cash conversion. Derivatives and
+        # OI explain urgency/mechanism, but cannot manufacture a broken cash
+        # thesis when the selected cash anchor has no adverse executed flow.
+        cause=bool(selected&flow_adverse)
         broken=bool(anchor_price and cause)
         reason="ENTRY_CASH_THESIS_BROKEN" if broken else "ENTRY_CASH_THESIS_HOLDS"
     if reason=="GENERIC_CAUSAL_FALLBACK":
@@ -688,12 +691,12 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_windo
     if recovery_confirmed:
         classification="THESIS_RECOVERY_CONFIRMED"
         reason="ADVERSE_BURST_LOST_EFFICIENCY_OR_ORIGINAL_FLOW_RECLAIMED"
-    elif cross_evidence_conflict:
-        classification="CONFLICTED_CAUSAL_EVIDENCE"
-        reason="CASH_ADVERSE_BUT_FUTURES_SUPPORTS_POSITION_WITHOUT_OPPOSITE_BUILD"
     elif confirmed:
         classification="THESIS_BREAK_CONFIRMED"
         reason="PRIMARY_CASH_PLUS_INDEPENDENT_ACCEPTANCE_AND_NEW_CAUSE"
+    elif cross_evidence_conflict:
+        classification="CONFLICTED_CAUSAL_EVIDENCE"
+        reason="CASH_ADVERSE_BUT_FUTURES_SUPPORTS_POSITION_WITHOUT_OPPOSITE_BUILD"
     elif liquidation_flush:
         classification="TRANSIENT_LIQUIDATION_FLUSH"
         reason="OI_UNWIND_WITH_FORCED_OR_CROSS_CASH_FLUSH"
@@ -729,6 +732,7 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_windo
             "futures_flow_supportive":futures_flow_supportive,
             "opposite_oi_build":oi_state=="OPPOSITE_POSITION_BUILD",
             "no_refill_proxy":not price_stalled,
+            "market_truth_authority":False,
         },
         "recovery":{
             **recovery_window,
@@ -741,6 +745,8 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_windo
         },
         "liquidity_response":liquidity,
         "kill_fast_eligible":classification=="THESIS_BREAK_CONFIRMED",
+        "market_truth_owner":"MARKET_THESIS",
+        "derivatives_can_create_or_rescue_direction":False,
         "policy":"CLASSIFY_BEFORE_KILL_FAST",
     }
 
