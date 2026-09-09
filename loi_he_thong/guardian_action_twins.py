@@ -125,10 +125,11 @@ def replay_twins(**kwargs):
     identities={_hash(row["identity"]) for row in rows}
     if len(identities)!=1:
         raise ValueError("GUARDIAN_TWIN_IDENTITY_MISMATCH")
-    return {
+    result={
         "version":VERSION,"authority":False,"branches":rows,
         "same_wal":True,"same_causal_wave":True,
         "same_guardian_version":True,"same_frozen_cost":True,
         "runtime_policy_selected":False,
-        "deterministic_hash":_hash(rows),
     }
+    result["deterministic_hash"]=_hash(result)
+    return result
