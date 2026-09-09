@@ -36,8 +36,6 @@ def _knowledge_state(result):
     explicit = _u(result.get("market_truth_status"), "")
     if explicit == "FALSIFIED":
         return "FALSIFIED", "FALSIFIED"
-    if decision == "GO":
-        return "SUPPORTED", "SUPPORTED"
     if any(token in reason for token in (
         "STALE", "GAP", "EPOCH", "CLOCK", "FEED_NOT_READY",
         "EXTERNAL_UNAVAILABLE", "SOURCE_UNAVAILABLE",
@@ -47,6 +45,30 @@ def _knowledge_state(result):
         "CONTRADICTION", "OPPOSE", "NOT_ALIGNED", "CONTROL_TRANSFER_FAILED",
     )):
         return "DIVERGING", "CONTRADICTED"
+    if decision == "GO":
+        ignition = dict(result.get("ignition") or {})
+        current_cash = dict(
+            ignition.get("current_cash_conversion") or {}
+        )
+        accepted = {
+            str(value) for value in current_cash.get(
+                "accepted_cash_venues", ()
+            )
+        }
+        proof = _u(ignition.get("proof_type"))
+        health = _source_health(ignition, "UNKNOWN_MARKET")
+        if health.get("overall") != "FRESH":
+            return "UNKNOWN", "UNKNOWN_SOURCE"
+        if (
+            current_cash.get("confirmed")
+            and accepted & {"binance_spot", "coinbase_spot"}
+            and proof != "UNKNOWN"
+        ):
+            return "SUPPORTED", "SUPPORTED"
+        # A proposal is an Action-layer fact, not evidence that Market Truth
+        # is supported.  Missing causal cash fields remain unknown instead of
+        # being upgraded merely because an upstream decision says GO.
+        return "UNKNOWN", "UNKNOWN_MARKET"
     return "UNKNOWN", "UNKNOWN_MARKET"
 
 
@@ -200,13 +222,23 @@ def _source_health(ignition, knowledge_state):
     sources = {}
     for venue, row in clock.items():
         row = dict(row or {})
+        explicit_status = row.get("source_health") or row.get(
+            "temporal_status"
+        )
+        if explicit_status is not None:
+            status = _u(explicit_status, "UNKNOWN")
+        elif row.get("valid") is True or row.get("clock_valid") is True:
+            status = "FRESH"
+        elif row.get("valid") is False or row.get("clock_valid") is False:
+            status = "DEGRADED"
+        else:
+            status = "UNKNOWN"
         sources[str(venue)] = {
-            "status": _u(
-                row.get("source_health") or row.get("temporal_status"),
-                "UNKNOWN",
-            ),
+            "status": status,
             "epoch": row.get("epoch"),
-            "temporal_uncertainty_ms": row.get("temporal_uncertainty_ms"),
+            "temporal_uncertainty_ms": row.get(
+                "temporal_uncertainty_ms", row.get("uncertainty_ms")
+            ),
         }
     if knowledge_state == "UNKNOWN_SOURCE" or not sources:
         overall = "UNKNOWN"

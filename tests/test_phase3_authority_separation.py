@@ -25,6 +25,12 @@ def result(decision="GO", reason="IGNITION_PROVED", policy="TAKER"):
             "proof_type": "PERSISTENT_METAORDER",
             "proposer": "binance_spot",
             "cash_venues": ["binance_spot", "coinbase_spot"],
+            "current_cash_conversion": {
+                "confirmed": True,
+                "accepted_cash_venues": [
+                    "binance_spot", "coinbase_spot",
+                ],
+            },
             "oi_verification_state": {"status": "UNCHANGED_UNKNOWN"},
             "clock_quality": {
                 "binance_spot": {
@@ -81,6 +87,28 @@ class Phase3AuthoritySeparationTests(unittest.TestCase):
         falsified = market_thesis.build(falsified_input)
         self.assertEqual(falsified["status"], "FALSIFIED")
         self.assertEqual(falsified["knowledge_state"], "FALSIFIED")
+
+    def test_go_without_present_cash_evidence_is_unknown(self):
+        candidate = result()
+        candidate["ignition"].pop("current_cash_conversion")
+        truth = market_thesis.build(candidate)
+        self.assertEqual(truth["status"], "UNKNOWN")
+        self.assertEqual(truth["knowledge_state"], "UNKNOWN_MARKET")
+
+    def test_runtime_clock_validity_maps_to_fresh_source_health(self):
+        candidate = result()
+        candidate["ignition"]["clock_quality"] = {
+            "binance_spot": {
+                "valid": True, "epoch": 2, "uncertainty_ms": 12.0,
+            },
+            "coinbase_spot": {
+                "clock_valid": True, "epoch": 3,
+                "uncertainty_ms": 15.0,
+            },
+        }
+        truth = market_thesis.build(candidate)
+        self.assertEqual(truth["source_health"]["overall"], "FRESH")
+        self.assertEqual(truth["knowledge_state"], "SUPPORTED")
 
     def test_action_owner_maps_existing_decision_without_mutating_it(self):
         candidate = result()

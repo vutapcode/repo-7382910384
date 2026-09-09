@@ -22,6 +22,12 @@ def _entry_result():
             "proof_type": "PERSISTENT_METAORDER",
             "proposer": "binance_spot",
             "cash_venues": ["binance_spot", "coinbase_spot"],
+            "current_cash_conversion": {
+                "confirmed": True,
+                "accepted_cash_venues": [
+                    "binance_spot", "coinbase_spot",
+                ],
+            },
             "oi_verification_state": {"status": "UNCHANGED_UNKNOWN"},
             "clock_quality": {
                 "binance_spot": {"source_health": "FRESH", "epoch": 2},

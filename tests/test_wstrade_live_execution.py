@@ -129,9 +129,23 @@ def state():
 def action_approved_result(result, side='LONG'):
     result = dict(result or {})
     episode_id = str(result.get('causal_episode_id') or 'episode-test')
+    ignition = dict(result.get('ignition') or {})
+    ignition.setdefault('proof_type', 'METAORDER_CONTINUATION')
+    ignition.setdefault('proposer', 'binance_spot')
+    ignition.setdefault('cash_venues', [
+        'binance_spot', 'coinbase_spot',
+    ])
+    ignition.setdefault('current_cash_conversion', {
+        'confirmed': True,
+        'accepted_cash_venues': ['binance_spot', 'coinbase_spot'],
+    })
+    ignition.setdefault('clock_quality', {
+        'binance_spot': {'valid': True, 'epoch': 1},
+        'coinbase_spot': {'valid': True, 'epoch': 1},
+    })
     result.update({
         'decision': 'GO', 'reason': 'IGNITION_PROVED', 'side': side,
-        'causal_episode_id': episode_id,
+        'causal_episode_id': episode_id, 'ignition': ignition,
     })
     truth = market_thesis.build(result)
     action = authority_contracts.seal(
