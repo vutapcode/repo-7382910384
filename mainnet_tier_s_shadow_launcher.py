@@ -677,6 +677,14 @@ def _action_contract(result, quorum_ok, causal_episode_id=None):
                 "economic_contract_version": edge.get(
                     "economic_contract_version"
                 ),
+                # The empirical learner must consume the exact immutable
+                # feature cohort that Action evaluated.  Rebuilding it after
+                # fill/Guardian close would mix later market state into the
+                # entry decision, while omitting it leaves Economics in
+                # BOOTSTRAP_UNVERIFIED forever.
+                "economic_feature_snapshot": dict(
+                    edge.get("economic_feature_snapshot") or {}
+                ),
                 "execution_style": edge.get("execution_style"),
                 "forward_edge_status": edge.get("forward_edge_status"),
             },

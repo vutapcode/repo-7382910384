@@ -20,6 +20,11 @@ def approved_result():
         "edge_tier": {
             "cost_ok": True,
             "economic_contract_version": "TEST_COST_V1",
+            "economic_feature_snapshot": {
+                "economic_contract_version": "TEST_COST_V1",
+                "side": "LONG",
+                "proof_type": "PERSISTENT_METAORDER",
+            },
             "execution_style": "TAKER",
             "forward_edge_status": "BOOTSTRAP_UNVERIFIED",
         },
@@ -135,6 +140,10 @@ class Phase4EntryHandoffTests(unittest.TestCase):
             result["entry_thesis_handoff"]["market_truth_hash"],
         )
         self.assertEqual(thesis["bias_thesis"]["context_side"], "LONG")
+        self.assertEqual(
+            thesis["economic_feature_snapshot"],
+            result["edge_tier"]["economic_feature_snapshot"],
+        )
 
     def test_top_level_go_requires_valid_action_handoff(self):
         result = approved_result()

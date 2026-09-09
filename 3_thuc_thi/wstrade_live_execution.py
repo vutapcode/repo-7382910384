@@ -1047,6 +1047,9 @@ def _entry_causal_thesis(result):
             "economic_contract_version": economics.get(
                 "economic_contract_version"
             ),
+            "economic_feature_snapshot": dict(
+                economics.get("economic_feature_snapshot") or {}
+            ),
             "bias_thesis": dict(truth.get("bias_context") or {}),
         }
 

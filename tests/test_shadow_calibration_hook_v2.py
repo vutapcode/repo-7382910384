@@ -63,6 +63,37 @@ class ShadowCalibrationTaintTests(unittest.TestCase):
         record.assert_called_once()
         self.assertEqual(saves, [True])
 
+    def test_clean_close_records_frozen_entry_economics_snapshot(self):
+        state = self._state()
+        pos = SimpleNamespace(
+            active=True, side="LONG", entry_price=100.0, qty=0.001,
+            calibration_tainted=False,
+            execution_cost_plan={"decision_total_cost_bps": 12.5},
+            entry_causal_thesis={
+                "economic_feature_snapshot": {
+                    "economic_contract_version": (
+                        hook.entry_economics_v2.CONTRACT_VERSION
+                    ),
+                },
+            },
+        )
+        base = _runtime(pos, state)
+        with patch.object(
+            hook.verified_cost_model,
+            "validate_frozen_cost_plan",
+            return_value=(True, "FROZEN_COST_CONTRACT_PASS"),
+        ), patch.object(
+            hook.edge_calibration_v2, "record"
+        ), patch.object(
+            hook.entry_economics_v2, "record"
+        ) as economics_record:
+            base._close_shadow(pos, {"reason": "GUARDIAN"}, 101.0)
+
+        economics_record.assert_called_once()
+        self.assertEqual(
+            economics_record.call_args.kwargs["execution_cost_bps"], 12.5,
+        )
+
     def test_invalid_frozen_cost_is_excluded_from_empirical_alpha(self):
         state = self._state()
         pos = SimpleNamespace(
