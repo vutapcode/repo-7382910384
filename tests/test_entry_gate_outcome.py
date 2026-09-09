@@ -48,7 +48,7 @@ class EntryGateOutcomeTests(unittest.TestCase):
         row = entry_gate_outcome.from_entry_decision({
             "decision": "WAIT", "reason": "BIAS_NOT_READY",
         })
-        self.assertEqual(row["owner"], "THESIS")
+        self.assertEqual(row["owner"], "MARKET_TRUTH")
         self.assertEqual(row["stage"], "MARKET_TRUTH")
 
     def test_stale_wait_is_timing_not_structural(self):

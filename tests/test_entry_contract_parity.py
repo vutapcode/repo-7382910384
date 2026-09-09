@@ -62,7 +62,7 @@ class EntryContractParityTests(unittest.TestCase):
     def test_blocking_stage_uses_canonical_gate_owner(self):
         wait = {"decision": "WAIT", "reason": "BIAS_ABSTAIN"}
         gate = {
-            "allowed": False, "owner": "THESIS",
+            "allowed": False, "owner": "MARKET_TRUTH",
             "stage": "MARKET_TRUTH", "reason": "BIAS_ABSTAIN",
         }
         self.assertEqual(
@@ -101,7 +101,7 @@ class EntryContractParityTests(unittest.TestCase):
             )
         validator.assert_not_called()
         authorize.assert_not_called()
-        self.assertEqual(state.entry_gate_outcome["owner"], "THESIS")
+        self.assertEqual(state.entry_gate_outcome["owner"], "MARKET_TRUTH")
         self.assertEqual(
             state.entry_structural_contract["reason"],
             "NOT_APPLICABLE_UNTIL_GO",

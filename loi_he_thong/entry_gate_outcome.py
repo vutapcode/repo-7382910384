@@ -6,10 +6,10 @@ to preserve which existing owner produced PASS/WAIT/REJECT so recorder data
 cannot label an Economics or Timing rejection as a Structural failure.
 """
 
-VERSION = "ENTRY_GATE_OUTCOME_V1"
+VERSION = "ENTRY_GATE_OUTCOME_V2_MARKET_TRUTH_OWNER"
 
 OWNERS = {
-    "STRUCTURAL", "TIMING", "THESIS", "ECONOMICS",
+    "MARKET_TRUTH", "STRUCTURAL", "TIMING", "THESIS", "ECONOMICS",
     "EXECUTION", "SAFETY", "ACTION",
 }
 
@@ -66,12 +66,13 @@ def from_entry_decision(result):
     result = dict(result or {})
     reason = str(result.get("reason") or "ENTRY_NOT_PROPOSED").upper()
     owner = (
-        "THESIS" if any(marker in reason for marker in _MARKET_TRUTH_MARKERS)
+        "MARKET_TRUTH"
+        if any(marker in reason for marker in _MARKET_TRUTH_MARKERS)
         else "TIMING"
     )
     return outcome(
         False, owner,
-        "MARKET_TRUTH" if owner == "THESIS" else "TIMING_NOW",
+        "MARKET_TRUTH" if owner == "MARKET_TRUTH" else "TIMING_NOW",
         reason, {"entry_decision": result.get("decision", "WAIT")},
     )
 
