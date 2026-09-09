@@ -2236,6 +2236,18 @@ def _current_cash_conversion(histories, side, now_ms):
         len(control_times) == len(CASH)
         and control_span is not None and control_span <= FOLLOW_MAX_MS
     )
+    surviving_control_venues = sorted(
+        venue for venue, row in accepted.items()
+        if row.get("control_survived")
+    )
+    # Present-tense acquisition timing needs more than temporal coincidence.
+    # One cash root must demonstrate surviving flow->price control while the
+    # other independent root accepts the same side inside the current bounded
+    # window.  A single cash print, or two isolated prints, remains evidence
+    # but cannot reactivate a sealed historical acquisition for TAKER_NOW.
+    cross_cash_causal_survival = bool(
+        dual_acceptance and surviving_control_venues
+    )
     return {
         "version": "CURRENT_CASH_CONVERSION_V2_ACCEPTANCE_CONTROL",
         "side": side,
@@ -2245,6 +2257,13 @@ def _current_cash_conversion(histories, side, now_ms):
         "dual_cash_synchronous_acceptance": dual_acceptance,
         "dual_cash_control": dual_control,
         "dual_cash_control_span_ms": control_span,
+        "surviving_control_venues": surviving_control_venues,
+        "current_cross_cash_causal_survival": cross_cash_causal_survival,
+        "causal_survival_basis": (
+            "SURVIVING_PRIMARY_CONTROL_PLUS_FRESH_INDEPENDENT_ACCEPTANCE"
+            if cross_cash_causal_survival else
+            "UNPROVEN_CURRENT_CROSS_CASH_SURVIVAL"
+        ),
         # Deprecated compatibility field. Existing consumers are moved to
         # the accurately named acceptance field in this schema boundary.
         "dual_cash_synchronous_control": dual_acceptance,
@@ -2517,6 +2536,17 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
             )
             state._ignition_acquisition_handoff_observation = observation
             return False, observation
+    if not current.get("current_cross_cash_causal_survival"):
+        observation.update(
+            status="WAIT_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL",
+            current_cash_conversion=current,
+            policy=(
+                "RETRY_SAME_MARKET_WAVE_REQUIRES_SURVIVING_CONTROL_PLUS_"
+                "FRESH_INDEPENDENT_CASH_ACCEPTANCE"
+            ),
+        )
+        state._ignition_acquisition_handoff_observation = observation
+        return False, observation
     sealed_displacement = _acquisition_displacement_bps(
         sealed, resolved_side,
     )
@@ -2524,7 +2554,7 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
         sealed, current, resolved_side,
     )
     observation.update(
-        status="ELIGIBLE_SAME_WAVE_CURRENT_ROOT_CONFIRMED",
+        status="ELIGIBLE_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL",
         side=resolved_side,
         age_ms=age_ms,
         handoff=sealed,
@@ -2757,8 +2787,16 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
             # already owns dual-root Market Truth; execution needs one fresh
             # converting cash root plus contradiction checks, not a duplicate
             # dual print.
-            "minimum_fresh_venues": 2 if transition_confirmed else 1,
+            "minimum_fresh_venues": (
+                2 if transition_confirmed or acquisition_valid else 1
+            ),
             "qualified_acceptances": accepted,
+            "surviving_control_venues": sorted(
+                current_cash.get("surviving_control_venues") or ()
+            ),
+            "current_cross_cash_causal_survival": bool(
+                current_cash.get("current_cross_cash_causal_survival")
+            ),
             "max_age_ms": FOLLOW_MAX_MS,
         },
         "causal_epochs": {
@@ -2899,8 +2937,15 @@ def validate_frozen_authority(result):
             return False, "ACQUISITION_AUTHORITY_BASIS_INVALID", {}
         if str(sealed.get("causal_wave_id") or "") != episode_id:
             return False, "ACQUISITION_AUTHORITY_EPISODE_CHANGED", {}
-        if not (accepted & CASH):
-            return False, "ACQUISITION_CURRENT_CASH_MISSING", {}
+        current_cash = dict(
+            dependencies.get("current_cash_conversion") or {}
+        )
+        if not (
+            CASH.issubset(accepted)
+            and current_cash.get("current_cross_cash_causal_survival")
+            and current_cash.get("surviving_control_venues")
+        ):
+            return False, "ACQUISITION_CURRENT_CASH_SURVIVAL_MISSING", {}
     return True, "PASS", {
         "authority_basis": basis,
         "authority_proof_hash": proof_hash,
@@ -2976,8 +3021,9 @@ def validate_frozen_entry_contract(
         )
     )
     acquisition_current_cash_authority = bool(
-        acquisition and accepted_current_cash & CASH
-        and current_cash.get("confirmed")
+        acquisition and CASH.issubset(accepted_current_cash)
+        and current_cash.get("current_cross_cash_causal_survival")
+        and current_cash.get("surviving_control_venues")
     )
     if acquisition and not acquisition_current_cash_authority:
         return False, "ACQUISITION_CURRENT_CASH_MISSING", {}
@@ -4731,7 +4777,8 @@ def _result_from_episode(state, episode, histories, freshness, now):
         )
     )
     acquisition_timing_authority = bool(
-        acquisition_timing_valid and current_cash.get("confirmed")
+        acquisition_timing_valid
+        and current_cash.get("current_cross_cash_causal_survival")
     )
     if (
         not proposer_is_futures
