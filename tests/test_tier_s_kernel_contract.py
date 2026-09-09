@@ -64,7 +64,7 @@ class TierSKernelContractTests(unittest.TestCase):
             profile["architecture"],
         )
         self.assertIn(
-            "IGNITION_INFERENCE_V8_NEUTRAL_ACQUISITION_HANDOFF",
+            "IGNITION_INFERENCE_V9_CAUSAL_ACQUISITION_TIMING",
             profile["architecture"],
         )
         self.assertIn("ENTRY_ECONOMICS_V8_TIME_TO_EVENT", profile["architecture"])

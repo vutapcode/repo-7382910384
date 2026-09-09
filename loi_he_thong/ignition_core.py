@@ -46,7 +46,7 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-INFERENCE_VERSION = "IGNITION_INFERENCE_V8_NEUTRAL_ACQUISITION_HANDOFF"
+INFERENCE_VERSION = "IGNITION_INFERENCE_V9_CAUSAL_ACQUISITION_TIMING"
 ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V8_TIME_TO_EVENT"
 ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
 PERSISTENT_AUTHORITY_SCOPE = {
@@ -2376,9 +2376,38 @@ def _live_acquisition_displacement_bps(handoff, current_cash, side):
             ((current_cash.get("venues") or {}).get(venue) or {}).get("price")
         )
         if origin <= 0.0 or latest <= 0.0:
-            return 0.0
+            continue
         moves.append(max(0.0, sign * _bps(latest, origin)))
-    return sum(moves) / len(moves) if len(moves) == len(CASH) else 0.0
+    if not moves:
+        return 0.0
+    # Dual-current cash keeps the historical mean semantics.  When the
+    # independently sealed wave is presently converting on only one root,
+    # retain that root's distance rather than resetting maturity to zero.  A
+    # maximum is conservative for chase protection and grants no direction.
+    return sum(moves) / len(moves) if len(moves) == len(CASH) else max(moves)
+
+
+def _acquisition_cash_epochs(histories, now_ms):
+    """Read latest observable cash epochs without treating no trades as gap."""
+    epochs = {}
+    for venue in sorted(CASH):
+        visible = [
+            row for row in histories.get(venue, ())
+            if 0 < int(row.get("receive_time_ms", 0) or 0) <= int(now_ms)
+        ]
+        if not visible:
+            continue
+        latest = max(
+            visible, key=lambda row: int(row.get("receive_time_ms", 0) or 0)
+        )
+        if not latest.get("clock_valid") or str(
+            latest.get("source_health") or "FRESH"
+        ).upper() != "FRESH":
+            epochs[venue] = None
+            continue
+        epoch = int(latest.get("epoch", 0) or 0)
+        epochs[venue] = epoch if epoch > 0 else None
+    return epochs
 
 
 def _acquisition_handoff_observation(state, histories, now_ms, side=None):
@@ -2429,9 +2458,14 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
         state._ignition_acquisition_handoff_observation = observation
         return False, observation
     current = _current_cash_conversion(histories, resolved_side, now_ms)
-    if not current.get("dual_cash_synchronous_acceptance"):
+    # Bias has already sealed two independent cash roots and temporal
+    # persistence.  Timing-now therefore asks whether at least one of those
+    # roots still converts, not whether both roots happen to print inside the
+    # same 600 ms slice again.  Requiring the latter discarded asynchronous
+    # propagation and recreated a third confirmation gate.
+    if not current.get("confirmed"):
         observation.update(
-            status="WAIT_ACQUISITION_CURRENT_DUAL_CASH",
+            status="WAIT_ACQUISITION_CURRENT_CASH",
             current_cash_conversion=current,
         )
         state._ignition_acquisition_handoff_observation = observation
@@ -2448,10 +2482,16 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
         return False, observation
     sealed_epochs = dict(sealed.get("venue_epochs") or {})
     epoch_names = {"binance_spot": "spot", "coinbase_spot": "coinbase"}
+    observed_epochs = _acquisition_cash_epochs(histories, now_ms)
     for venue, bias_name in epoch_names.items():
-        current_epoch = int(
-            ((current.get("venues") or {}).get(venue) or {}).get("epoch", -1)
-        )
+        current_epoch = observed_epochs.get(venue)
+        if current_epoch is None:
+            observation.update(
+                status="ACQUISITION_CASH_EPOCH_UNAVAILABLE",
+                failed_venue=venue,
+            )
+            state._ignition_acquisition_handoff_observation = observation
+            return False, observation
         if current_epoch != int(sealed_epochs.get(bias_name, -2)):
             observation.update(
                 status="ACQUISITION_HANDOFF_EPOCH_CHANGED",
@@ -2468,7 +2508,7 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
         sealed, current, resolved_side,
     )
     observation.update(
-        status="ELIGIBLE_SAME_WAVE_CURRENT_CASH_CONFIRMED",
+        status="ELIGIBLE_SAME_WAVE_CURRENT_ROOT_CONFIRMED",
         side=resolved_side,
         age_ms=age_ms,
         handoff=sealed,
@@ -2478,6 +2518,10 @@ def _acquisition_handoff_observation(state, histories, now_ms, side=None):
         ),
         sealed_acquisition_displacement_bps=round(sealed_displacement, 6),
         live_acquisition_displacement_bps=round(live_displacement, 6),
+        sealed_dual_cash_provenance=True,
+        current_cash_proof_venues=sorted(
+            current.get("accepted_cash_venues") or ()
+        ),
     )
     state._ignition_acquisition_handoff_observation = observation
     return True, observation
@@ -2495,7 +2539,12 @@ def _start_acquisition_handoff_episode(state, histories, now_ms, side=None):
     epochs = dict(handoff.get("venue_epochs") or {})
     epoch_names = {"binance_spot": "spot", "coinbase_spot": "coinbase"}
     signals = []
-    for venue in sorted(CASH):
+    current_venues = set(
+        (observation.get("current_cash_conversion") or {}).get(
+            "accepted_cash_venues", ()
+        )
+    )
+    for venue in sorted(CASH & current_venues):
         expected_epoch = int(epochs.get(epoch_names[venue], -1))
         signals.extend(
             dict(row) for row in histories.get(venue, ())
@@ -2504,7 +2553,7 @@ def _start_acquisition_handoff_episode(state, histories, now_ms, side=None):
             and int(row.get("epoch", -2)) == expected_epoch
             and _directional_material_flow(row, resolved_side)
         )
-    if {str(row.get("venue")) for row in signals} != CASH:
+    if not signals:
         return None
     signals.sort(key=lambda row: (
         int(row.get("receive_time_ms", 0) or 0), str(row.get("venue") or ""),
@@ -2567,6 +2616,20 @@ def _start_acquisition_handoff_episode(state, histories, now_ms, side=None):
             observation.get("acquisition_cash_displacement_bps")
         ),
         "acquisition_handoff_authority": False,
+        "causal_origin_proof": _proof_descriptor((
+            "SEALED_ACQUISITION_HANDOFF",
+            {
+                "receive_time_ms": int(
+                    handoff.get("ownership_completed_ms", 0) or 0
+                ),
+                "bucket_start_ms": int(
+                    handoff.get("ownership_completed_ms", 0) or 0
+                ),
+                "epoch": 0,
+                "evidence_id": str(handoff.get("handoff_hash") or ""),
+            },
+            "dual_cash",
+        )),
     }
     observation["status"] = "TIMING_ATTEMPT_STARTED_FROM_LIVE_WAVE"
     observation["timing_started_at_ms"] = started_ms
@@ -2673,9 +2736,12 @@ def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
         },
         "current_cash_conversion": {
             "accepted_cash_venues": sorted(accepted),
-            "minimum_fresh_venues": (
-                2 if transition_confirmed or acquisition_valid else 1
-            ),
+            # A transition proves new control at this exact timing boundary
+            # and therefore retains two current roots.  A sealed acquisition
+            # already owns dual-root Market Truth; execution needs one fresh
+            # converting cash root plus contradiction checks, not a duplicate
+            # dual print.
+            "minimum_fresh_venues": 2 if transition_confirmed else 1,
             "qualified_acceptances": accepted,
             "max_age_ms": FOLLOW_MAX_MS,
         },
@@ -2817,8 +2883,8 @@ def validate_frozen_authority(result):
             return False, "ACQUISITION_AUTHORITY_BASIS_INVALID", {}
         if str(sealed.get("causal_wave_id") or "") != episode_id:
             return False, "ACQUISITION_AUTHORITY_EPISODE_CHANGED", {}
-        if not CASH.issubset(accepted):
-            return False, "ACQUISITION_CURRENT_DUAL_CASH_MISSING", {}
+        if not (accepted & CASH):
+            return False, "ACQUISITION_CURRENT_CASH_MISSING", {}
     return True, "PASS", {
         "authority_basis": basis,
         "authority_proof_hash": proof_hash,
@@ -2893,8 +2959,12 @@ def validate_frozen_entry_contract(
             or current_cash.get("dual_cash_control")
         )
     )
-    if acquisition and not dual_cash_timing_authority:
-        return False, "ACQUISITION_CURRENT_DUAL_CASH_MISSING", {}
+    acquisition_current_cash_authority = bool(
+        acquisition and accepted_current_cash & CASH
+        and current_cash.get("confirmed")
+    )
+    if acquisition and not acquisition_current_cash_authority:
+        return False, "ACQUISITION_CURRENT_CASH_MISSING", {}
     if _f(ignition.get("consumed_fraction"), 1.0) > MAX_CONSUMED_FRACTION:
         return False, "IMPULSE_ALREADY_CONSUMED", {}
     if mode == "PERSISTENT_METAORDER" and proposer not in CASH:
@@ -2907,6 +2977,7 @@ def validate_frozen_entry_contract(
             return False, "FUTURES_PROPOSER_CASH_RESPONSE_MISSING", {}
     elif not ignition.get("futures_follow_ok") and not (
         transition_basis or dual_cash_timing_authority
+        or acquisition_current_cash_authority
     ):
         return False, "CASH_PROPOSER_FUTURES_FOLLOW_MISSING", {}
     has_authority = bool(
@@ -2923,6 +2994,9 @@ def validate_frozen_entry_contract(
         "proof_type": proof_type,
         "execution_policy": execution_policy,
         "dual_cash_timing_authority": dual_cash_timing_authority,
+        "acquisition_current_cash_authority": (
+            acquisition_current_cash_authority
+        ),
         "authority_scope": scope,
         "shadow_bootstrap_authority": bool(
             mode == "PERSISTENT_METAORDER" or acquisition
@@ -3162,6 +3236,48 @@ def _proof(episode, histories):
     })
     candidates = []
     reversion_assessments = {}
+    acquisition = dict(episode.get("acquisition_handoff") or {})
+    acquisition_valid, _reason, sealed_acquisition = (
+        _validate_sealed_acquisition_handoff(acquisition, side)
+    )
+    if acquisition_valid:
+        sealed_epochs = dict(sealed_acquisition.get("venue_epochs") or {})
+        epoch_names = {"binance_spot": "spot", "coinbase_spot": "coinbase"}
+        ownership_completed_ms = int(
+            sealed_acquisition.get("ownership_completed_ms", 0) or 0
+        )
+        live_candidates = []
+        for venue in cash_venues:
+            expected_epoch = int(sealed_epochs.get(epoch_names[venue], -1))
+            live_candidates.extend(
+                ("METAORDER_CONTINUATION", dict(row), venue)
+                for row in histories.get(venue, ())
+                if int(row.get("receive_time_ms", 0) or 0)
+                    >= max(proof_segment_start, ownership_completed_ms)
+                and int(row.get("epoch", -2)) == expected_epoch
+                and bool(row.get("clock_valid"))
+                and str(row.get("source_health") or "FRESH").upper()
+                    == "FRESH"
+                and _directional_material_flow(row, side)
+            )
+        if live_candidates:
+            latest = max(
+                live_candidates,
+                key=lambda item: int(item[1].get("receive_time_ms", 0) or 0),
+            )
+            latest[1]["_metaorder_evidence"] = {
+                "version": "ACQUISITION_TIMING_PROOF_V1",
+                "proof_policy": (
+                    "SEALED_DUAL_CASH_PROVENANCE_PLUS_CURRENT_CASH_"
+                    "CONVERSION"
+                ),
+                "handoff_hash": sealed_acquisition.get("handoff_hash"),
+                "causal_wave_id": sealed_acquisition.get("causal_wave_id"),
+                "current_cash_venue": latest[2],
+                "third_impulse_required": False,
+                "metadata_authority": True,
+            }
+            candidates.append(latest)
     for venue in cash_venues:
         venue_history = tuple(histories.get(venue, ()))
         rows = [
@@ -4593,11 +4709,20 @@ def _result_from_episode(state, episode, histories, freshness, now):
     synchronous_cash_acceptance = bool(
         current_cash.get("dual_cash_synchronous_acceptance")
     )
+    acquisition_timing_valid, _acquisition_reason, _sealed_acquisition = (
+        _validate_sealed_acquisition_handoff(
+            episode.get("acquisition_handoff"), side,
+        )
+    )
+    acquisition_timing_authority = bool(
+        acquisition_timing_valid and current_cash.get("confirmed")
+    )
     if (
         not proposer_is_futures
         and not futures_follow_ok
         and not synchronous_transition
         and not synchronous_cash_acceptance
+        and not acquisition_timing_authority
     ):
         return _wait(
             now, side, "WAIT_CASH_IGNITION_FUTURES_RESPONSE",
@@ -4608,6 +4733,7 @@ def _result_from_episode(state, episode, histories, freshness, now):
         and proof_type != "FAILED_REVERSION"
         and not synchronous_transition
         and not synchronous_cash_acceptance
+        and not acquisition_timing_authority
     ):
         return _wait(now, side, "WAIT_CAUSAL_LEADER_UNCERTAIN", "PROBE", payload, freshness)
     if proof_type is None:

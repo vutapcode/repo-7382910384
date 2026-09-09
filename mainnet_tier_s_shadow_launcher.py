@@ -934,7 +934,7 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
     ):
         failed.append("FLOW_NONCONVERSION_COMPOSITE_VETO")
     if would_enter and bool(basis.get("perp_expansion")):
-        failed.append("PERP_LED_VETO")
+        diagnostic.append("PERP_LED_CONTEXT")
     if would_enter and bool(liquidation.get("tail_veto")):
         failed.append("LIQUIDATION_TAIL_VETO")
     if would_enter:
@@ -956,7 +956,6 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         and "FLOW_NONCONVERSION_COMPOSITE_VETO" not in (
             thesis_audit.get("blocking_reasons") or ()
         )
-        and not basis.get("perp_expansion")
         and not (edge_report or {}).get("soft_wait_reasons")
     ):
         bootstrap = bool((edge_report or {}).get("bootstrap_shadow_allowed"))

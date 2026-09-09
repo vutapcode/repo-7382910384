@@ -9,7 +9,7 @@ market orders are large.
 from loi_he_thong import ignition_core
 from loi_he_thong import causal_mechanism
 
-VERSION = "ENTRY_THESIS_GATE_V8_CAUSAL_FLOW_RETRY"
+VERSION = "ENTRY_THESIS_GATE_V9_DERIVATIVES_CONTEXT_ONLY"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -335,7 +335,7 @@ def _independence_question(ignition, basis):
         proposer == "futures" and not ignition.get("futures_cash_response_ok")
     )
     status = (
-        "DERIVATIVES_LED_REJECT" if futures_self_led or (basis or {}).get("perp_expansion") else
+        "DERIVATIVES_LED_REJECT" if futures_self_led else
         "DUAL_CASH_CROSS_VENUE_CORROBORATION" if dual_cash_corroborated else
         "SINGLE_CASH_ANCHOR" if corroborated_cash else "NO_CASH_AUTHORITY"
     )
@@ -347,6 +347,7 @@ def _independence_question(ignition, basis):
         "evidence_provenance_status": provenance_status,
         "unique_cash_root_count": len(unique_cash_roots),
         "proposer": proposer, "futures_self_led": futures_self_led,
+        "perp_expansion_context": bool((basis or {}).get("perp_expansion")),
         "spot_perp_basis": dict(basis or {}),
     }
 

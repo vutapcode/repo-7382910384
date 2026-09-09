@@ -168,6 +168,14 @@ def _rows_after(state, result, cutoff_seconds=None):
 def _required_venues(result):
     ignition = (result or {}).get("ignition") or {}
     names = set(ignition.get("cash_venues") or ())
+    dependencies = dict((result or {}).get("authority_dependencies") or {})
+    if ignition.get("acquisition_handoff") or dependencies.get(
+        "acquisition_handoff"
+    ):
+        # One root may own timing-now, but both roots own the sealed Market
+        # Truth provenance.  A reconnect on either root invalidates that seal
+        # before submit even when the quiet venue has no current trade bucket.
+        names.update(("binance_spot", "coinbase_spot"))
     names.add("futures")
     return names
 

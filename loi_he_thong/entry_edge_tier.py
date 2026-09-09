@@ -16,7 +16,7 @@ from loi_he_thong import liquidation_context
 from loi_he_thong import microstructure_regime as regime_engine
 from loi_he_thong import verified_cost_model
 
-VERSION = "IGNITION_ENTRY_ECONOMICS_V9_CAUSAL_FLOW_AUTHORITY"
+VERSION = "IGNITION_ENTRY_ECONOMICS_V10_DERIVATIVES_CONTEXT_ONLY"
 EDGE_BPS = {
     "LOW_EDGE": 0.0, "NORMAL_EDGE": 13.0,
     "HIGH_EDGE": 20.0, "RUNNER_EDGE": 35.0,
@@ -64,6 +64,7 @@ def classify(result, state):
         basis = dict(basis, status="PERP_EXPANSION", perp_expansion=True,
                      lead_bps=round(perp_lead, 6), limit_bps=3.0)
     hard_vetoes = []
+    diagnostic_flags = []
     if candidate and not contract_ok:
         hard_vetoes.append("IGNITION_CONTRACT_FAIL")
     v6_replay_approved = bool(
@@ -74,7 +75,11 @@ def classify(result, state):
     # not let the retired snapshot heuristic count Spot+Futures as independent
     # support and veto a cash-proven Ignition decision.
     if basis.get("perp_expansion"):
-        hard_vetoes.append("PERP_LED_VETO")
+        # Derivatives may describe urgency/dislocation but cannot veto a
+        # direction already proved by executed cash.  Keep the observation so
+        # replay can test adverse selection without silently restoring Futures
+        # direction authority.
+        diagnostic_flags.append("PERP_LED_CONTEXT")
 
     liquidation = liquidation_context.assess_entry(
         state, result, _f((result or {}).get("ts"), time.time())
@@ -272,6 +277,7 @@ def classify(result, state):
         "execution_urgency": execution_urgency,
         "cost_components": costs, "normal_contract_ok": contract_ok,
         "fast_contract_ok": False, "hard_vetoes": hard_vetoes,
+        "diagnostic_flags": diagnostic_flags,
         "soft_wait_reasons": soft_waits,
         "price_impact": impact, "spot_perp_basis": basis,
         "liquidation_context": liquidation,

@@ -203,13 +203,60 @@ class IgnitionCoreTests(unittest.TestCase):
         s.bias_version = "TEST"
         s.bias_acquisition_handoff = acquisition_handoff()
         stopped = self._acquisition_histories()
-        stopped["coinbase_spot"][0]["price_conversion_bps"] = 0.01
+        for row in stopped["binance_spot"] + stopped["coinbase_spot"]:
+            row["price_conversion_bps"] = 0.01
         self.assertIsNone(ignition_core._start_acquisition_handoff_episode(
             s, stopped, 100_000, "LONG",
         ))
         self.assertEqual(
             s._ignition_acquisition_handoff_observation["status"],
-            "WAIT_ACQUISITION_CURRENT_DUAL_CASH",
+            "WAIT_ACQUISITION_CURRENT_CASH",
+        )
+
+    def test_sealed_acquisition_accepts_one_current_cash_root_without_third_impulse(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff()
+        histories = self._acquisition_histories()
+        histories["binance_spot"] = (histories["binance_spot"][-1],)
+        histories["binance_spot"][0]["strong"] = False
+        histories["coinbase_spot"][0]["price_conversion_bps"] = 0.01
+
+        episode = ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        )
+
+        self.assertIsNotNone(episode)
+        self.assertEqual(
+            {row["venue"] for row in episode["signals"]},
+            {"binance_spot", "futures"},
+        )
+        proof_type, proof, venue = ignition_core._proof(episode, histories)
+        self.assertEqual(proof_type, "METAORDER_CONTINUATION")
+        self.assertEqual(venue, "binance_spot")
+        self.assertEqual(
+            proof["_metaorder_evidence"]["version"],
+            "ACQUISITION_TIMING_PROOF_V1",
+        )
+        self.assertFalse(
+            proof["_metaorder_evidence"]["third_impulse_required"]
+        )
+
+    def test_sealed_acquisition_rejects_current_opposite_cash(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff()
+        histories = self._acquisition_histories()
+        opposing = evidence_row(99_700, "SHORT", 99.998)
+        opposing["venue"] = "coinbase_spot"
+        histories["coinbase_spot"] = (opposing,)
+
+        self.assertIsNone(ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        ))
+        self.assertEqual(
+            s._ignition_acquisition_handoff_observation["status"],
+            "ACQUISITION_CURRENT_CASH_CONTRADICTION",
         )
 
     def test_acquisition_handoff_is_shadow_only_after_full_ignition_proof(self):
@@ -259,6 +306,56 @@ class IgnitionCoreTests(unittest.TestCase):
             reason, "ACQUISITION_HANDOFF_LIVE_AUTHORITY_DISABLED",
         )
         self.assertFalse(detail["live_authority"])
+
+    def test_acquisition_handoff_go_needs_current_root_not_dual_reprint(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff()
+        histories = self._acquisition_histories()
+        histories["binance_spot"] = (histories["binance_spot"][-1],)
+        histories["binance_spot"][0]["strong"] = False
+        histories["coinbase_spot"][0]["price_conversion_bps"] = 0.01
+        histories["futures"] = ()
+        episode = ignition_core._start_acquisition_handoff_episode(
+            s, histories, 100_000, "LONG",
+        )
+        freshness = {
+            "coinbase_mode": "FRESH", "binance_spot_ready": True,
+            "futures_ready": True,
+        }
+        phase = {
+            "valid": True, "source": "TEST", "phase_scale_bps": 20.0,
+            "cash_displacement_bps": 2.0,
+            "episode_cash_displacement_bps": 0.2,
+            "precursor_cash_displacement_bps": 0.0,
+            "acquisition_cash_displacement_bps": 2.0,
+            "consumed_fraction": 0.10,
+        }
+        with patch.object(
+            ignition_core, "_phase_measurement", return_value=phase,
+        ), patch.object(
+            ignition_core, "_oi_verification",
+            return_value={"status": "UNCHANGED_UNKNOWN", "intent": "NEUTRAL"},
+        ):
+            result = ignition_core._result_from_episode(
+                s, episode, histories, freshness, 100.0,
+            )
+
+        self.assertEqual(result["decision"], "GO")
+        self.assertFalse(
+            result["ignition"]["dual_cash_synchronous_acceptance"]
+        )
+        self.assertEqual(
+            result["authority_dependencies"]["current_cash_conversion"][
+                "minimum_fresh_venues"
+            ],
+            1,
+        )
+        valid, reason, detail = ignition_core.validate_frozen_entry_contract(
+            result, authority_scope="SHADOW",
+        )
+        self.assertTrue(valid, reason)
+        self.assertTrue(detail["acquisition_current_cash_authority"])
 
     def test_evaluate_starts_timing_from_acquisition_without_third_impulse(self):
         """The evaluator consumes currently fresh proof, not wave ownership."""
@@ -3319,7 +3416,7 @@ class IgnitionCoreTests(unittest.TestCase):
         self.assertFalse(impact["absorption_confirmed"])
         self.assertIn("spot", result["s_votes"]["S1_cross_venue_price_acceptance"]["metrics"]["moves"])
 
-    def test_perp_lead_veto_applies_after_cash_proposer(self):
+    def test_perp_lead_is_context_after_cash_proposer(self):
         s = state()
         result = {
             "decision": "GO", "side": "LONG", "entry_mode": "IGNITION",
@@ -3337,7 +3434,13 @@ class IgnitionCoreTests(unittest.TestCase):
             }),
         }
         report = entry_edge_tier.classify(result, s)
-        self.assertIn("PERP_LED_VETO", report["hard_vetoes"])
+        self.assertNotIn("PERP_LED_VETO", report["hard_vetoes"])
+        self.assertIn("PERP_LED_CONTEXT", report["diagnostic_flags"])
+        independence = report["entry_thesis_audit"]["questions"][
+            "q6_cross_venue_corroboration"
+        ]
+        self.assertTrue(independence["perp_expansion_context"])
+        self.assertNotEqual(independence["status"], "DERIVATIVES_LED_REJECT")
 
     def test_degraded_coinbase_allows_only_binance_cash_authority(self):
         def run(proposer):

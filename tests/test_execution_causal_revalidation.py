@@ -98,6 +98,25 @@ def fixture():
 
 
 class ExecutionCausalRevalidationTests(unittest.TestCase):
+    def test_acquisition_submit_revalidates_both_sealed_cash_epochs(self):
+        state, result = fixture()
+        result["ignition"]["acquisition_handoff"] = {"sealed": True}
+        result["authority_dependencies"] = dict(
+            result["authority_dependencies"],
+            acquisition_handoff={"sealed": True},
+        )
+        state.canonical_reserved_context["epochs"]["coinbase_spot"] = 1
+        state._ignition_signal_engine.venues["coinbase_spot"].epoch = 2
+
+        self.assertEqual(
+            recheck._required_venues(result),
+            {"binance_spot", "coinbase_spot", "futures"},
+        )
+        ok, reason, detail = recheck._epoch_ok(state, result)
+        self.assertFalse(ok)
+        self.assertEqual(reason, "EXECUTED_FLOW_EPOCH_RESET")
+        self.assertEqual(detail["venue"], "coinbase_spot")
+
     def test_pass_records_go_to_submit_timing_and_cash_age(self):
         state, result = fixture()
 
