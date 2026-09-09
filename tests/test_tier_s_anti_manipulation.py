@@ -553,6 +553,56 @@ class GuardianDeteriorationTests(unittest.TestCase):
         ), patch.object(guardian, "_s3", return_value=s3):
             return guardian.assess(state, pos, now=now)
 
+    def test_flow_materiality_is_adaptive_and_venue_local(self):
+        state = SimpleNamespace()
+        baseline = {
+            "spot": (0.5, 100.0),
+            "coinbase": (0.5, 1.0),
+            "futures": (0.5, 1000.0),
+        }
+        for _ in range(guardian.FLOW_MATERIALITY_WARMUP + 1):
+            materiality = guardian._flow_materiality(state, baseline)
+        self.assertTrue(materiality["spot"]["material"])
+        self.assertTrue(materiality["coinbase"]["material"])
+        self.assertTrue(materiality["futures"]["material"])
+
+        collapsed = guardian._flow_materiality(state, {
+            "spot": (0.9, 10.0),
+            "coinbase": (0.5, 1.0),
+            "futures": (0.5, 1000.0),
+        })
+        self.assertEqual(collapsed["spot"]["status"], "COLLAPSED")
+        self.assertTrue(collapsed["coinbase"]["material"])
+        self.assertTrue(collapsed["futures"]["material"])
+        self.assertTrue(all(
+            row["venue_local_units"] for row in collapsed.values()
+        ))
+
+    def test_collapsed_flow_cannot_supply_guardian_consensus(self):
+        state = SimpleNamespace()
+        pos = SimpleNamespace(side="LONG")
+        baseline = {
+            "spot": (-0.8, 100.0),
+            "coinbase": (0.0, 1.0),
+            "futures": (-0.8, 1000.0),
+        }
+        for _ in range(guardian.FLOW_MATERIALITY_WARMUP + 1):
+            guardian._flow_materiality(state, baseline)
+        with patch.object(
+            guardian, "_spot_flow", return_value=(-0.9, 10.0),
+        ), patch.object(
+            guardian, "_cb_flow", return_value=(0.0, 1.0),
+        ), patch.object(
+            guardian, "_fut_flow", return_value=(-0.9, 1000.0),
+        ):
+            vote = guardian._s2(state, pos, 100.0)
+        self.assertEqual(vote["status"], "NEUTRAL")
+        self.assertEqual(vote["reason"], "FLOW_NOT_MATERIAL")
+        self.assertEqual(
+            vote["metrics"]["flow_materiality"]["spot"]["status"],
+            "COLLAPSED",
+        )
+
     def test_thesis_status_is_invariant_to_pnl_and_runner_fields(self):
         state = self._state(100.0, 100.0, sell=True)
         s1, s2, s3 = self._causal_votes()

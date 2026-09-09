@@ -12,6 +12,9 @@ MIN_OI_RISE_PCT=0.0085
 SCOUT_PRICE_BPS=0.40
 SCOUT_FLOW_IMB=0.08
 STRONG_FLOW_IMB=0.55
+FLOW_MATERIALITY_ALPHA=0.125
+FLOW_MATERIALITY_WARMUP=8
+FLOW_MATERIALITY_MIN_Z=-2.0
 KILL_PRICE_BPS=2.50
 TREND_KILL_PRICE_BPS=KILL_PRICE_BPS*2.0
 FAST_KILL_HOLD_SECONDS=0.25
@@ -192,21 +195,75 @@ def _cb_flow(state,now):
     cvd=float(getattr(state,"coinbase_cvd_3s",0) or 0)
     return (cvd/vol,vol) if ts>0 and now-ts<=5 and vol>0 else (0.0,0.0)
 
+def _flow_materiality(state,feeds):
+    """Classify venue-local executed notional against an O(1) EWMA baseline."""
+    baselines=dict(getattr(state,"guardian_flow_materiality_baselines",{}) or {})
+    result={}
+    for venue,(_,raw_volume) in feeds.items():
+        volume=max(0.0,float(raw_volume or 0.0))
+        prior=dict(baselines.get(venue) or {})
+        count=int(prior.get("count",0) or 0)
+        mean=max(0.0,float(prior.get("mean",0.0) or 0.0))
+        variance=max(0.0,float(prior.get("variance",0.0) or 0.0))
+        if volume<=0.0:
+            status="MISSING"; material=False; z_score=None
+        elif count<FLOW_MATERIALITY_WARMUP or mean<=0.0:
+            status="WARMUP_UNVERIFIED"; material=True; z_score=None
+        else:
+            # The variance floor prevents tiny normal changes after a flat
+            # sample run from looking exceptional. Units never cross venues.
+            scale=max(variance**0.5,mean*0.25,1e-12)
+            z_score=(volume-mean)/scale
+            material=bool(z_score>=FLOW_MATERIALITY_MIN_Z)
+            status="MATERIAL" if material else "COLLAPSED"
+        result[venue]={
+            "status":status,"material":material,"sample_count":count,
+            "volume":round(volume,8),"baseline_mean":round(mean,8),
+            "z_score":round(z_score,6) if z_score is not None else None,
+            "venue_local_units":True,
+        }
+        if volume>0.0:
+            if count<=0 or mean<=0.0:
+                new_mean=volume; new_variance=0.0
+            else:
+                delta=volume-mean
+                new_mean=mean+FLOW_MATERIALITY_ALPHA*delta
+                new_variance=(
+                    (1.0-FLOW_MATERIALITY_ALPHA)
+                    *(variance+FLOW_MATERIALITY_ALPHA*delta*delta)
+                )
+            baselines[venue]={
+                "count":min(count+1,1_000_000),
+                "mean":new_mean,"variance":new_variance,
+            }
+    state.guardian_flow_materiality_baselines=baselines
+    return result
+
 def _s2(state,pos,now):
     sign=_sign(pos.side); rows={}; adv=[]; support=[]
     feeds={"spot":_spot_flow(state,now),"futures":_fut_flow(state,now),"coinbase":_cb_flow(state,now)}
+    materiality=_flow_materiality(state,feeds)
     for name,(imb,vol) in feeds.items():
         if vol<=0: continue
         s=imb*sign; rows[name]=round(s,4)
+        if not materiality[name]["material"]:continue
         if s<=-MIN_FLOW_IMB: adv.append((name,abs(s)))
         elif s>=MIN_FLOW_IMB: support.append((name,abs(s)))
     if len(adv)>=2:
         strength=sum(v for _,v in adv)/len(adv)
         return _vote("ADVERSE",0.58+0.28*min(strength,1),"MULTI_VENUE_ADVERSE_FLOW",
-                     signed_imbalances=rows,venues=[n for n,_ in adv])
+                     signed_imbalances=rows,venues=[n for n,_ in adv],
+                     flow_materiality=materiality)
     if len(support)>=2:
-        return _vote("SUPPORTIVE",0.55,"MULTI_VENUE_SUPPORTIVE_FLOW",signed_imbalances=rows)
-    return _vote("NEUTRAL",0.10,"FLOW_NOT_CONSENSUS",signed_imbalances=rows)
+        return _vote("SUPPORTIVE",0.55,"MULTI_VENUE_SUPPORTIVE_FLOW",
+                     signed_imbalances=rows,
+                     venues=[n for n,_ in support],
+                     flow_materiality=materiality)
+    reason=("FLOW_NOT_MATERIAL" if any(
+        row["status"]=="COLLAPSED" for row in materiality.values()
+    ) else "FLOW_NOT_CONSENSUS")
+    return _vote("NEUTRAL",0.10,reason,signed_imbalances=rows,
+                 flow_materiality=materiality)
 
 def _s3(pos,now,p,oh):
     ref=_ref(oh,now,10.0)
