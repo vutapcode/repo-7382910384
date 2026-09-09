@@ -754,6 +754,48 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertTrue(exited["kill_fast"])
         self.assertFalse(exited["trend_shield_active"])
 
+    def test_pending_break_must_be_revalidated_before_exit(self):
+        for classification in (
+            "CONFLICTED_CAUSAL_EVIDENCE",
+            "TRANSIENT_LIQUIDATION_FLUSH",
+        ):
+            with self.subTest(classification=classification):
+                state = self._state(100.0, 100.0, sell=True)
+                pos = SimpleNamespace(
+                    position_cycle_id=f"pending-{classification}",
+                    side="LONG", opened_at=90.0,
+                    entry_causal_thesis={
+                        "primary_cash_anchor": "spot",
+                        "cash_anchors": ["spot", "coinbase"],
+                    },
+                )
+                votes = self._causal_votes(
+                    price=-5.5, flow=-0.80,
+                    oi_status="ADVERSE", oi_pct=0.03,
+                )
+                pending = self._assess_with_votes(state, pos, 100.0, votes)
+                self.assertEqual(pending["guardian_phase"], "BREAK_PENDING")
+
+                downgraded_event = dict(pending["adverse_event"])
+                downgraded_event.update({
+                    "classification": classification,
+                    "reason": "TEST_BREAK_REVALIDATION_DOWNGRADE",
+                    "kill_fast_eligible": False,
+                })
+                with patch.object(
+                    guardian, "_classify_adverse_event",
+                    return_value=downgraded_event,
+                ):
+                    result = self._assess_with_votes(
+                        state, pos, 100.30, votes,
+                    )
+                self.assertNotEqual(result["decision"], "EXIT")
+                self.assertEqual(result["guardian_phase"], "FIRST_PULLBACK")
+                self.assertEqual(
+                    result["recovery_result"],
+                    "BREAK_REVALIDATION_DOWNGRADED",
+                )
+
     def test_reversal_candidate_disables_trend_shield(self):
         state = self._state(100.0, 100.0, sell=True)
         state.bias_council = {
@@ -995,7 +1037,8 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertEqual(first["guardian_phase"], "FIRST_PULLBACK")
         self.assertNotEqual(later["decision"], "EXIT")
         self.assertEqual(
-            later["reason"], "THESIS_BREAK_AWAITING_PATH_CONFIRMATION",
+            later["reason"],
+            "TIER_S_PRICE_PLUS_CAUSE_CONVERGENCE",
         )
 
     def _open_recovery_test(self, state, pos):

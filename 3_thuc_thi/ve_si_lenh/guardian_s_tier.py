@@ -23,7 +23,7 @@ RUNNER_MIN_BEST_R=1.0
 COINBASE_STRICT_AGE_SECONDS=2.5
 RECOVERY_PHASES={
     "HEALTHY","FIRST_PULLBACK","RECOVERY_TEST","RECOVERED","FAILED_RECOVERY",
-    "DIRECT_THESIS_BREAK",
+    "BREAK_PENDING","DIRECT_THESIS_BREAK",
 }
 
 def _clamp(x): return max(0.0,min(1.0,float(x)))
@@ -788,6 +788,9 @@ def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event)
     """Remember pullback -> recovery -> failure without making time an exit rule."""
     phase=str(getattr(pos,"guardian_s_phase","HEALTHY") or "HEALTHY").upper()
     if phase not in RECOVERY_PHASES:phase="HEALTHY"
+    # Restored V14 positions may carry the retired name. A break observation
+    # is an exit candidate, not a permanent Market Truth tombstone.
+    if phase=="DIRECT_THESIS_BREAK":phase="BREAK_PENDING"
     previous_phase=phase
     price_adverse=bool(s1.get("status")=="ADVERSE" or profile.get("active"))
     price_supportive=bool(s1.get("status")=="SUPPORTIVE")
@@ -801,7 +804,7 @@ def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event)
         _reset_recovery_path(pos)
         phase="HEALTHY"
 
-    if phase=="HEALTHY" and price_adverse and not adverse_event.get("kill_fast_eligible"):
+    if phase=="HEALTHY" and price_adverse:
         phase="FIRST_PULLBACK"
         pos.guardian_s_pullback_started_at=now
         pos.guardian_s_pullback_start_price=_pullback_reference_price(
@@ -848,7 +851,7 @@ def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event)
         favorable_cash and (price_supportive or reclaim_fraction>0.0)
     )
     if phase in {
-        "FIRST_PULLBACK","FAILED_RECOVERY","DIRECT_THESIS_BREAK",
+        "FIRST_PULLBACK","FAILED_RECOVERY","BREAK_PENDING",
     } and recovery_attempt:
         phase="RECOVERY_TEST"
         pos.guardian_s_reclaim_hold_since=now
@@ -906,11 +909,21 @@ def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event)
         and not recovery_attempt
     )
     if direct_break:
-        phase="DIRECT_THESIS_BREAK"
-        pos.guardian_s_recovery_result="DIRECT_BREAK"
+        phase="BREAK_PENDING"
+        pos.guardian_s_recovery_result="BREAK_PENDING"
         pos.guardian_s_failed_recovery_reason=(
             "BROAD_CASH_ACCEPTANCE_WITHOUT_RECOVERY"
         )
+    # Revalidate an unfilled break on every observation. A later flush,
+    # conflict or unknown classification cannot inherit exit authority from
+    # the prior scheduler turn.
+    break_revalidated=bool(
+        adverse_event.get("classification")=="THESIS_BREAK_CONFIRMED"
+    )
+    if phase=="BREAK_PENDING" and not break_revalidated:
+        phase="FIRST_PULLBACK"
+        pos.guardian_s_recovery_result="BREAK_REVALIDATION_DOWNGRADED"
+        pos.guardian_s_failed_recovery_reason=None
     second_adverse_kill=bool(
         previous_phase=="FAILED_RECOVERY" and phase=="FAILED_RECOVERY"
         and price_adverse and dual_cash and opposing=="PERSISTENT"
@@ -935,7 +948,8 @@ def _advance_recovery_path(pos,now,prices,s1,s2,s3,profile,thesis,adverse_event)
         "failed_recovery_reason":failed_reason or getattr(pos,"guardian_s_failed_recovery_reason",None),
         "new_adverse_extreme":new_extreme,
         "second_adverse_kill_eligible":second_adverse_kill,
-        "direct_thesis_break":direct_break or phase=="DIRECT_THESIS_BREAK",
+        "direct_thesis_break":direct_break or phase=="BREAK_PENDING",
+        "break_revalidated":break_revalidated,
         "time_only_authority":False,
         "single_venue_kill_authority":False,
     }
@@ -984,48 +998,41 @@ def assess(state,pos,now=None):
     recovery_path=_advance_recovery_path(
         pos,now,p,s1,s2,s3,profile,thesis,adverse_event
     )
+    # A local cash break that survives into a later scheduler observation is
+    # revalidated by current price + executed-flow evidence, not by elapsed
+    # time. The clock only proves this is a distinct observation. Flush and
+    # cross-evidence conflict classifications can never inherit this path.
     candidate_since=float(
         getattr(pos,"guardian_s_candidate_since",0.0) or 0.0
     )
-    causal_persistence_seconds=(
-        max(0.0,now-candidate_since) if candidate_since>0.0 else 0.0
-    )
-    # A recovery attempt is not mandatory when adverse cash price and flow
-    # simply keep converting without relief.  That ordered persistence is a
-    # direct thesis break, not a time stop: the timer has no authority unless
-    # the same price+executed-flow causal candidate remains present and the
-    # classifier found no flush, non-conversion, or cross-evidence conflict.
-    persisted_direct_break=bool(
+    local_break_revalidated=bool(
         causal_candidate
         and recovery_path["guardian_phase"]=="FIRST_PULLBACK"
-        and (
-            adverse_event["classification"]=="UNCERTAIN"
-            or (
-                adverse_event["classification"]=="FLOW_NON_CONVERSION_PULLBACK"
-                and not external_guard["coinbase_strict_fresh"]
-                and not thesis.get("primary_cash_anchor")
-            )
-        )
-        and causal_persistence_seconds>=MIN_DETERIORATION_SECONDS
+        and candidate_since>0.0 and now>candidate_since
         and s1["status"]=="ADVERSE" and s2["status"]=="ADVERSE"
+        and adverse_event["classification"] not in {
+            "TRANSIENT_LIQUIDATION_FLUSH",
+            "CONFLICTED_CAUSAL_EVIDENCE",
+        }
     )
-    if persisted_direct_break:
-        recovery_path["guardian_phase"]="DIRECT_THESIS_BREAK"
+    if local_break_revalidated:
+        adverse_event["local_break_revalidated"]=True
+        recovery_path["guardian_phase"]="BREAK_PENDING"
         recovery_path["direct_thesis_break"]=True
-        recovery_path["recovery_result"]="DIRECT_BREAK"
+        recovery_path["break_revalidated"]=True
+        recovery_path["recovery_result"]="BREAK_REVALIDATED"
         recovery_path["failed_recovery_reason"]=(
-            "PERSISTENT_CAUSAL_BREAK_WITHOUT_RECLAIM"
+            "CURRENT_CASH_BREAK_REVALIDATED"
         )
-        pos.guardian_s_phase="DIRECT_THESIS_BREAK"
-        pos.guardian_s_recovery_result="DIRECT_BREAK"
+        pos.guardian_s_phase="BREAK_PENDING"
+        pos.guardian_s_recovery_result="BREAK_REVALIDATED"
         pos.guardian_s_failed_recovery_reason=(
-            "PERSISTENT_CAUSAL_BREAK_WITHOUT_RECLAIM"
+            "CURRENT_CASH_BREAK_REVALIDATED"
         )
     path_break_authorized=bool(
         adverse_event["classification"]=="THESIS_BREAK_CONFIRMED"
-        or recovery_path["guardian_phase"] in {
-            "FAILED_RECOVERY","DIRECT_THESIS_BREAK",
-        }
+        or recovery_path["guardian_phase"]=="FAILED_RECOVERY"
+        or recovery_path.get("break_revalidated")
     )
     # Retire the old generic price+cause exit that could bypass recovery
     # semantics. A first pullback remains deterioration until either broad
@@ -1035,7 +1042,7 @@ def assess(state,pos,now=None):
     preserve_deterioration=bool(
         recovery_path["guardian_phase"] in {
             "FIRST_PULLBACK","RECOVERY_TEST","FAILED_RECOVERY",
-            "DIRECT_THESIS_BREAK",
+            "BREAK_PENDING",
         }
     )
     def clear_deterioration_if_path_complete():
@@ -1080,7 +1087,7 @@ def assess(state,pos,now=None):
         exit_profile=("KILL_FAST" if kill_fast else
                       "RUNNER_SHIELD" if runner_shield else
                       "TREND_SHIELD" if trend_shield else
-                      "DIRECT_THESIS_BREAK" if recovery_path["guardian_phase"]=="DIRECT_THESIS_BREAK" else
+                      "BREAK_PENDING" if recovery_path["guardian_phase"]=="BREAK_PENDING" else
                       "FAILED_RECOVERY" if recovery_path["guardian_phase"]=="FAILED_RECOVERY" else
                       "CAUSAL_CONFIRM")
         sig=tuple(sorted(confirmed))+(exit_profile,)
@@ -1092,7 +1099,12 @@ def assess(state,pos,now=None):
         if now-float(getattr(pos,"guardian_s_candidate_since",now) or now)>=hold:
             decision,reason="EXIT","TIER_S_PRICE_PLUS_CAUSE_EXIT"
         else:
-            decision,reason="DETERIORATING","TIER_S_PRICE_PLUS_CAUSE_CONVERGENCE"
+            decision="DETERIORATING"
+            reason=(
+                "BREAK_REVALIDATED_AWAITING_EXIT_CONFIRMATION"
+                if exit_profile=="BREAK_PENDING" else
+                "TIER_S_PRICE_PLUS_CAUSE_CONVERGENCE"
+            )
     elif recovery_shield:
         decision,reason,hold=(
             "HOLD",
