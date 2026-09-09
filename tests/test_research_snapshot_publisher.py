@@ -12,6 +12,35 @@ spec.loader.exec_module(publisher)
 
 
 class ResearchPublisherTests(unittest.TestCase):
+    def test_runtime_summary_separates_research_from_live_like(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime = Path(folder) / "runtime.json"
+            runtime.write_text(json.dumps({
+                "trades": 20, "wins": 0, "losses": 20,
+                "shadow_ledgers": {
+                    "research_probe": {
+                        "trades": 20, "wins": 0, "losses": 20,
+                        "realized_pnl": -2.0,
+                    },
+                    "live_like": {
+                        "trades": 0, "wins": 0, "losses": 0,
+                        "realized_pnl": 0.0,
+                    },
+                    "private_account": {"secret": "must-not-leak"},
+                },
+            }), encoding="utf-8")
+            old = publisher.RUNTIME_STATE
+            publisher.RUNTIME_STATE = runtime
+            try:
+                summary = publisher._runtime_summary()
+            finally:
+                publisher.RUNTIME_STATE = old
+        self.assertEqual(summary["top_level_demo_scope"], "INCLUDES_RESEARCH_PROBE")
+        self.assertEqual(summary["promotion_metric_scope"], "LIVE_LIKE_SHADOW_ONLY")
+        self.assertEqual(summary["shadow_ledgers"]["research_probe"]["trades"], 20)
+        self.assertEqual(summary["shadow_ledgers"]["live_like"]["trades"], 0)
+        self.assertNotIn("must-not-leak", str(summary))
+
     def test_allowlist_never_exports_unknown_or_secret_fields(self):
         row = {
             "event": "ENTRY", "ts": 1.0, "cycle_id": "c1", "side": "LONG",

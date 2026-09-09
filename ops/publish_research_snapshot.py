@@ -455,9 +455,24 @@ def _service_state(name):
 def _runtime_summary():
     row = _load(RUNTIME_STATE, {})
     position = _dict(row.get("position"))
+    ledgers = _dict(row.get("shadow_ledgers"))
+    ledger_fields = (
+        "trades", "wins", "losses", "breakevens", "realized_pnl",
+        "gross_profit", "gross_loss", "stress_25bps_pnl",
+    )
+    separated_ledgers = {
+        name: {
+            field: _dict(ledgers.get(name)).get(field)
+            for field in ledger_fields
+        }
+        for name in ("research_probe", "live_like")
+    }
     return {
         "trades": row.get("trades"), "wins": row.get("wins"),
         "losses": row.get("losses"), "breakeven": row.get("breakeven"),
+        "top_level_demo_scope": "INCLUDES_RESEARCH_PROBE",
+        "shadow_ledgers": separated_ledgers,
+        "promotion_metric_scope": "LIVE_LIKE_SHADOW_ONLY",
         "balance_usdt": row.get("balance"),
         "position": {
             key: position.get(key) for key in (
