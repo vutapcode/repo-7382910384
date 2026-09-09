@@ -22,6 +22,7 @@ def snapshot(**overrides):
         "consumed_band": "EARLY_15_25",
         "oi_quality": "UNKNOWN",
         "flow_efficiency_state": "CONTINUING_CONFIRMED",
+        "cash_confirmation_class": "PRIMARY_ONLY_CURRENT_CONTINUATION",
     }
     row.update(overrides)
     return row
@@ -85,7 +86,27 @@ class EntryEconomicsV2Tests(unittest.TestCase):
         self.assertEqual(
             row["flow_confirmation_source"], "CROSS_VENUE_CASH_WITNESS"
         )
+        self.assertEqual(
+            row["cash_confirmation_class"],
+            "INDEPENDENT_WITNESS_CONTINUATION",
+        )
         self.assertEqual(row["transition_class"], "BACKGROUND_ALIGNED")
+
+    def test_primary_only_and_dual_cash_do_not_share_empirical_cohort(self):
+        primary = snapshot(
+            cash_confirmation_class="PRIMARY_ONLY_CURRENT_CONTINUATION"
+        )
+        dual = snapshot(
+            cash_confirmation_class="DUAL_CASH_CURRENT_CONTINUATION"
+        )
+        self.assertNotEqual(
+            entry_economics_v2._exact_key(primary),
+            entry_economics_v2._exact_key(dual),
+        )
+        self.assertNotEqual(
+            entry_economics_v2._parent_key(primary),
+            entry_economics_v2._parent_key(dual),
+        )
 
     def test_fast_transition_uses_isolated_empirical_cohort(self):
         candidate = {

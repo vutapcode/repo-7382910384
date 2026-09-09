@@ -73,6 +73,17 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
     )
     timing_band = consumed_band(timing_consumed)
     market_wave_band = consumed_band(market_wave_consumed)
+    witnesses = tuple(sorted(
+        composite_flow.get("cross_venue_witness_venues") or ()
+    ))
+    if primary_state == "CONTINUING_CONFIRMED" and witnesses:
+        cash_confirmation_class = "DUAL_CASH_CURRENT_CONTINUATION"
+    elif primary_state == "CONTINUING_CONFIRMED":
+        cash_confirmation_class = "PRIMARY_ONLY_CURRENT_CONTINUATION"
+    elif witnesses:
+        cash_confirmation_class = "INDEPENDENT_WITNESS_CONTINUATION"
+    else:
+        cash_confirmation_class = "UNVERIFIED_CURRENT_CONTINUATION"
     return {
         "economic_contract_version": CONTRACT_VERSION,
         "frozen_cost_plan_version": verified_cost_model.FROZEN_COST_PLAN_VERSION,
@@ -99,10 +110,9 @@ def feature_snapshot(result, regime, execution_style, thesis_audit=None):
         "flow_confirmation_source": _u(
             composite_flow.get("confirmation_source"), "NONE"
         ),
+        "cash_confirmation_class": cash_confirmation_class,
         "transition_class": transition_class,
-        "cross_venue_flow_witnesses": tuple(
-            sorted(composite_flow.get("cross_venue_witness_venues") or ())
-        ),
+        "cross_venue_flow_witnesses": witnesses,
     }
 
 
@@ -127,7 +137,8 @@ def _exact_key(snapshot):
         "side", "entry_mode", "regime", "proof_type", "proposer",
         "execution_style", "bias_phase", "market_wave_consumed_band",
         "oi_quality",
-        "flow_efficiency_state", "transition_class",
+        "flow_efficiency_state", "cash_confirmation_class",
+        "transition_class",
     )
     return tuple(_u(snapshot.get(name)) for name in names)
 
@@ -135,7 +146,8 @@ def _exact_key(snapshot):
 def _parent_key(snapshot):
     return tuple(_u(snapshot.get(name)) for name in (
         "side", "proof_type", "proposer", "execution_style",
-        "flow_efficiency_state", "transition_class",
+        "flow_efficiency_state", "cash_confirmation_class",
+        "transition_class",
     ))
 
 
