@@ -533,6 +533,75 @@ def _shared_thesis_shadow_action(observation):
         "weighted_ensemble": False,
     }
 
+def _advance_adverse_wave_ledger(pos,now,shared,recovery):
+    """Observe one bounded adverse process without changing Guardian action."""
+    episode_id=str(
+        getattr(pos,"causal_episode_id","")
+        or (getattr(pos,"entry_causal_thesis",{}) or {}).get(
+            "causal_episode_id", ""
+        )
+        or getattr(pos,"position_cycle_id","") or ""
+    )
+    prior=dict(getattr(pos,"guardian_adverse_wave_ledger",{}) or {})
+    if str(prior.get("causal_episode_id") or "")!=episode_id:
+        prior={}
+    prior_state=str(prior.get("state") or "HEALTHY")
+    status=str((shared or {}).get("status") or "UNKNOWN").upper()
+    reason=str((shared or {}).get("reason") or "UNKNOWN").upper()
+    observation_hash=str((shared or {}).get("observation_hash") or "")
+    previous_hash=str(prior.get("last_observation_hash") or "")
+    distinct_evidence=bool(observation_hash and observation_hash!=previous_hash)
+    recovery_phase=str((recovery or {}).get("guardian_phase") or "HEALTHY")
+
+    if "DISCONTINUITY" in reason:
+        state="INVALIDATED_SOURCE_BREAK"
+    elif recovery_phase=="RECOVERED" or status=="SUPPORT":
+        state="RECOVERED"
+    elif recovery_phase=="RECOVERY_TEST":
+        state="RECOVERY_TEST"
+    elif recovery_phase=="FAILED_RECOVERY":
+        state="RECOVERY_FAILED"
+    elif status in {"CONTROL_TRANSFER","FALSIFY"}:
+        state=(
+            "TRANSFER_CONFIRMED"
+            if prior_state=="TRANSFER_CANDIDATE" and distinct_evidence
+            else "TRANSFER_CANDIDATE"
+        )
+    elif status=="DIVERGENCE" or recovery_phase in {
+        "FIRST_PULLBACK","BREAK_PENDING",
+    }:
+        state="CHALLENGED"
+    elif status=="UNKNOWN":
+        # Unknown evidence neither repairs nor falsifies an existing process.
+        state=prior_state
+    else:
+        state="HEALTHY"
+
+    onset_ms=prior.get("onset_ms")
+    if state in {"CHALLENGED","TRANSFER_CANDIDATE"} and not onset_ms:
+        onset_ms=round(float(now)*1000.0,3)
+    if state in {"HEALTHY","RECOVERED"}:
+        onset_ms=None
+    row={
+        "version":"GUARDIAN_ADVERSE_WAVE_LEDGER_V1",
+        "authority":False,
+        "owner":"MARKET_THESIS",
+        "causal_episode_id":episode_id or None,
+        "state":state,
+        "previous_state":prior_state,
+        "onset_ms":onset_ms,
+        "last_evidence_ms":round(float(now)*1000.0,3),
+        "last_observation_hash":observation_hash or None,
+        "distinct_evidence":distinct_evidence,
+        "market_truth_status":status,
+        "recovery_phase":recovery_phase,
+        "unknown_falsifies":False,
+        "time_alone_transitions":False,
+        "action_policy":"SHADOW_UNTIL_SAME_WAL_GUARDIAN_PROOF",
+    }
+    pos.guardian_adverse_wave_ledger=row
+    return row
+
 def _trend_context_shield(state,pos):
     """Let a verified frozen trend survive normal noise, never hard danger."""
     thesis=dict(getattr(pos,"entry_causal_thesis",{}) or {})
@@ -1004,6 +1073,9 @@ def assess(state,pos,now=None):
     recovery_path=_advance_recovery_path(
         pos,now,p,s1,s2,s3,profile,thesis,adverse_event
     )
+    adverse_wave_ledger=_advance_adverse_wave_ledger(
+        pos,now,shared_thesis_observation,recovery_path
+    )
     # A local cash break that survives into a later scheduler observation is
     # revalidated by current price + executed-flow evidence, not by elapsed
     # time. The clock only proves this is a distinct observation. Flush and
@@ -1188,6 +1260,7 @@ def assess(state,pos,now=None):
             "exchange_independence":external_guard,
             "entry_thesis":thesis,"adverse_profile":profile,
             "adverse_event":adverse_event,
+            "adverse_wave_ledger":adverse_wave_ledger,
             "exit_profile":exit_profile,"runner_shield_active":runner_shield,
             "trend_shield_active":trend_shield,"trend_context":trend_context,
             "recovery_shield_active":recovery_shield,

@@ -146,6 +146,63 @@ class SharedThesisObservationTests(unittest.TestCase):
             self.assertFalse(result["weighted_ensemble"])
             self.assertTrue(result["safety_bypass_separate"])
 
+    def test_adverse_wave_ledger_requires_distinct_causal_evidence(self):
+        position = SimpleNamespace(
+            side="LONG", causal_episode_id="episode-shared-1",
+        )
+        challenged = guardian._advance_adverse_wave_ledger(
+            position, 100.0,
+            {"status": "DIVERGENCE", "reason": "ADVERSE_INCOMPLETE",
+             "observation_hash": "h1"},
+            {"guardian_phase": "FIRST_PULLBACK"},
+        )
+        self.assertEqual(challenged["state"], "CHALLENGED")
+
+        unknown = guardian._advance_adverse_wave_ledger(
+            position, 100.1,
+            {"status": "UNKNOWN", "reason": "NO_MATERIAL_CURRENT_THESIS_EVIDENCE",
+             "observation_hash": "h2"},
+            {"guardian_phase": "HEALTHY"},
+        )
+        self.assertEqual(unknown["state"], "CHALLENGED")
+
+        candidate = guardian._advance_adverse_wave_ledger(
+            position, 100.2,
+            {"status": "CONTROL_TRANSFER", "reason": "OPPOSITE_CONTROL",
+             "observation_hash": "h3"},
+            {"guardian_phase": "BREAK_PENDING"},
+        )
+        repeated = guardian._advance_adverse_wave_ledger(
+            position, 100.3,
+            {"status": "CONTROL_TRANSFER", "reason": "OPPOSITE_CONTROL",
+             "observation_hash": "h3"},
+            {"guardian_phase": "BREAK_PENDING"},
+        )
+        confirmed = guardian._advance_adverse_wave_ledger(
+            position, 100.4,
+            {"status": "CONTROL_TRANSFER", "reason": "OPPOSITE_CONTROL",
+             "observation_hash": "h4"},
+            {"guardian_phase": "BREAK_PENDING"},
+        )
+        self.assertEqual(candidate["state"], "TRANSFER_CANDIDATE")
+        self.assertEqual(repeated["state"], "TRANSFER_CANDIDATE")
+        self.assertEqual(confirmed["state"], "TRANSFER_CONFIRMED")
+        self.assertFalse(confirmed["authority"])
+        self.assertFalse(confirmed["time_alone_transitions"])
+
+    def test_adverse_wave_ledger_source_break_is_explicit(self):
+        position = SimpleNamespace(
+            side="LONG", causal_episode_id="episode-shared-1",
+        )
+        row = guardian._advance_adverse_wave_ledger(
+            position, 100.0,
+            {"status": "UNKNOWN", "reason": "THESIS_OBSERVATION_DISCONTINUITY",
+             "observation_hash": "gap"},
+            {"guardian_phase": "FIRST_PULLBACK"},
+        )
+        self.assertEqual(row["state"], "INVALIDATED_SOURCE_BREAK")
+        self.assertFalse(row["unknown_falsifies"])
+
     def test_guardian_adapter_reads_exact_frozen_handoff(self):
         action = authority_contracts.seal(
             "ACTION", "ENTRY_ACTION_POLICY", "episode-shared-1",
