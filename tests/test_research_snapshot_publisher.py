@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -12,6 +13,90 @@ spec.loader.exec_module(publisher)
 
 
 class ResearchPublisherTests(unittest.TestCase):
+    def test_publish_rewrites_polluted_branch_as_evidence_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            remote = root / "remote.git"
+            seed = root / "seed"
+            clone = root / "publisher"
+            subprocess.run(["git", "init", "--bare", str(remote)], check=True,
+                           stdout=subprocess.DEVNULL)
+            subprocess.run(["git", "init", "-b", "telemetry", str(seed)],
+                           check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=seed,
+                           check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"],
+                           cwd=seed, check=True)
+            (seed / "tests").mkdir()
+            (seed / "research_live").mkdir()
+            (seed / "main.py").write_text("print('pollution')\n", encoding="utf-8")
+            (seed / "tests" / "test_x.py").write_text("pass\n", encoding="utf-8")
+            (seed / "research_live" / "timeline.json").write_text(
+                "[]\n", encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=seed, check=True)
+            subprocess.run(["git", "commit", "-m", "polluted"], cwd=seed,
+                           check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)],
+                           cwd=seed, check=True)
+            subprocess.run(["git", "push", "origin", "telemetry"], cwd=seed,
+                           check=True, stdout=subprocess.DEVNULL)
+
+            journal = root / "events.jsonl"
+            journal.write_text(json.dumps({
+                "event": "DECISION_EVALUATED", "ts": 1000.0,
+                "run_id": "run-1", "runtime_commit": "d" * 40,
+                "code_version": "code", "config_version": "config",
+                "runtime_mode": "SHADOW", "source_branch": "main",
+            }) + "\n", encoding="utf-8")
+            bot = root / "bot.json"
+            bot.write_text(json.dumps({
+                "run_id": "run-1", "runtime_commit": "d" * 40,
+                "code_version": "code", "config_version": "config",
+                "runtime_mode": "SHADOW", "source_branch": "main",
+                "runtime_execution_mode": "SHADOW_DEMO",
+            }), encoding="utf-8")
+            recorder = root / "recorder.json"
+            recorder.write_text(json.dumps({
+                "run_id": "rec-1", "runtime_commit": "d" * 40,
+                "code_version": "rec-code", "config_version": "rec-config",
+                "runtime_mode": "SHADOW", "source_branch": "main",
+            }), encoding="utf-8")
+            originals = {
+                name: getattr(publisher, name) for name in (
+                    "JOURNAL", "RUNTIME_STATE", "TRADE_AUDIT",
+                    "OPPORTUNITY_WAL", "FEATURE_WAL", "BOT_HEALTH",
+                    "RECORDER_HEALTH", "PUBLISH_STATE", "CLONE", "REMOTE",
+                )
+            }
+            old_service_state = publisher._service_state
+            try:
+                publisher.JOURNAL = journal
+                publisher.RUNTIME_STATE = root / "runtime.json"
+                publisher.TRADE_AUDIT = root / "trades.jsonl"
+                publisher.OPPORTUNITY_WAL = root / "opportunities"
+                publisher.FEATURE_WAL = root / "features"
+                publisher.BOT_HEALTH = bot
+                publisher.RECORDER_HEALTH = recorder
+                publisher.PUBLISH_STATE = root / "state.json"
+                publisher.CLONE = clone
+                publisher.REMOTE = str(remote)
+                publisher._service_state = lambda _name: "active"
+                publisher._publish()
+            finally:
+                for name, value in originals.items():
+                    setattr(publisher, name, value)
+                publisher._service_state = old_service_state
+            tree = subprocess.run(
+                ["git", "--git-dir", str(remote), "ls-tree", "-r", "--name-only",
+                 "telemetry"], check=True, text=True, stdout=subprocess.PIPE,
+            ).stdout.splitlines()
+            publisher._assert_evidence_tree(tree)
+            self.assertTrue(tree)
+            self.assertTrue(all(path.startswith("telemetry/") for path in tree))
+            self.assertIn("telemetry/manifest.json", tree)
+            self.assertNotIn("main.py", tree)
+
     def test_runtime_summary_separates_research_from_live_like(self):
         with tempfile.TemporaryDirectory() as folder:
             runtime = Path(folder) / "runtime.json"
@@ -44,14 +129,37 @@ class ResearchPublisherTests(unittest.TestCase):
     def test_allowlist_never_exports_unknown_or_secret_fields(self):
         row = {
             "event": "ENTRY", "ts": 1.0, "cycle_id": "c1", "side": "LONG",
+            "run_id": "run-1", "runtime_commit": "a" * 40,
+            "code_version": "code-1", "config_version": "config-1",
             "price": 100.0, "api_key": "secret", "account": {"balance": 5},
             "entry_causal_thesis": {"proof_type": "PERSISTENT_METAORDER"},
         }
         compact = publisher._compact_event(row)
         self.assertEqual(compact["price"], 100.0)
+        self.assertEqual(compact["run_id"], "run-1")
+        self.assertEqual(compact["runtime_commit"], "a" * 40)
+        self.assertEqual(compact["identity_status"], "COMPLETE")
         self.assertNotIn("api_key", compact)
         self.assertNotIn("account", compact)
         self.assertNotIn("secret", str(compact))
+
+    def test_legacy_event_exposes_missing_identity_without_faking_it(self):
+        compact = publisher._compact_event({"event": "ENTRY", "ts": 1.0})
+        self.assertEqual(compact["identity_status"], "LEGACY_MISSING_IDENTITY")
+        for name in publisher.IDENTITY_FIELDS:
+            self.assertIn(name, compact)
+            self.assertIsNone(compact[name])
+
+    def test_evidence_tree_rejects_source_tests_and_docs(self):
+        publisher._assert_evidence_tree([
+            "telemetry/manifest.json",
+            "telemetry/decisions/timeline.jsonl",
+        ])
+        for path in (
+            "main.py", "telemetry/tests/test_x.py", "telemetry/README.md",
+        ):
+            with self.assertRaises(RuntimeError):
+                publisher._assert_evidence_tree([path])
 
     def test_candidate_export_keeps_miss_reason_and_consumed(self):
         compact = publisher._compact_event({

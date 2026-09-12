@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Publish a sanitized rolling SHADOW research snapshot to a telemetry branch.
+"""Publish a sanitized rolling SHADOW evidence snapshot to telemetry.
 
 The publisher reads only the durable shadow journal, never raw credentials or
-private account payloads.  The dedicated branch is amended in place so a
-three-minute cadence does not create hundreds of commits on ``main``.
+private account payloads. The telemetry branch contains evidence only and
+points back to the exact source commit on ``main``.
 """
 
 from collections import Counter, deque
@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from loi_he_thong import journal_segments
+from recorder.metadata import runtime_commit, source_branch
 
 
 JOURNAL = Path(os.getenv(
@@ -37,6 +38,18 @@ TRADE_AUDIT = Path(os.getenv(
 OPPORTUNITY_WAL = Path(os.getenv(
     "WSTRADE_RESEARCH_OPPORTUNITY_WAL",
     "/home/ubuntu/smc2026_data/raw/wal/opportunity_dossier",
+))
+FEATURE_WAL = Path(os.getenv(
+    "WSTRADE_RESEARCH_FEATURE_WAL",
+    "/home/ubuntu/smc2026_data/raw/wal/feature_1s",
+))
+BOT_HEALTH = Path(os.getenv(
+    "WSTRADE_BOT_HEALTH_PATH",
+    "/home/ubuntu/smc2026_data/health/bot_runtime.json",
+))
+RECORDER_HEALTH = Path(os.getenv(
+    "WSTRADE_RECORDER_HEALTH_PATH",
+    "/home/ubuntu/smc2026_data/health/status.json",
 ))
 PUBLISH_STATE = Path(os.getenv(
     "WSTRADE_RESEARCH_PUBLISH_STATE",
@@ -57,6 +70,12 @@ MAX_DELTA_ROWS = 2000
 # incremental from the durable byte offset.
 INITIAL_TAIL_BYTES = 8 * 1024 * 1024
 VN = timezone(timedelta(hours=7))
+IDENTITY_FIELDS = (
+    "run_id", "runtime_commit", "code_version", "config_version",
+)
+FORBIDDEN_EVIDENCE_SUFFIXES = (
+    ".py", ".pyc", ".pyo", ".md", ".rst", ".toml", ".ini", ".cfg",
+)
 
 
 def _run(*args, cwd=None, check=True):
@@ -83,6 +102,34 @@ def _write_json(path, payload):
     os.replace(tmp, path)
 
 
+def _load_jsonl(path):
+    rows = []
+    try:
+        handle = path.open(encoding="utf-8", errors="replace")
+    except OSError:
+        return rows
+    with handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
+
+
+def _write_jsonl(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(
+                row, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            ) + "\n")
+    os.replace(tmp, path)
+
+
 def _iso(ts, zone=timezone.utc):
     try:
         return datetime.fromtimestamp(float(ts), zone).isoformat()
@@ -92,6 +139,19 @@ def _iso(ts, zone=timezone.utc):
 
 def _dict(value):
     return value if isinstance(value, dict) else {}
+
+
+def _identity(source):
+    identity = {name: source.get(name) for name in IDENTITY_FIELDS}
+    identity.update({
+        "runtime_mode": source.get("runtime_mode"),
+        "source_branch": source.get("source_branch"),
+    })
+    identity["identity_status"] = (
+        "COMPLETE" if all(identity.get(name) for name in IDENTITY_FIELDS)
+        else "LEGACY_MISSING_IDENTITY"
+    )
+    return identity
 
 
 def _compact_event(row):
@@ -105,6 +165,7 @@ def _compact_event(row):
         "cycle_id": row.get("cycle_id"),
         "causal_episode_id": row.get("causal_episode_id"),
         "side": row.get("side"),
+        **_identity(row),
     }
     if event == "ENTRY":
         thesis = _dict(row.get("entry_causal_thesis"))
@@ -174,13 +235,18 @@ def _compact_event(row):
             "persistent_candidate_side": persistent.get("candidate_side"),
             "persistent_candidate_id": persistent.get("candidate_id"),
         })
-    return {key: value for key, value in base.items() if value is not None}
+    compact = {key: value for key, value in base.items() if value is not None}
+    for name in IDENTITY_FIELDS:
+        compact.setdefault(name, None)
+    return compact
 
 
 def _closed_trade_history(cutoff):
     """Read the sanitized audit mirror through a second strict allowlist."""
     allowed = (
         "schema_version", "cycle_id", "decision_cycle_id", "causal_episode_id",
+        "run_id", "runtime_commit", "code_version", "config_version",
+        "runtime_mode", "source_branch",
         "side", "entry_ts", "entry_time_utc", "entry_price", "exit_ts",
         "exit_time_utc", "exit_price", "qty_btc", "entry_mode", "phase",
         "proof_type", "proposer", "primary_cash_anchor", "bias_side",
@@ -223,6 +289,7 @@ def _closed_trade_history(cutoff):
                 guardian = _dict(nested_exit.get("guardian"))
                 row = {
                     "schema_version": source.get("schema_version"),
+                    **_identity(nested_entry or source),
                     "cycle_id": source.get("trade_id"),
                     "decision_cycle_id": nested_entry.get("decision_cycle_id"),
                     "causal_episode_id": nested_entry.get("causal_episode_id"),
@@ -275,6 +342,7 @@ def _closed_trade_history(cutoff):
                     key: source.get(key) for key in allowed
                     if source.get(key) is not None
                 }
+                row.update(_identity(source))
             row["ts"] = ts
             row["vn"] = _iso(ts, VN)
             rows.append(row)
@@ -376,6 +444,7 @@ def _opportunity_history(cutoff):
                     "strategy_config_version": payload.get(
                         "strategy_config_version"
                     ),
+                    **_identity(source),
                 })
     return list(rows)
 
@@ -483,15 +552,177 @@ def _runtime_summary():
     }
 
 
+def _latest_wal_record(root):
+    paths = sorted(Path(root).glob("*/*.jsonl"))
+    for path in reversed(paths):
+        try:
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                end = handle.tell()
+                if end <= 0:
+                    continue
+                cursor = end - 1
+                while cursor > 0:
+                    handle.seek(cursor)
+                    if handle.read(1) == b"\n" and cursor < end - 1:
+                        break
+                    cursor -= 1
+                handle.seek(cursor + 1 if cursor else 0)
+                line = handle.readline()
+            row = json.loads(line)
+            if isinstance(row, dict):
+                return row
+        except (OSError, ValueError, TypeError):
+            continue
+    return {}
+
+
+def _selected(source, names):
+    source = _dict(source)
+    return {
+        name: source.get(name) for name in names
+        if source.get(name) is not None
+    }
+
+
+def _market_observations():
+    source = _latest_wal_record(FEATURE_WAL)
+    if not source:
+        return {}
+    payload = _dict(source.get("payload"))
+    cash = _dict(payload.get("cash_flow"))
+    identity = _identity(source)
+    common = {
+        "ts": float(source.get("event_time_ms", 0) or 0) / 1000.0,
+        "event_time_ms": source.get("event_time_ms"),
+        **identity,
+    }
+    binance = {
+        **common,
+        "futures": {
+            **_selected(payload, (
+                "first_trade_price", "last_trade_price", "trade_high",
+                "trade_low", "buy_qty", "sell_qty", "trade_delta_qty",
+                "cvd_btc", "cvd_btc_60s", "liquidation_count",
+                "long_liquidation_qty", "short_liquidation_qty",
+            )),
+            "book": _selected(_dict(payload.get("book")), (
+                "best_bid", "best_ask", "mid", "spread_bps",
+                "microprice", "microprice_offset_bps", "top_imbalance",
+                "bid_depth_5bps", "ask_depth_5bps", "obi_5bps",
+                "bid_depth_10bps", "ask_depth_10bps", "obi_10bps",
+            )),
+            "macro": _selected(_dict(payload.get("macro")), (
+                "mark_price", "index_price", "funding_rate",
+                "open_interest", "open_interest_change",
+            )),
+        },
+        "spot": _selected(_dict(cash.get("binance_spot")), (
+            "trade_count", "buy_qty", "sell_qty", "trade_delta_qty",
+            "first_price", "last_price", "high", "low",
+        )),
+    }
+    coinbase = {
+        **common,
+        "spot": _selected(_dict(cash.get("coinbase_spot")), (
+            "trade_count", "buy_qty", "sell_qty", "trade_delta_qty",
+            "first_price", "last_price", "high", "low",
+        )),
+    }
+    return {"binance": binance, "coinbase": coinbase}
+
+
+def _manifest(now):
+    bot = _load(BOT_HEALTH, {})
+    recorder = _load(RECORDER_HEALTH, {})
+    config_id = bot.get("config_version") or bot.get("strategy_config_version")
+    manifest = {
+        "schema_version": 1,
+        "run_id": bot.get("run_id"),
+        "runtime_commit": bot.get("runtime_commit"),
+        "code_version": bot.get("code_version"),
+        "config_version": config_id,
+        "runtime_mode": bot.get("runtime_mode"),
+        "run_execution_mode": bot.get("runtime_execution_mode"),
+        "recorded_at": _iso(now),
+        "recorded_at_ms": int(now * 1000),
+        "source_branch": bot.get("source_branch"),
+        "source_repository_branch": "main",
+        "publisher_commit": runtime_commit(ROOT),
+        "publisher_source_branch": source_branch(ROOT),
+        "recorder": {
+            key: recorder.get(key) for key in (
+                "run_id", "runtime_commit", "code_version", "config_version",
+                "runtime_mode", "source_branch",
+            )
+        },
+    }
+    manifest["identity_status"] = (
+        "COMPLETE" if all(manifest.get(name) for name in IDENTITY_FIELDS)
+        else "INCOMPLETE_RUNTIME_HEARTBEAT"
+    )
+    return manifest
+
+
+def _runtime_evidence(now, manifest):
+    bot = _load(BOT_HEALTH, {})
+    recorder = _load(RECORDER_HEALTH, {})
+    bot_identity = _identity({
+        **bot,
+        "config_version": bot.get("config_version")
+        or bot.get("strategy_config_version"),
+    })
+    recorder_identity = _identity(recorder)
+    heartbeat = {
+        "ts": now, **bot_identity,
+        **_selected(bot, (
+            "updated_at_ms", "pid", "runtime_execution_mode",
+            "system_ready", "trading_enabled", "shadow_demo_enabled",
+            "live_exchange_mutations_enabled", "readiness_reason",
+            "position_status", "decision_revision", "governor_mode",
+            "live_entry_cpu_allowed",
+        )),
+    }
+    data_health = {
+        "ts": now, **recorder_identity,
+        **_selected(recorder, (
+            "updated_at_ms", "status", "current_status", "connections",
+            "optional_connections", "received", "written", "dropped",
+            "writer_errors", "decision_tap_parse_errors", "depth",
+            "sequence_gap_total", "last_error_at_ms",
+        )),
+    }
+    source_epochs = {
+        "ts": now, **recorder_identity,
+        "connections": recorder.get("connections"),
+        "optional_connections": recorder.get("optional_connections"),
+        "last_event_ms": recorder.get("last_event_ms"),
+        "last_available_ms": recorder.get("last_available_ms"),
+        "event_age_ms": recorder.get("event_age_ms"),
+    }
+    return heartbeat, data_health, source_epochs
+
+
+def _assert_evidence_tree(paths):
+    invalid = [
+        path for path in paths
+        if not path.startswith("telemetry/")
+        or path.lower().endswith(FORBIDDEN_EVIDENCE_SUFFIXES)
+        or "/__pycache__/" in path
+        or path.endswith(".gitignore")
+    ]
+    if invalid:
+        raise RuntimeError("non-evidence files staged: " + ", ".join(invalid[:20]))
+
+
 def _ensure_clone():
     CLONE.parent.mkdir(parents=True, exist_ok=True)
     if not (CLONE / ".git").exists():
         _run("git", "clone", "--no-checkout", REMOTE, str(CLONE))
     _run("git", "config", "user.name", "WStrade Recorder", cwd=CLONE)
     _run("git", "config", "user.email", "wstrade-recorder@localhost", cwd=CLONE)
-    # This rolling branch is amended every three minutes.  Git's heuristic
-    # auto-GC otherwise launches an expensive repack from the timer hot path.
-    # Maintenance can still be run explicitly during a bot maintenance window.
+    # The branch is one parentless rolling evidence snapshot. Unreachable
+    # amended blobs are pruned explicitly after a successful push.
     _run("git", "config", "gc.auto", "0", cwd=CLONE)
     remote = _run(
         "git", "ls-remote", "--heads", "origin", BRANCH,
@@ -525,11 +756,20 @@ def _merge_unique(existing, incoming, key, cutoff, limit):
     return sorted(merged.values(), key=lambda row: float(row.get("ts", 0))) [-limit:]
 
 
+def _previous_rows(path, legacy_path=None):
+    rows = _load_jsonl(path)
+    if rows or legacy_path is None:
+        return rows
+    legacy = _load(legacy_path, [])
+    return legacy if isinstance(legacy, list) else []
+
+
 def _publish(no_push=False):
     checkpoint = _load(PUBLISH_STATE, {})
     rows, next_checkpoint = _journal_delta(checkpoint)
-    remote_sha, has_head = _ensure_clone()
-    target = CLONE / "research_live"
+    remote_sha, _has_head = _ensure_clone()
+    target = CLONE / "telemetry"
+    legacy = CLONE / "research_live"
     now = time.time()
     cutoff = now - RETENTION_SECONDS
 
@@ -542,14 +782,19 @@ def _publish(no_push=False):
         and (row.get("causal_episode_id") or row.get("persistent_candidate_id"))
     ]
     trades = _merge_unique(
-        _load(target / "trades.json", []), trade_rows,
+        _previous_rows(
+            target / "execution" / "trades.jsonl", legacy / "trades.json"
+        ), trade_rows,
         lambda row: (row.get("event"), row.get("cycle_id"), row.get("ts")),
         cutoff, 2000,
     )
     closed_trades = _closed_trade_history(cutoff)
     opportunities = _opportunity_history(cutoff)
     candidates = _merge_unique(
-        _load(target / "candidates.json", []), candidate_rows,
+        _previous_rows(
+            target / "decisions" / "candidates.jsonl",
+            legacy / "candidates.json",
+        ), candidate_rows,
         lambda row: (
             row.get("causal_episode_id") or row.get("persistent_candidate_id"),
             row.get("reason"), row.get("side"),
@@ -557,8 +802,10 @@ def _publish(no_push=False):
     )
 
     decisions = [row for row in compact if row.get("event") == "DECISION_EVALUATED"]
+    manifest = _manifest(now)
     summary = {
         "ts": now, "utc": _iso(now), "vn": _iso(now, VN),
+        **_identity(manifest),
         "journal_events_read": len(rows),
         "event_counts": dict(Counter(row.get("event") for row in compact)),
         "decision_counts": dict(Counter(row.get("decision") for row in decisions)),
@@ -575,54 +822,104 @@ def _publish(no_push=False):
         "runtime": _runtime_summary(),
     }
     timeline = _merge_unique(
-        _load(target / "timeline.json", []), [summary],
+        _previous_rows(
+            target / "decisions" / "timeline.jsonl",
+            legacy / "timeline.json",
+        ), [summary],
         lambda row: int(float(row.get("ts", 0)) // 180), cutoff, 2000,
     )
-    latest = dict(summary, source={
-        "mode": "SHADOW_ONLY", "real_exchange_mutations": False,
-        "journal": str(JOURNAL), "retention_hours": 84,
-        "branch": BRANCH,
-    }, recent_trades=trades[-20:], recent_closed_trades=closed_trades[-20:],
-       recent_candidates=candidates[-40:],
-       recent_opportunities=opportunities[-20:])
 
-    _write_json(target / "latest.json", latest)
-    _write_json(target / "timeline.json", timeline)
-    _write_json(target / "trades.json", trades)
-    _write_json(target / "closed_trades.json", closed_trades)
-    _write_json(target / "candidates.json", candidates)
-    _write_json(target / "opportunities.json", opportunities)
-    (target / "README.md").write_text(
-        "# WStrade live research telemetry\n\n"
-        "Sanitized SHADOW-only evidence, refreshed about every three minutes. "
-        "No API credentials, private account payloads, or raw WAL are published.\n\n"
-        "Start with `latest.json`, then inspect `opportunities.json`, "
-        "`closed_trades.json`, `trades.json`, `candidates.json`, and "
-        "`timeline.json`. "
-        "Times are provided in UTC and UTC+7.\n",
-        encoding="utf-8",
+    heartbeat, data_health, source_epochs = _runtime_evidence(now, manifest)
+    heartbeat_rows = _merge_unique(
+        _previous_rows(target / "runtime" / "heartbeat.jsonl"), [heartbeat],
+        lambda row: int(float(row.get("ts", 0)) // 180), cutoff, 2000,
     )
+    health_rows = _merge_unique(
+        _previous_rows(target / "runtime" / "data_health.jsonl"), [data_health],
+        lambda row: int(float(row.get("ts", 0)) // 180), cutoff, 2000,
+    )
+    epoch_rows = _merge_unique(
+        _previous_rows(target / "runtime" / "source_epochs.jsonl"),
+        [source_epochs], lambda row: int(float(row.get("ts", 0)) // 180),
+        cutoff, 2000,
+    )
+    market = _market_observations()
+    market_rows = {}
+    for venue, observation in market.items():
+        market_rows[venue] = _merge_unique(
+            _previous_rows(target / "market" / venue / "timeline.jsonl"),
+            [observation], lambda row: int(float(row.get("ts", 0)) // 180),
+            cutoff, 2000,
+        )
+    guardian_rows = [
+        row for row in trades
+        if row.get("event") == "EXIT" and row.get("guardian")
+    ]
+
+    _write_json(target / "manifest.json", manifest)
+    run_id = str(manifest.get("run_id") or "unknown")
+    _write_json(target / "runs" / run_id / "manifest.json", manifest)
+    _write_jsonl(target / "decisions" / "timeline.jsonl", timeline)
+    _write_jsonl(target / "decisions" / "candidates.jsonl", candidates)
+    _write_jsonl(target / "decisions" / "opportunities.jsonl", opportunities)
+    _write_jsonl(target / "execution" / "trades.jsonl", trades)
+    _write_jsonl(target / "execution" / "closed_trades.jsonl", closed_trades)
+    _write_jsonl(target / "execution" / "guardian.jsonl", guardian_rows)
+    _write_jsonl(target / "runtime" / "heartbeat.jsonl", heartbeat_rows)
+    _write_jsonl(target / "runtime" / "data_health.jsonl", health_rows)
+    _write_jsonl(target / "runtime" / "source_epochs.jsonl", epoch_rows)
+    for venue, venue_rows in market_rows.items():
+        _write_jsonl(target / "market" / venue / "timeline.jsonl", venue_rows)
+    recorder_identity = _identity(_load(RECORDER_HEALTH, {}))
+    source_status = {
+        "binance": (True, "STRATEGY_AND_MARKET_TRUTH", "public_ws"),
+        "coinbase": (True, "CASH_DIRECTION_TRUTH", "coinbase_spot_ws"),
+        "bybit": (True, "RESEARCH_ONLY", "bybit_research_ws"),
+        "kraken": (False, "NOT_WIRED", None),
+    }
+    recorder_health = _load(RECORDER_HEALTH, {})
+    connections = {
+        **_dict(recorder_health.get("connections")),
+        **_dict(recorder_health.get("optional_connections")),
+    }
+    for venue, (configured, role, connection_name) in source_status.items():
+        _write_json(target / "market" / venue / "status.json", {
+            "recorded_at": _iso(now), "configured": configured, "role": role,
+            "connection": connections.get(connection_name)
+            if connection_name else None,
+            **recorder_identity,
+        })
 
     if no_push:
         print(json.dumps({"generated": str(target), "rows": len(rows), "push": False}))
         return
-    _run("git", "add", "--", "research_live", cwd=CLONE)
+    # Rebuild the index from evidence only. This also migrates the original
+    # polluted parentless telemetry snapshot without retaining source files.
+    _run("git", "rm", "-r", "--cached", "--ignore-unmatch", "--", ".", cwd=CLONE)
+    _run("git", "add", "--", "telemetry", cwd=CLONE)
+    tracked = _run("git", "ls-files", cwd=CLONE).stdout.splitlines()
+    _assert_evidence_tree(tracked)
     staged = _run("git", "diff", "--cached", "--quiet", cwd=CLONE, check=False)
     if staged.returncode == 0:
         _write_json(PUBLISH_STATE, dict(next_checkpoint, published_at=now))
         print(json.dumps({"changed": False, "rows": len(rows)}))
         return
     message = "telemetry: refresh WStrade shadow research snapshot"
-    if has_head:
-        _run("git", "commit", "--amend", "-m", message, cwd=CLONE)
-    else:
-        _run("git", "commit", "-m", message, cwd=CLONE)
+    # commit-tree deliberately omits -p: telemetry is always one parentless
+    # snapshot, so polluted or stale history can never remain branch-reachable.
+    tree_sha = _run("git", "write-tree", cwd=CLONE).stdout.strip()
+    commit_sha = _run(
+        "git", "commit-tree", tree_sha, "-m", message, cwd=CLONE,
+    ).stdout.strip()
+    _run("git", "update-ref", "HEAD", commit_sha, cwd=CLONE)
     if remote_sha:
         lease = "--force-with-lease=refs/heads/%s:%s" % (BRANCH, remote_sha)
         _run("git", "push", lease, "origin", "HEAD:refs/heads/" + BRANCH, cwd=CLONE)
     else:
         _run("git", "push", "-u", "origin", "HEAD:refs/heads/" + BRANCH, cwd=CLONE)
     _write_json(PUBLISH_STATE, dict(next_checkpoint, published_at=now))
+    _run("git", "reflog", "expire", "--expire=now", "--all", cwd=CLONE)
+    _run("git", "prune", "--expire=now", cwd=CLONE)
     print(json.dumps({"changed": True, "rows": len(rows), "branch": BRANCH}))
 
 
