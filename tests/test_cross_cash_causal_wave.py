@@ -110,6 +110,11 @@ class CrossCashCausalWaveTests(unittest.TestCase):
         second = wave.observe(state, short_histories, 1_850)
         names = [name for name, _ in state._cross_cash_causal_wave_events]
         self.assertEqual(names, ["CAUSAL_WAVE_TERMINATED", "CAUSAL_WAVE_OPENED"])
+        transition = state._cross_cash_causal_wave_events[0][1][
+            "state_transition"
+        ]
+        self.assertEqual(transition["state_before"], "CONTROL_PERSISTING")
+        self.assertEqual(transition["state_after"], "FALSIFIED")
         self.assertNotEqual(second["causal_wave_id"], old_id)
         self.assertEqual(second["side"], "SHORT")
 

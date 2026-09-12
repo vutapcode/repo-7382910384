@@ -97,6 +97,21 @@ class ResearchPublisherTests(unittest.TestCase):
             self.assertIn("telemetry/manifest.json", tree)
             self.assertIn("telemetry/decisions/timeline.jsonl", tree)
             self.assertIn("telemetry/runtime/heartbeat.jsonl", tree)
+            self.assertIn(
+                "telemetry/runs/run-1/decisions/events.jsonl", tree,
+            )
+            self.assertIn(
+                "telemetry/runs/run-1/decisions/state_transitions.jsonl", tree,
+            )
+            self.assertIn(
+                "telemetry/runs/run-1/decisions/blockers.jsonl", tree,
+            )
+            self.assertIn(
+                "telemetry/runs/run-1/market/evidence_slices.jsonl", tree,
+            )
+            self.assertIn(
+                "telemetry/runs/run-1/market/raw_archive.json", tree,
+            )
             self.assertNotIn("main.py", tree)
 
     def test_runtime_summary_separates_research_from_live_like(self):
@@ -184,6 +199,70 @@ class ResearchPublisherTests(unittest.TestCase):
         self.assertEqual(compact["miss_taxonomy"], "WAIT_CHASE")
         self.assertEqual(compact["consumed_fraction"], 0.51)
         self.assertEqual(compact["causal_episode_id"], "ign:spot:SHORT:1")
+
+    def test_decision_dossier_splits_evidence_blockers_and_redacts_secrets(self):
+        records = publisher._decision_dossier_records({
+            "event": "DECISION_EVALUATED", "event_id": "bot:run-1:7",
+            "ts": 2.0, "run_id": "run-1", "runtime_commit": "a" * 40,
+            "code_version": "code", "config_version": "config",
+            "runtime_mode": "SHADOW", "source_branch": "main",
+            "decision": "WAIT", "reason": "WAIT_OI_REFRESH",
+            "decision_record": {"forensics": {
+                "version": "FORENSIC_DECISION_DOSSIER_V1",
+                "advisory_only": True,
+                "lineage": {"market_wave_id": "wave-1"},
+                "market_evidence": {
+                    "evidence_refs": [{"ref": "market:1"}],
+                    "api_key": "must-not-leak",
+                },
+                "data_quality": {"open_interest": {"status": "STALE"}},
+                "observation": {"bias": {"side": "LONG"}},
+                "question_results": [{
+                    "question_id": "oi_fresh", "owner": "MARKET_TRUTH",
+                    "epistemic_status": "UNKNOWN",
+                }],
+                "blockers": [{
+                    "blocker_id": "WAIT_OI_REFRESH", "owner": "MARKET_TRUTH",
+                    "epistemic_status": "UNKNOWN", "can_block": True,
+                    "credentials": {"token": "must-not-leak"},
+                }],
+                "unknowns": ["oi_fresh"], "falsified": [],
+                "decision": {"action": "WAIT", "reason": "WAIT_OI_REFRESH"},
+                "counterfactual": {"status": "RESEARCH_ONLY"},
+            }},
+        })
+        self.assertEqual(records["decision"]["forensic_status"], "COMPLETE")
+        self.assertEqual(records["decision"]["unknowns"], ["oi_fresh"])
+        self.assertEqual(
+            records["blockers"][0]["blocker"]["owner"], "MARKET_TRUTH",
+        )
+        self.assertEqual(
+            records["evidence"]["raw_archive_status"],
+            "POINTER_NOT_YET_AVAILABLE",
+        )
+        self.assertNotIn("must-not-leak", str(records))
+
+    def test_journal_delta_keeps_state_transition_events(self):
+        with tempfile.TemporaryDirectory() as folder:
+            journal = Path(folder) / "events.jsonl"
+            journal.write_text(json.dumps({
+                "event": "TIMING_ATTEMPT_TERMINATED", "ts": 1.0,
+                "state_transition": {
+                    "machine": "TIMING_ATTEMPT", "before": "MATURE",
+                    "after": "TERMINATED", "owner": "TIMING",
+                },
+            }) + "\n", encoding="utf-8")
+            old = publisher.JOURNAL
+            publisher.JOURNAL = journal
+            try:
+                rows, _checkpoint = publisher._journal_delta({})
+            finally:
+                publisher.JOURNAL = old
+        self.assertEqual(len(rows), 1)
+        transition = publisher._transition_record(rows[0])
+        self.assertEqual(
+            transition["state_transition"]["after"], "TERMINATED",
+        )
 
     def test_exit_export_keeps_guardian_recovery_path_without_unknown_fields(self):
         compact = publisher._compact_event({

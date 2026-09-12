@@ -21,7 +21,10 @@ class OffhostDurabilityTests(unittest.TestCase):
         with path.open("w", encoding="utf-8") as handle:
             for index in range(rows):
                 handle.write(json.dumps({
-                    "schema_version": 3, "code_version": "code", "config_version": "cfg",
+                    "schema_version": 3, "run_id": "run-1",
+                    "runtime_commit": "a" * 40,
+                    "code_version": "code", "config_version": "cfg",
+                    "runtime_mode": "SHADOW", "source_branch": "main",
                     "event_contract_version": "evt", "available_time_ms": 1000 + index,
                     "payload": {"n": index},
                 }) + "\n")
@@ -42,6 +45,9 @@ class OffhostDurabilityTests(unittest.TestCase):
         self.assertEqual(a["row_count"], 2)
         self.assertEqual(a["byte_size"], path.stat().st_size)
         self.assertEqual(a["sha256"], d.scan_jsonl(path, chunk_size=7)["sha256"])
+        self.assertEqual(a["run_id"], "run-1")
+        self.assertEqual(a["runtime_commit"], "a" * 40)
+        self.assertEqual(a["runtime_mode"], "SHADOW")
 
     def test_manifest_atomic_and_immutable(self):
         path = self._wal("01")

@@ -68,6 +68,17 @@ class EntryLifecycleTests(unittest.TestCase):
              "ECONOMIC_OPPORTUNITY_OPENED",
              "ECONOMIC_OPPORTUNITY_LINKED"],
         )
+        opened = first["events"][0][1]["state_transition"]
+        waiting = first["events"][1][1]["state_transition"]
+        self.assertEqual(
+            (opened["state_before"], opened["state_after"]),
+            ("UNOBSERVED", "OPEN"),
+        )
+        self.assertEqual(
+            (waiting["state_before"], waiting["state_after"]),
+            ("OPEN", "WAIT"),
+        )
+        self.assertEqual(waiting["owner"], "TIMING")
         second = entry_lifecycle.observe(state, result(), {
             "allowed": True, "owner": "ACTION",
             "stage": "AUTHORIZED", "reason": "PASS",
@@ -176,6 +187,10 @@ class EntryLifecycleTests(unittest.TestCase):
         )
         self.assertTrue(report["accepted"])
         self.assertEqual(report["event"][0], "ECONOMIC_OPPORTUNITY_CONSUMED")
+        self.assertEqual(
+            report["event"][1]["state_transition"]["state_after"],
+            "CONSUMED",
+        )
         self.assertEqual(
             report["terminal"]["opportunity_scope"], "ECONOMIC_EXECUTABLE",
         )

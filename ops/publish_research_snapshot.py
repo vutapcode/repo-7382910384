@@ -9,9 +9,11 @@ points back to the exact source commit on ``main``.
 from collections import Counter, deque
 from datetime import datetime, timezone, timedelta
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -76,6 +78,14 @@ IDENTITY_FIELDS = (
 FORBIDDEN_EVIDENCE_SUFFIXES = (
     ".py", ".pyc", ".pyo", ".md", ".rst", ".toml", ".ini", ".cfg",
 )
+SENSITIVE_KEYS = {
+    "account", "account_id", "api_key", "api_secret", "authorization",
+    "credential", "credentials", "password", "private_key", "secret",
+    "session_token", "access_token", "refresh_token",
+}
+MAX_PUBLIC_DEPTH = 12
+MAX_PUBLIC_LIST = 256
+MAX_PUBLIC_STRING = 4096
 
 
 def _run(*args, cwd=None, check=True):
@@ -154,11 +164,75 @@ def _identity(source):
     return identity
 
 
+def _is_sensitive_key(key):
+    normalized = str(key).strip().lower().replace("-", "_")
+    return (
+        normalized in SENSITIVE_KEYS
+        or normalized.endswith("_api_key")
+        or normalized.endswith("_api_secret")
+        or normalized.endswith("_password")
+        or normalized.endswith("_private_key")
+    )
+
+
+def _public_value(value, depth=0):
+    """Bound and redact nested forensic values before they leave the VPS."""
+    if depth >= MAX_PUBLIC_DEPTH:
+        return "TRUNCATED_MAX_DEPTH"
+    if isinstance(value, dict):
+        return {
+            str(key): _public_value(item, depth + 1)
+            for key, item in value.items()
+            if not _is_sensitive_key(key)
+        }
+    if isinstance(value, (list, tuple)):
+        return [_public_value(item, depth + 1) for item in value[:MAX_PUBLIC_LIST]]
+    if isinstance(value, str):
+        return value[:MAX_PUBLIC_STRING]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:MAX_PUBLIC_STRING]
+
+
+def _stable_event_id(row):
+    existing = row.get("event_id")
+    if existing:
+        return str(existing)
+    identity = {
+        key: row.get(key) for key in (
+            "event", "ts", "run_id", "cycle_id", "causal_episode_id",
+            "timing_attempt_id", "economic_opportunity_id", "side",
+        )
+    }
+    digest = hashlib.sha256(json.dumps(
+        identity, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")).hexdigest()[:24]
+    return "legacy:" + digest
+
+
+def _safe_run_id(value):
+    candidate = str(value or "legacy-missing-run-id")
+    if re.fullmatch(r"[A-Za-z0-9._:-]{1,160}", candidate):
+        return candidate
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:24]
+    return "invalid-run-id-" + digest
+
+
+def _forensic_journal_event(row):
+    event = str(row.get("event") or "")
+    # The journal itself is already an important-event stream. Heartbeats are
+    # sampled separately and would otherwise evict causal events from the
+    # bounded delta deque.
+    return bool(event and event != "DECISION_HEARTBEAT")
+
+
 def _compact_event(row):
     """Allowlist research fields; unknown/private fields never leave the VPS."""
     event = str(row.get("event") or "")
     base = {
         "event": event,
+        "event_id": _stable_event_id(row),
+        "event_sequence": row.get("event_sequence"),
         "ts": row.get("ts"),
         "utc": _iso(row.get("ts")),
         "vn": _iso(row.get("ts"), VN),
@@ -239,6 +313,139 @@ def _compact_event(row):
     for name in IDENTITY_FIELDS:
         compact.setdefault(name, None)
     return compact
+
+
+def _decision_dossier_records(row):
+    """Split one decision into canonical dossier records and lightweight refs."""
+    if str(row.get("event") or "") != "DECISION_EVALUATED":
+        return None
+    compact = _compact_event(row)
+    event_id = compact["event_id"]
+    decision_record = _dict(row.get("decision_record"))
+    forensic = _dict(decision_record.get("forensics"))
+    lineage = _dict(forensic.get("lineage"))
+    evidence_slice_id = "evidence:" + event_id
+    blockers = list(forensic.get("blockers") or ())
+    blocker_ids = [
+        "blocker:%s:%s" % (event_id, index)
+        for index in range(len(blockers))
+    ]
+    dossier = {
+        **compact,
+        "dossier_version": forensic.get("version"),
+        "forensic_status": (
+            "COMPLETE" if forensic.get("version")
+            else "LEGACY_INCOMPLETE"
+        ),
+        "advisory_only": forensic.get("advisory_only", True),
+        "lineage": lineage,
+        "evidence_slice_id": evidence_slice_id,
+        "question_results": forensic.get("question_results") or [],
+        "authority": forensic.get("authority") or {},
+        "blocker_refs": blocker_ids,
+        "unknowns": forensic.get("unknowns") or [],
+        "falsified": forensic.get("falsified") or [],
+        "ignored_evidence": forensic.get("ignored_evidence") or [],
+        "decision": forensic.get("decision") or {
+            "action": row.get("decision"), "reason": row.get("reason"),
+        },
+        "counterfactual_ref": (
+            "counterfactual:" + event_id
+            if forensic.get("counterfactual") is not None else None
+        ),
+    }
+    evidence_projection = {
+        "market_evidence": forensic.get("market_evidence") or {},
+        "data_quality": forensic.get("data_quality") or {},
+        "observation": forensic.get("observation") or {},
+    }
+    evidence_projection = _public_value(evidence_projection)
+    projection_sha256 = hashlib.sha256(json.dumps(
+        evidence_projection, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")).hexdigest()
+    evidence = {
+        "evidence_slice_id": evidence_slice_id,
+        "decision_event_id": event_id,
+        "ts": row.get("ts"),
+        **_identity(row),
+        "lineage": lineage,
+        **evidence_projection,
+        "projection_sha256": projection_sha256,
+        "raw_archive_ref": None,
+        "raw_archive_status": "POINTER_NOT_YET_AVAILABLE",
+        "bounded_projection": True,
+    }
+    blocker_rows = []
+    for blocker_id, blocker in zip(blocker_ids, blockers):
+        blocker_rows.append({
+            "blocker_event_id": blocker_id,
+            "decision_event_id": event_id,
+            "ts": row.get("ts"),
+            **_identity(row),
+            "lineage": lineage,
+            "blocker": blocker,
+        })
+    counterfactual = None
+    if forensic.get("counterfactual") is not None:
+        counterfactual = {
+            "counterfactual_id": "counterfactual:" + event_id,
+            "decision_event_id": event_id,
+            "ts": row.get("ts"),
+            **_identity(row),
+            "research_only": True,
+            "lineage": lineage,
+            "counterfactual": forensic.get("counterfactual"),
+        }
+    return {
+        "decision": _public_value(dossier),
+        "evidence": _public_value(evidence),
+        "blockers": _public_value(blocker_rows),
+        "counterfactual": _public_value(counterfactual),
+    }
+
+
+def _transition_record(row):
+    transition = row.get("state_transition")
+    if not isinstance(transition, dict):
+        return None
+    base = _compact_event(row)
+    decision = _dict(row.get("decision_record"))
+    forensic = _dict(decision.get("forensics"))
+    return _public_value({
+        **base,
+        "transition_id": "transition:" + base["event_id"],
+        "lineage": forensic.get("lineage") or {
+            key: row.get(key) for key in (
+                "market_wave_id", "causal_episode_id", "timing_attempt_id",
+                "economic_opportunity_id", "cycle_id", "order_id",
+                "fill_id", "position_id",
+            ) if row.get(key) is not None
+        },
+        "state_transition": transition,
+    })
+
+
+def _execution_record(row):
+    event = str(row.get("event") or "")
+    if event not in {
+        "ENTRY", "EXIT", "LIVE_ENTRY", "LIVE_EXIT", "LIVE_ORDER_UPDATE",
+        "POSITION_STATE", "ENTRY_FILLED_THEN_FLATTENED",
+    } and not event.startswith(("ENTRY_", "EXIT_", "SHADOW_MAKER_")):
+        return None
+    base = _compact_event(row)
+    allowed = (
+        "order_id", "client_order_id", "trade_id", "fill_id", "position_id",
+        "decision_cycle_id", "status", "order_status", "execution_status",
+        "price", "entry_price", "exit_price", "avg_price", "limit_price",
+        "qty", "qty_btc", "filled_qty", "remaining_qty", "side", "reason",
+        "risk_reason", "slippage_bps", "retry_count", "maker_attempt_id",
+        "blocking_reason", "reject_stage", "reject_owner", "failed_gates",
+        "miss_taxonomy", "ok", "flow_state_at_GO", "flow_state_at_submit",
+        "flow_decayed_before_submit", "cash_age_at_submit",
+    )
+    base.update({key: row.get(key) for key in allowed if row.get(key) is not None})
+    return _public_value(base)
 
 
 def _closed_trade_history(cutoff):
@@ -508,7 +715,7 @@ def _journal_delta(checkpoint):
                     row = json.loads(raw.decode("utf-8"))
                 except (UnicodeDecodeError, ValueError):
                     continue
-                if row.get("event") in {"DECISION_EVALUATED", "ENTRY", "EXIT"}:
+                if _forensic_journal_event(row):
                     rows.append(row)
     stat = JOURNAL.stat()
     next_checkpoint = {
@@ -639,7 +846,8 @@ def _manifest(now):
     recorder = _load(RECORDER_HEALTH, {})
     config_id = bot.get("config_version") or bot.get("strategy_config_version")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "dossier_schema": "FORENSIC_RUN_DOSSIER_V1",
         "run_id": bot.get("run_id"),
         "runtime_commit": bot.get("runtime_commit"),
         "code_version": bot.get("code_version"),
@@ -657,6 +865,12 @@ def _manifest(now):
                 "run_id", "runtime_commit", "code_version", "config_version",
                 "runtime_mode", "source_branch",
             )
+        },
+        "raw_archive": {
+            "configured": False,
+            "status": "OFFHOST_DISABLED",
+            "reconstruction_guarantee": False,
+            "reason": "NO_OFFHOST_TARGET_CONFIGURED",
         },
     }
     manifest["identity_status"] = (
@@ -767,6 +981,113 @@ def _previous_rows(path, legacy_path=None):
     return legacy if isinstance(legacy, list) else []
 
 
+def _run_bundle(bundles, run_id):
+    return bundles.setdefault(_safe_run_id(run_id), {
+        "source_rows": [], "decisions": [], "transitions": [],
+        "blockers": [], "evidence": [], "orders": [], "fills": [],
+        "positions": [], "guardian": [], "opportunities": [],
+        "counterfactuals": [],
+    })
+
+
+def _merge_run_file(path, incoming, key, cutoff, limit=2000):
+    rows = _merge_unique(_previous_rows(path), incoming, key, cutoff, limit)
+    _write_jsonl(path, rows)
+
+
+def _historical_run_manifest(run_id, rows, now):
+    source = next((row for row in rows if isinstance(row, dict)), {})
+    identity = _identity(source)
+    return {
+        "schema_version": 2,
+        "dossier_schema": "FORENSIC_RUN_DOSSIER_V1",
+        "run_id": source.get("run_id"),
+        "runtime_commit": identity.get("runtime_commit"),
+        "code_version": identity.get("code_version"),
+        "config_version": identity.get("config_version"),
+        "runtime_mode": identity.get("runtime_mode"),
+        "source_branch": identity.get("source_branch"),
+        "identity_status": identity.get("identity_status"),
+        "directory_id": run_id,
+        "recorded_at": _iso(now),
+        "historical_manifest": True,
+        "raw_archive": {
+            "configured": False,
+            "status": "OFFHOST_DISABLED",
+            "reconstruction_guarantee": False,
+            "reason": "NO_OFFHOST_TARGET_CONFIGURED",
+        },
+    }
+
+
+def _write_run_dossier(run_root, bundle, manifest, heartbeat, data_health,
+                       source_epochs, cutoff):
+    _write_json(run_root / "manifest.json", manifest)
+    _merge_run_file(
+        run_root / "decisions" / "events.jsonl", bundle["decisions"],
+        lambda row: row.get("event_id"), cutoff,
+    )
+    _merge_run_file(
+        run_root / "decisions" / "state_transitions.jsonl",
+        bundle["transitions"], lambda row: row.get("transition_id"), cutoff,
+    )
+    _merge_run_file(
+        run_root / "decisions" / "blockers.jsonl", bundle["blockers"],
+        lambda row: row.get("blocker_event_id"), cutoff,
+    )
+    _merge_run_file(
+        run_root / "market" / "evidence_slices.jsonl", bundle["evidence"],
+        lambda row: row.get("evidence_slice_id"), cutoff,
+    )
+    _merge_run_file(
+        run_root / "execution" / "orders.jsonl", bundle["orders"],
+        lambda row: row.get("event_id"), cutoff,
+    )
+    _merge_run_file(
+        run_root / "execution" / "fills.jsonl", bundle["fills"],
+        lambda row: row.get("event_id"), cutoff,
+    )
+    _merge_run_file(
+        run_root / "execution" / "positions.jsonl", bundle["positions"],
+        lambda row: row.get("event_id") or (
+            row.get("cycle_id"), row.get("ts"), row.get("event")
+        ), cutoff,
+    )
+    _merge_run_file(
+        run_root / "execution" / "guardian.jsonl", bundle["guardian"],
+        lambda row: row.get("event_id") or (
+            row.get("cycle_id"), row.get("ts"), row.get("event")
+        ), cutoff,
+    )
+    _merge_run_file(
+        run_root / "research" / "opportunities.jsonl",
+        bundle["opportunities"], lambda row: (
+            row.get("causal_episode_id"), row.get("cycle_id"), row.get("ts")
+        ), cutoff,
+    )
+    _merge_run_file(
+        run_root / "research" / "counterfactuals.jsonl",
+        bundle["counterfactuals"], lambda row: row.get("counterfactual_id"),
+        cutoff,
+    )
+    if heartbeat is not None:
+        _merge_run_file(
+            run_root / "runtime" / "heartbeat.jsonl", [heartbeat],
+            lambda row: int(float(row.get("ts", 0)) // 180), cutoff,
+        )
+    if data_health is not None:
+        _merge_run_file(
+            run_root / "market" / "data_health.jsonl", [data_health],
+            lambda row: int(float(row.get("ts", 0)) // 180), cutoff,
+        )
+    if source_epochs is not None:
+        _merge_run_file(
+            run_root / "market" / "source_epochs.jsonl", [source_epochs],
+            lambda row: int(float(row.get("ts", 0)) // 180), cutoff,
+        )
+    _write_json(run_root / "market" / "raw_archive.json", manifest["raw_archive"])
+
+
 def _publish(no_push=False):
     checkpoint = _load(PUBLISH_STATE, {})
     rows, next_checkpoint = _journal_delta(checkpoint)
@@ -806,6 +1127,15 @@ def _publish(no_push=False):
 
     decisions = [row for row in compact if row.get("event") == "DECISION_EVALUATED"]
     manifest = _manifest(now)
+    current_run_id = _safe_run_id(manifest.get("run_id"))
+    manifest["current_run_path"] = "telemetry/runs/%s" % current_run_id
+    manifest["canonical_decision_file"] = (
+        manifest["current_run_path"] + "/decisions/events.jsonl"
+    )
+    manifest["cross_run_indexes"] = {
+        "status": "COMPATIBILITY_ONLY",
+        "canonical_records_live_under_runs": True,
+    }
     summary = {
         "ts": now, "utc": _iso(now), "vn": _iso(now, VN),
         **_identity(manifest),
@@ -833,6 +1163,47 @@ def _publish(no_push=False):
     )
 
     heartbeat, data_health, source_epochs = _runtime_evidence(now, manifest)
+
+    run_bundles = {}
+    for source_row in rows:
+        bundle = _run_bundle(run_bundles, source_row.get("run_id"))
+        bundle["source_rows"].append(source_row)
+        dossier = _decision_dossier_records(source_row)
+        if dossier is not None:
+            bundle["decisions"].append(dossier["decision"])
+            bundle["evidence"].append(dossier["evidence"])
+            bundle["blockers"].extend(dossier["blockers"])
+            if dossier["counterfactual"] is not None:
+                bundle["counterfactuals"].append(dossier["counterfactual"])
+        transition = _transition_record(source_row)
+        if transition is not None:
+            bundle["transitions"].append(transition)
+        execution = _execution_record(source_row)
+        if execution is not None:
+            event_name = str(source_row.get("event") or "")
+            if (
+                "ORDER" in event_name
+                or event_name.startswith(("ENTRY_", "EXIT_", "SHADOW_MAKER_"))
+            ):
+                bundle["orders"].append(execution)
+            if event_name in {
+                "ENTRY", "EXIT", "LIVE_ENTRY", "LIVE_EXIT",
+                "LIVE_ORDER_UPDATE", "ENTRY_FILLED_THEN_FLATTENED",
+            }:
+                bundle["fills"].append(execution)
+            if event_name in {
+                "ENTRY", "EXIT", "LIVE_ENTRY", "LIVE_EXIT", "POSITION_STATE",
+                "ENTRY_FILLED_THEN_FLATTENED",
+            }:
+                bundle["positions"].append(execution)
+            if event_name in {"EXIT", "LIVE_EXIT", "POSITION_STATE"}:
+                bundle["guardian"].append(execution)
+    for opportunity in opportunities:
+        bundle = _run_bundle(run_bundles, opportunity.get("run_id"))
+        bundle["source_rows"].append(opportunity)
+        bundle["opportunities"].append(opportunity)
+    _run_bundle(run_bundles, manifest.get("run_id"))
+
     heartbeat_rows = _merge_unique(
         _previous_rows(target / "runtime" / "heartbeat.jsonl"), [heartbeat],
         lambda row: int(float(row.get("ts", 0)) // 180), cutoff, 2000,
@@ -860,8 +1231,21 @@ def _publish(no_push=False):
     ]
 
     _write_json(target / "manifest.json", manifest)
-    run_id = str(manifest.get("run_id") or "unknown")
-    _write_json(target / "runs" / run_id / "manifest.json", manifest)
+    for run_id, bundle in run_bundles.items():
+        run_manifest = (
+            manifest if run_id == current_run_id
+            else _historical_run_manifest(
+                run_id, bundle["source_rows"], now,
+            )
+        )
+        current = run_id == current_run_id
+        _write_run_dossier(
+            target / "runs" / run_id, bundle, run_manifest,
+            heartbeat if current else None,
+            data_health if current else None,
+            source_epochs if current else None,
+            cutoff,
+        )
     _write_jsonl(target / "decisions" / "timeline.jsonl", timeline)
     _write_jsonl(target / "decisions" / "candidates.jsonl", candidates)
     _write_jsonl(target / "decisions" / "opportunities.jsonl", opportunities)

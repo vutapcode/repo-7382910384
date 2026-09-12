@@ -219,6 +219,11 @@ def _same_side_conversions(observations):
 
 
 def _event(name, wave, reason=None):
+    before, after = {
+        "CAUSAL_WAVE_OPENED": ("UNOBSERVED", wave.get("state")),
+        "CAUSAL_WAVE_UPDATED": ("CONTROL_PERSISTING", wave.get("state")),
+        "CAUSAL_WAVE_TERMINATED": ("CONTROL_PERSISTING", "FALSIFIED"),
+    }.get(name, ("UNKNOWN", wave.get("state")))
     payload = {
         "version": VERSION,
         "causal_wave_id": wave.get("causal_wave_id"),
@@ -227,6 +232,15 @@ def _event(name, wave, reason=None):
         "cash_roots": dict(wave.get("cash_roots") or {}),
         "venue_epochs": dict(wave.get("venue_epochs") or {}),
         "authority": False,
+        "state_transition": {
+            "machine": "CROSS_CASH_CAUSAL_WAVE",
+            "owner": "CROSS_CASH_CAUSAL_WAVE",
+            "authority": False,
+            "state_before": before,
+            "state_after": after,
+            "trigger": reason or name,
+            "causal_wave_id": wave.get("causal_wave_id"),
+        },
     }
     if reason:
         payload["reason"] = reason

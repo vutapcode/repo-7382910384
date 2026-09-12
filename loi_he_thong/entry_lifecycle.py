@@ -135,6 +135,10 @@ def observe(state, result, gate_outcome, *, economic_opportunity_id=None):
     previous_terminal = bool(
         getattr(state, "entry_timing_attempt_terminal", False)
     )
+    initial_timing_status = str(
+        getattr(state, "entry_timing_attempt_status", "UNOBSERVED")
+        or "UNOBSERVED"
+    ).upper()
     expired_ids = list(
         getattr(state, "entry_timing_expired_attempt_ids", ()) or ()
     )
@@ -275,6 +279,58 @@ def observe(state, result, gate_outcome, *, economic_opportunity_id=None):
             "canonical_opportunity_id": economic_id,
         }))
 
+    timing_after = {
+        "TIMING_ATTEMPT_OPENED": "OPEN",
+        "TIMING_ATTEMPT_WAIT": "WAIT",
+        "TIMING_ATTEMPT_EXPIRED": "EXPIRED",
+        "TIMING_ATTEMPT_PASSED": "PASSED",
+        "TIMING_ATTEMPT_CLOSED": "CLOSED",
+        "TIMING_ATTEMPT_REUSE_REJECTED": "REJECTED",
+    }
+    economic_after = {
+        "ECONOMIC_OPPORTUNITY_OPENED": "OPEN",
+        "ECONOMIC_OPPORTUNITY_REPRICED": "REPRICED",
+        "ECONOMIC_OPPORTUNITY_LINKED": "LINKED",
+    }
+    timing_before = initial_timing_status
+    economic_before = "LINKED" if previous_link else "UNOBSERVED"
+    annotated = []
+    market_truth = dict(result.get("market_truth_wave_lifecycle") or {})
+    for event_name, raw_payload in events:
+        payload = dict(raw_payload or {})
+        if event_name in timing_after:
+            after = timing_after[event_name]
+            payload["state_transition"] = {
+                "machine": "TIMING_ATTEMPT",
+                "owner": "TIMING",
+                "authority": False,
+                "state_before": timing_before,
+                "state_after": after,
+                "trigger": payload.get("result")
+                or dict(payload.get("gate_outcome") or {}).get("reason")
+                or event_name,
+                "market_truth_state": market_truth.get("status"),
+                "causal_wave_id": (
+                    (attempt_identity or {}).get("causal_wave_id")
+                    or market_truth.get("causal_wave_id")
+                ),
+            }
+            timing_before = after
+        elif event_name in economic_after:
+            after = economic_after[event_name]
+            payload["state_transition"] = {
+                "machine": "ECONOMIC_OPPORTUNITY",
+                "owner": "ECONOMICS",
+                "authority": False,
+                "state_before": economic_before,
+                "state_after": after,
+                "trigger": payload.get("reason") or event_name,
+                "causal_wave_id": payload.get("causal_wave_id")
+                or (attempt_identity or {}).get("causal_wave_id"),
+            }
+            economic_before = after
+        annotated.append((event_name, payload))
+
     return {
         "version": VERSION,
         "causal_wave_id": (_timing_payload(result) or {}).get("causal_wave_id"),
@@ -286,7 +342,7 @@ def observe(state, result, gate_outcome, *, economic_opportunity_id=None):
                 "EXPIRED" if stale_reuse or expiring else "UNOBSERVED"
             )
         ),
-        "events": events,
+        "events": annotated,
     }
 
 
@@ -352,6 +408,15 @@ def _terminal(state, opportunity_id, status, *, causal_wave_id=None,
             "EXECUTABLE_FILL_CAPTURED"
             if status == "CONSUMED" else "CAUSAL_OPPORTUNITY_INVALIDATED"
         )),
+    }
+    terminal["state_transition"] = {
+        "machine": "ECONOMIC_OPPORTUNITY",
+        "owner": "ECONOMICS",
+        "authority": False,
+        "state_before": existing.get("status") or "LINKED",
+        "state_after": status,
+        "trigger": terminal["reason"],
+        "causal_wave_id": terminal["causal_wave_id"],
     }
     states[key] = terminal
     # Keep bounded recorder state without changing opportunity authority.

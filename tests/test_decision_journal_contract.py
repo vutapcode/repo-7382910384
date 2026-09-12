@@ -15,10 +15,11 @@ class DecisionJournalContractTests(unittest.TestCase):
                 launcher.app.state,
                 run_id="bot-run", runtime_commit="c" * 40,
                 code_version="code", strategy_config_version="config",
-                source_branch="main",
+                source_branch="main", forensic_event_sequence=40,
             ):
                 launcher._append_event("ENTRY", {
                     "run_id": "forged", "runtime_commit": "forged",
+                    "event_id": "forged",
                 })
             row = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(row["run_id"], "bot-run")
@@ -26,6 +27,8 @@ class DecisionJournalContractTests(unittest.TestCase):
         self.assertEqual(row["code_version"], "code")
         self.assertEqual(row["config_version"], "config")
         self.assertEqual(row["runtime_mode"], launcher.RUNTIME_MODE)
+        self.assertEqual(row["event_id"], "bot:bot-run:41")
+        self.assertEqual(row["event_sequence"], 41)
 
     def test_full_record_is_content_addressed_and_not_duplicated(self):
         record = {

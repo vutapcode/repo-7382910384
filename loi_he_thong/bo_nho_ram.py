@@ -83,6 +83,9 @@ class SharedState:
         # Boot identity is never restored from disk. It prevents an order from
         # borrowing evidence/fills from a previous process after restart.
         self.run_id = uuid.uuid4().hex
+        # Monotonic only within one run; combined with run_id it gives every
+        # durable bot event a unique forensic identity.
+        self.forensic_event_sequence = 0
         # Heartbeat được thread watchdog độc lập quan sát; nếu event loop bị
         # starvation thì entry phải fail-closed dù chính asyncio không chạy.
         self.event_loop_heartbeat_mono = 0.0

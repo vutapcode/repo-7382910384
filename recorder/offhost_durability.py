@@ -135,7 +135,9 @@ def scan_jsonl(path, chunk_size=1024 * 1024):
     first_available = None
     last_available = None
     versions = {name: set() for name in (
-        "schema_version", "code_version", "config_version", "event_contract_version",
+        "schema_version", "run_id", "runtime_commit", "code_version",
+        "config_version", "runtime_mode", "source_branch",
+        "event_contract_version",
     )}
     with path.open("rb") as handle:
         for raw in handle:
@@ -159,8 +161,12 @@ def scan_jsonl(path, chunk_size=1024 * 1024):
         "first_availability_time_ms": first_available,
         "last_availability_time_ms": last_available,
         "schema_version": _one_or_mixed(versions["schema_version"]),
+        "run_id": _one_or_mixed(versions["run_id"]),
+        "runtime_commit": _one_or_mixed(versions["runtime_commit"]),
         "code_version": _one_or_mixed(versions["code_version"]),
         "config_version": _one_or_mixed(versions["config_version"]),
+        "runtime_mode": _one_or_mixed(versions["runtime_mode"]),
+        "source_branch": _one_or_mixed(versions["source_branch"]),
         "event_contract_version": _one_or_mixed(versions["event_contract_version"]),
     }
 
@@ -181,8 +187,12 @@ def build_manifest(path, data_root, *, now=None, wal_schema_version=None, canoni
         "sha256": scan["sha256"],
         "wal_schema_version": str(wal_schema_version or scan["schema_version"]),
         "schema_version": scan["schema_version"],
+        "run_id": scan["run_id"],
+        "runtime_commit": scan["runtime_commit"],
         "code_version": scan["code_version"],
         "config_version": scan["config_version"],
+        "runtime_mode": scan["runtime_mode"],
+        "source_branch": scan["source_branch"],
         "event_contract_version": scan["event_contract_version"],
         "first_availability_time_ms": scan["first_availability_time_ms"],
         "last_availability_time_ms": scan["last_availability_time_ms"],

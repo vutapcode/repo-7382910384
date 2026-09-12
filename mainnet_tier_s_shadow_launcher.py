@@ -24,6 +24,7 @@ from loi_he_thong import entry_action_policy
 from loi_he_thong import entry_gate_outcome
 from loi_he_thong import entry_lifecycle
 from loi_he_thong import execution_causal_revalidation
+from loi_he_thong import forensic_telemetry
 from loi_he_thong import host_cpu_governor
 from loi_he_thong import mainnet_safety
 from loi_he_thong import market_thesis
@@ -611,6 +612,14 @@ def _entry_feasibility(price, frozen_cost_plan=None):
 def _append_event(event, payload):
     EVENT_PATH.parent.mkdir(parents=True, exist_ok=True)
     recorded_at = time.time()
+    event_sequence = int(
+        getattr(app.state, "forensic_event_sequence", 0) or 0
+    ) + 1
+    app.state.forensic_event_sequence = event_sequence
+    event_id = "bot:%s:%d" % (
+        str(getattr(app.state, "run_id", "unknown") or "unknown"),
+        event_sequence,
+    )
     row = {
         "ts": recorded_at,
         "runtime": VERSION,
@@ -622,6 +631,8 @@ def _append_event(event, payload):
         "config_version": getattr(app.state, "strategy_config_version", None),
         "runtime_mode": RUNTIME_MODE,
         "source_branch": getattr(app.state, "source_branch", None),
+        "event_id": event_id,
+        "event_sequence": event_sequence,
     }
     with EVENT_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -1150,7 +1161,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
     ) or _authority_contract_bundle(
         state, result, quorum_ok, episode_id,
     )
-    return {
+    snapshot = {
         "cycle_id": cycle_id,
         "decision_time_ms": decision_time_ms,
         "strategy_authority": "IGNITION_CORE_V1",
@@ -1163,6 +1174,7 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "economic_opportunity_id": (result or {}).get(
             "economic_opportunity_id"
         ),
+        "market_wave_id": (result or {}).get("market_wave_id") or episode_id,
         "background_bias_side": background_bias_side,
         "causal_episode_side": causal_episode_side,
         "decision_side": decision_side,
@@ -1304,6 +1316,8 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
             "windows_seconds": [5, 15, 30, 60, 180, 300, 900],
         },
     }
+    snapshot["forensics"] = forensic_telemetry.build_decision_dossier(snapshot)
+    return snapshot
 
 
 def _record_position_state(pos, guardian, risk, price, now, force=False):
