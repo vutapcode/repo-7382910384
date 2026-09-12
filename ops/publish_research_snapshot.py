@@ -752,6 +752,7 @@ def _merge_unique(existing, incoming, key, cutoff, limit):
                 continue
         except (AttributeError, TypeError, ValueError):
             continue
+        row = {**row, **_identity(row)}
         merged[key(row)] = row
     return sorted(merged.values(), key=lambda row: float(row.get("ts", 0))) [-limit:]
 

@@ -152,6 +152,16 @@ class ResearchPublisherTests(unittest.TestCase):
             self.assertIn(name, compact)
             self.assertIsNone(compact[name])
 
+    def test_merge_normalizes_legacy_rows_without_relabeling_them(self):
+        rows = publisher._merge_unique(
+            [{"ts": 10.0, "event": "ENTRY"}], [],
+            lambda row: row["ts"], cutoff=0.0, limit=10,
+        )
+        self.assertEqual(rows[0]["identity_status"], "LEGACY_MISSING_IDENTITY")
+        for name in publisher.IDENTITY_FIELDS:
+            self.assertIn(name, rows[0])
+            self.assertIsNone(rows[0][name])
+
     def test_evidence_tree_rejects_source_tests_and_docs(self):
         publisher._assert_evidence_tree([
             "telemetry/manifest.json",
