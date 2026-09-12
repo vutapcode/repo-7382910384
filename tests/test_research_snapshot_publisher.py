@@ -95,6 +95,8 @@ class ResearchPublisherTests(unittest.TestCase):
             self.assertTrue(tree)
             self.assertTrue(all(path.startswith("telemetry/") for path in tree))
             self.assertIn("telemetry/manifest.json", tree)
+            self.assertIn("telemetry/decisions/timeline.jsonl", tree)
+            self.assertIn("telemetry/runtime/heartbeat.jsonl", tree)
             self.assertNotIn("main.py", tree)
 
     def test_runtime_summary_separates_research_from_live_like(self):

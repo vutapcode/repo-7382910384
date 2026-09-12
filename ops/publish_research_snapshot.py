@@ -896,7 +896,9 @@ def _publish(no_push=False):
     # Rebuild the index from evidence only. This also migrates the original
     # polluted parentless telemetry snapshot without retaining source files.
     _run("git", "rm", "-r", "--cached", "--ignore-unmatch", "--", ".", cwd=CLONE)
-    _run("git", "add", "--", "telemetry", cwd=CLONE)
+    # The dedicated clone may still have an untracked .gitignore from the
+    # pre-migration repo snapshot. Evidence JSONL must not inherit repo rules.
+    _run("git", "add", "-f", "--", "telemetry", cwd=CLONE)
     tracked = _run("git", "ls-files", cwd=CLONE).stdout.splitlines()
     _assert_evidence_tree(tracked)
     staged = _run("git", "diff", "--cached", "--quiet", cwd=CLONE, check=False)
