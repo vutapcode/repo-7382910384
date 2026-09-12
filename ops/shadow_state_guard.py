@@ -172,7 +172,7 @@ if version in PROMOTION_STATE:
             V12: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
             V13: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
             V14: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
-            V15: "ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
+            V15: "ENTRY_ECONOMICS_V9_DUAL_MATURITY",
         }[version]
         for index, row in enumerate(economics):
             if not isinstance(row, dict) or row.get(

@@ -335,7 +335,18 @@ class ShadowStateGuardV3Tests(unittest.TestCase):
             "edge_calibration_rows": [],
             "edge_calibration_code_version": "code-v15",
             "edge_calibration_config_version": "config-v15",
-            "entry_economics_v2_rows": [],
+            "entry_economics_v2_rows": [{
+                "economic_contract_version": "ENTRY_ECONOMICS_V9_DUAL_MATURITY",
+                "valid": True,
+                "net_pnl_bps_after_frozen_cost": -1.0,
+                "execution_cost_bps": 8.0,
+                "time_to_positive_net_event": False,
+                "time_to_positive_net_termination": (
+                    "GUARDIAN_CLOSE_BEFORE_POSITIVE"
+                ),
+                "time_to_positive_net_seconds": None,
+                "time_to_positive_net_observation_seconds": 4.0,
+            }],
             "entry_economics_code_version": "code-v15",
             "entry_economics_config_version": "config-v15",
             "execution_transaction": None,
