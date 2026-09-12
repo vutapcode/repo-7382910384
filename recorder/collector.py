@@ -21,7 +21,7 @@ from recorder.coinbase_l2 import CoinbaseL2Book, CoinbaseL2UpdateBatcher
 class BinanceRecorder:
     def __init__(
         self, config, store, health, feature_engine=None,
-        code_version='', config_version='',
+        code_version='', config_version='', identity=None,
     ):
         self.config = config
         self.store = store
@@ -29,6 +29,7 @@ class BinanceRecorder:
         self.feature_engine = feature_engine
         self.code_version = code_version
         self.config_version = config_version
+        self.identity = dict(identity or {})
         self.session = None
         self.decision_outcome_tracker = None
         self.wavefront_evaluator = None
@@ -126,6 +127,7 @@ class BinanceRecorder:
             'schema_version': SCHEMA_VERSION,
             'code_version': self.code_version,
             'config_version': self.config_version,
+            **self.identity,
             'source': source,
             'symbol': self.config.symbol,
             'stream': stream,

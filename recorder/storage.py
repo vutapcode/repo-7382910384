@@ -18,8 +18,12 @@ import pyarrow.parquet as pq
 
 PARQUET_SCHEMA = pa.schema((
     ('schema_version', pa.int16()),
+    ('run_id', pa.string()),
+    ('runtime_commit', pa.string()),
     ('code_version', pa.string()),
     ('config_version', pa.string()),
+    ('runtime_mode', pa.string()),
+    ('source_branch', pa.string()),
     ('source', pa.string()),
     ('symbol', pa.string()),
     ('stream', pa.string()),
@@ -104,8 +108,12 @@ def _write_batch(root, batch):
 def _parquet_row(record):
     return {
         'schema_version': int(record.get('schema_version', 1)),
+        'run_id': str(record.get('run_id', '')),
+        'runtime_commit': str(record.get('runtime_commit', '')),
         'code_version': str(record.get('code_version', '')),
         'config_version': str(record.get('config_version', '')),
+        'runtime_mode': str(record.get('runtime_mode', '')),
+        'source_branch': str(record.get('source_branch', '')),
         'source': str(record.get('source', '')),
         'symbol': str(record.get('symbol', '')),
         'stream': str(record.get('stream', '')),

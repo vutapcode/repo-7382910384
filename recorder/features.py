@@ -1,7 +1,6 @@
 """Low-cost event-time one-second feature factory for offline research."""
 
 import time
-import uuid
 from collections import defaultdict, deque
 
 from recorder import SCHEMA_VERSION
@@ -18,12 +17,16 @@ def _f(value, default=0.0):
 class FeatureEngine:
     """Aggregate O(1) per event; order-book bands are sampled only once/second."""
 
-    def __init__(self, config, publish, health, code_version, config_version):
+    def __init__(
+        self, config, publish, health, code_version, config_version,
+        identity=None,
+    ):
         self.config = config
         self.publish = publish
         self.health = health
         self.code_version = code_version
         self.config_version = config_version
+        self.identity = dict(identity or {})
         self.buckets = {}
         self.book_by_second = {}
         self.max_second = None
@@ -38,7 +41,7 @@ class FeatureEngine:
         # A logical feature is keyed by (symbol, second).  The run id makes
         # overlapping recorder instances/restarts visible instead of silently
         # mixing two process-lifetime CVD series in the research dataset.
-        self.recorder_run_id = uuid.uuid4().hex
+        self.recorder_run_id = str(self.identity.get('run_id') or '')
 
     @staticmethod
     def _new_bucket(second):
@@ -385,6 +388,7 @@ class FeatureEngine:
                 'schema_version': SCHEMA_VERSION,
                 'code_version': self.code_version,
                 'config_version': self.config_version,
+                **self.identity,
                 'source': 'recorder',
                 'symbol': self.config.symbol,
                 'stream': 'feature_1s',

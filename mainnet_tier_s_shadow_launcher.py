@@ -610,11 +610,18 @@ def _entry_feasibility(price, frozen_cost_plan=None):
 
 def _append_event(event, payload):
     EVENT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    recorded_at = time.time()
     row = {
-        "ts": time.time(),
+        "ts": recorded_at,
         "runtime": VERSION,
         "event": event,
         **payload,
+        "run_id": getattr(app.state, "run_id", None),
+        "runtime_commit": getattr(app.state, "runtime_commit", None),
+        "code_version": getattr(app.state, "code_version", None),
+        "config_version": getattr(app.state, "strategy_config_version", None),
+        "runtime_mode": RUNTIME_MODE,
+        "source_branch": getattr(app.state, "source_branch", None),
     }
     with EVENT_PATH.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")

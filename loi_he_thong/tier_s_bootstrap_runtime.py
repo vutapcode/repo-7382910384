@@ -11,7 +11,9 @@ import tempfile
 import time
 
 from dotenv import load_dotenv
-from recorder.metadata import code_version, strategy_config_version
+from recorder.metadata import (
+    code_version, runtime_commit, source_branch, strategy_config_version,
+)
 from loi_he_thong.runtime_lock import DuplicateInstanceError, acquire_runtime_lock
 from loi_he_thong import mainnet_safety, strategy_profile, shadow_ledger_metrics
 from loi_he_thong import tier_s_bootstrap_modules as m
@@ -35,6 +37,8 @@ state.execution_allowed = bool(requested_execution and mainnet_safety.mainnet_ar
 state.runtime_project_root = str(CURRENT_DIR)
 state.code_version = code_version(CURRENT_DIR)
 state.strategy_config_version = strategy_config_version()
+state.runtime_commit = runtime_commit(CURRENT_DIR)
+state.source_branch = source_branch(CURRENT_DIR)
 state.strategy_profile =strategy_profile.current_profile()
 state.entry_economics_v6_replay_approved = os.getenv(
     "WSTRADE_ENTRY_ECONOMICS_V6_REPLAY_APPROVED", "false"
@@ -93,8 +97,11 @@ async def vong_lap_runtime_heartbeat():
             "updated_at_ms": int(now * 1000),
             "pid": os.getpid(),
             "run_id": getattr(state, "run_id", None),
+            "runtime_commit": getattr(state, "runtime_commit", None),
             "code_version": getattr(state, "code_version", None),
             "strategy_config_version": getattr(state, "strategy_config_version", None),
+            "config_version": getattr(state, "strategy_config_version", None),
+            "source_branch": getattr(state, "source_branch", None),
             "strategy_profile": getattr(state, "strategy_profile", None),
             "scorer_version": os.getenv("SMC_SCORER_VERSION", "IGNITION_CORE_V1"),
             "entry_lifecycle": os.getenv("SMC_ENTRY_LIFECYCLE", "PREDICT_PROBE_PROVE"),
@@ -104,6 +111,7 @@ async def vong_lap_runtime_heartbeat():
             "runtime_execution_mode": getattr(
                 state, "runtime_execution_mode", "OBSERVE_ONLY"
             ),
+            "runtime_mode": os.getenv("WSTRADE_MODE", "SHADOW").strip().upper(),
             "shadow_demo_enabled": bool(
                 getattr(state, "shadow_demo_enabled", False)
             ),

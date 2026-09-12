@@ -47,6 +47,10 @@ class HealthState:
         self.retention_last_run_ms = None
         self.code_version = None
         self.config_version = None
+        self.run_id = None
+        self.runtime_commit = None
+        self.runtime_mode = None
+        self.source_branch = None
         self.wavefront_shadow = None
         self.liquidity_response = None
         self.causal_world_model = None
@@ -165,8 +169,12 @@ class HealthState:
                 name: dict(value) for name, value in self.component_health.items()
             },
             'symbol': self.config.symbol,
+            'run_id': self.run_id,
+            'runtime_commit': self.runtime_commit,
             'code_version': self.code_version,
             'config_version': self.config_version,
+            'runtime_mode': self.runtime_mode,
+            'source_branch': self.source_branch,
             'wavefront_shadow': self.wavefront_shadow,
             'liquidity_response': self.liquidity_response,
             'causal_world_model': self.causal_world_model,

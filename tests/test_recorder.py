@@ -176,6 +176,33 @@ class CashRecorderTests(unittest.TestCase):
         self.assertEqual(rows[0]['payload']['batch_available_time_ms'], 1_105)
         self.assertTrue(rows[0]['payload']['ordered_lossless_changes'])
 
+    def test_every_collector_record_carries_immutable_runtime_identity(self):
+        rows = []
+
+        class Store:
+            @staticmethod
+            def publish(record):
+                rows.append(record)
+                return True
+
+        config = RecorderConfig()
+        identity = {
+            'run_id': 'recorder-run', 'runtime_commit': 'b' * 40,
+            'runtime_mode': 'SHADOW', 'source_branch': 'main',
+        }
+        recorder = BinanceRecorder(
+            config, Store(), HealthState(config), code_version='code',
+            config_version='config', identity=identity,
+        )
+        recorder.emit('recorder_test', {
+            'run_id': 'payload-cannot-override-record-identity',
+        }, event_time_ms=1, receive_time_ms=2)
+        self.assertEqual(rows[0]['run_id'], 'recorder-run')
+        self.assertEqual(rows[0]['runtime_commit'], 'b' * 40)
+        self.assertEqual(rows[0]['code_version'], 'code')
+        self.assertEqual(rows[0]['config_version'], 'config')
+        self.assertEqual(rows[0]['runtime_mode'], 'SHADOW')
+
     def test_closed_l2_bucket_checkpoint_cannot_see_next_bucket_update(self):
         observed = []
 

@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
@@ -61,3 +62,35 @@ def strategy_config_version():
         and not any(marker in name.upper() for marker in forbidden)
     }
     return _hash_bytes((orjson.dumps(values, option=orjson.OPT_SORT_KEYS),))
+
+
+def runtime_commit(project_root=None):
+    """Return the exact source commit running this process."""
+    override = os.getenv('WSTRADE_RUNTIME_COMMIT')
+    if override:
+        return override.strip()
+    root = Path(project_root or Path(__file__).resolve().parents[1])
+    try:
+        return subprocess.run(
+            ('git', 'rev-parse', 'HEAD'), cwd=root, check=True, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return 'UNKNOWN'
+
+
+def source_branch(project_root=None):
+    """Return the deployed source branch without confusing detached HEADs."""
+    override = os.getenv('WSTRADE_SOURCE_BRANCH')
+    if override:
+        return override.strip()
+    root = Path(project_root or Path(__file__).resolve().parents[1])
+    try:
+        branch = subprocess.run(
+            ('git', 'symbolic-ref', '--quiet', '--short', 'HEAD'), cwd=root,
+            check=True, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ).stdout.strip()
+        return branch or 'DETACHED'
+    except (OSError, subprocess.CalledProcessError):
+        return 'DETACHED'

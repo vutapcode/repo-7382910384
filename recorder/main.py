@@ -4,6 +4,8 @@ import asyncio
 import logging
 import signal
 import importlib
+import os
+import uuid
 from collections import OrderedDict, deque
 
 from loi_he_thong.runtime_lock import DuplicateInstanceError, acquire_runtime_lock
@@ -13,7 +15,9 @@ from recorder.decision_tap import DecisionTap
 from recorder.decision_outcomes import DecisionOutcomeTracker
 from recorder.health import HealthState, health_loop
 from recorder.features import FeatureEngine
-from recorder.metadata import code_version, config_version
+from recorder.metadata import (
+    code_version, config_version, runtime_commit, source_branch,
+)
 from recorder.liquidity_response import (
     COINBASE_VERSION, LiquidityResponseAnalyzer,
     SpotLiquidityResponseAnalyzer,
@@ -530,13 +534,23 @@ async def run():
     retention = await store.prune_once()
     code_id = code_version()
     config_id = config_version(config)
+    identity = {
+        'run_id': uuid.uuid4().hex,
+        'runtime_commit': runtime_commit(),
+        'runtime_mode': os.getenv('WSTRADE_MODE', 'SHADOW').strip().upper(),
+        'source_branch': source_branch(),
+    }
+    health.run_id = identity['run_id']
+    health.runtime_commit = identity['runtime_commit']
+    health.runtime_mode = identity['runtime_mode']
+    health.source_branch = identity['source_branch']
     health.code_version = code_id
     health.config_version = config_id
     feature_engine = FeatureEngine(
-        config, store.publish, health, code_id, config_id
+        config, store.publish, health, code_id, config_id, identity
     )
     collector = BinanceRecorder(
-        config, store, health, feature_engine, code_id, config_id
+        config, store, health, feature_engine, code_id, config_id, identity
     )
     research_emit = lambda stream, payload, event_time_ms=None: collector.emit(
         stream, payload, event_time_ms=event_time_ms,

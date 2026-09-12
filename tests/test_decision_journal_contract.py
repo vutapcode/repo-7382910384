@@ -1,10 +1,32 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 import mainnet_tier_s_shadow_launcher as launcher
 
 
 class DecisionJournalContractTests(unittest.TestCase):
+    def test_journal_event_carries_runtime_identity_and_rejects_override(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "events.jsonl"
+            with mock.patch.object(launcher, "EVENT_PATH", path), mock.patch.multiple(
+                launcher.app.state,
+                run_id="bot-run", runtime_commit="c" * 40,
+                code_version="code", strategy_config_version="config",
+                source_branch="main",
+            ):
+                launcher._append_event("ENTRY", {
+                    "run_id": "forged", "runtime_commit": "forged",
+                })
+            row = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(row["run_id"], "bot-run")
+        self.assertEqual(row["runtime_commit"], "c" * 40)
+        self.assertEqual(row["code_version"], "code")
+        self.assertEqual(row["config_version"], "config")
+        self.assertEqual(row["runtime_mode"], launcher.RUNTIME_MODE)
+
     def test_full_record_is_content_addressed_and_not_duplicated(self):
         record = {
             "cycle_id": "cycle-1",
