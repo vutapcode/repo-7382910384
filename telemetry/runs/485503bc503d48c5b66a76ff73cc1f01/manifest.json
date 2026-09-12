@@ -1,0 +1,31 @@
+{
+  "code_version": "62236b19ddbec2da",
+  "config_version": "2e587b1f637e347d",
+  "identity_status": "COMPLETE",
+  "publisher_commit": "d991ab2ce7ca56b0e6ecf04334372670ee1639b2",
+  "publisher_source_branch": "main",
+  "raw_archive": {
+    "configured": false,
+    "local_manifest_sealing": true,
+    "reason": "NO_OFFHOST_TARGET_CONFIGURED",
+    "reconstruction_guarantee": false,
+    "status": "OFFHOST_DISABLED"
+  },
+  "recorded_at": "2026-09-12T09:04:57.525350+00:00",
+  "recorded_at_ms": 1789203897525,
+  "recorder": {
+    "code_version": "62236b19ddbec2da",
+    "config_version": "ff186418c569ef50",
+    "run_id": "8768d862e8a1433ebbeee2bd29256e29",
+    "runtime_commit": "5589f7caddbe0e6891719ec33153927b9bd4c2e9",
+    "runtime_mode": "SHADOW",
+    "source_branch": "main"
+  },
+  "run_execution_mode": "SHADOW_DEMO",
+  "run_id": "485503bc503d48c5b66a76ff73cc1f01",
+  "runtime_commit": "5589f7caddbe0e6891719ec33153927b9bd4c2e9",
+  "runtime_mode": "SHADOW",
+  "schema_version": 1,
+  "source_branch": "main",
+  "source_repository_branch": "main"
+}

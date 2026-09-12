@@ -1,0 +1,31 @@
+{
+  "code_version": "ec963a16350ffb1b",
+  "config_version": "2e587b1f637e347d",
+  "identity_status": "INCOMPLETE_RUNTIME_HEARTBEAT",
+  "publisher_commit": "225d8e64493372f85c0ae5de272201af00ac0e16",
+  "publisher_source_branch": "main",
+  "raw_archive": {
+    "configured": false,
+    "local_manifest_sealing": true,
+    "reason": "NO_OFFHOST_TARGET_CONFIGURED",
+    "reconstruction_guarantee": false,
+    "status": "OFFHOST_DISABLED"
+  },
+  "recorded_at": "2026-09-12T08:54:03.144229+00:00",
+  "recorded_at_ms": 1789203243144,
+  "recorder": {
+    "code_version": "ec963a16350ffb1b",
+    "config_version": "ff186418c569ef50",
+    "run_id": null,
+    "runtime_commit": null,
+    "runtime_mode": null,
+    "source_branch": null
+  },
+  "run_execution_mode": "SHADOW_DEMO",
+  "run_id": "aaeb3043e0764e50a516cb634801d6b4",
+  "runtime_commit": null,
+  "runtime_mode": null,
+  "schema_version": 1,
+  "source_branch": null,
+  "source_repository_branch": "main"
+}

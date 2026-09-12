@@ -1,0 +1,20 @@
+{
+  "code_version": "37d0ecfd95f7f80f",
+  "config_version": "2e587b1f637e347d",
+  "directory_id": "8949cc6826fa48c190b1ce252d3d6707",
+  "dossier_schema": "FORENSIC_RUN_DOSSIER_V1",
+  "historical_manifest": true,
+  "identity_status": "COMPLETE",
+  "raw_archive": {
+    "configured": false,
+    "reason": "NO_OFFHOST_TARGET_CONFIGURED",
+    "reconstruction_guarantee": false,
+    "status": "OFFHOST_DISABLED"
+  },
+  "recorded_at": "2026-09-12T09:33:21.772051+00:00",
+  "run_id": "8949cc6826fa48c190b1ce252d3d6707",
+  "runtime_commit": "d991ab2ce7ca56b0e6ecf04334372670ee1639b2",
+  "runtime_mode": "SHADOW",
+  "schema_version": 2,
+  "source_branch": "main"
+}

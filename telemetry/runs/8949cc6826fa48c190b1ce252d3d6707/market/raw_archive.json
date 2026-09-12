@@ -1,0 +1,6 @@
+{
+  "configured": false,
+  "reason": "NO_OFFHOST_TARGET_CONFIGURED",
+  "reconstruction_guarantee": false,
+  "status": "OFFHOST_DISABLED"
+}

@@ -1,0 +1,13 @@
+{
+  "code_version": "ba54f04e68962e83",
+  "config_version": "ff186418c569ef50",
+  "configured": true,
+  "connection": true,
+  "identity_status": "COMPLETE",
+  "recorded_at": "2026-09-12T23:27:23.958251+00:00",
+  "role": "STRATEGY_AND_MARKET_TRUTH",
+  "run_id": "0703fa364b0b4a18b02e6db7233d84b9",
+  "runtime_commit": "7555cee78a82bd70a2f4e0331922137edceb0b10",
+  "runtime_mode": "SHADOW",
+  "source_branch": "main"
+}

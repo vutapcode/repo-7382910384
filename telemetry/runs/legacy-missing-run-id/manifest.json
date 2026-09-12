@@ -1,0 +1,21 @@
+{
+  "code_version": "ec963a16350ffb1b",
+  "config_version": "ff186418c569ef50",
+  "directory_id": "legacy-missing-run-id",
+  "dossier_schema": "FORENSIC_RUN_DOSSIER_V1",
+  "historical_manifest": true,
+  "identity_status": "LEGACY_MISSING_IDENTITY",
+  "raw_archive": {
+    "configured": false,
+    "local_manifest_sealing": true,
+    "reason": "NO_OFFHOST_TARGET_CONFIGURED",
+    "reconstruction_guarantee": false,
+    "status": "OFFHOST_DISABLED"
+  },
+  "recorded_at": "2026-09-12T13:39:29.375369+00:00",
+  "run_id": null,
+  "runtime_commit": null,
+  "runtime_mode": null,
+  "schema_version": 2,
+  "source_branch": null
+}
