@@ -22,7 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from loi_he_thong import journal_segments
+from recorder import offhost_durability, offhost_integration
 from recorder.metadata import runtime_commit, source_branch
+from recorder.offhost_spool import OffhostSpool
 
 
 JOURNAL = Path(os.getenv(
@@ -44,6 +46,14 @@ OPPORTUNITY_WAL = Path(os.getenv(
 FEATURE_WAL = Path(os.getenv(
     "WSTRADE_RESEARCH_FEATURE_WAL",
     "/home/ubuntu/smc2026_data/raw/wal/feature_1s",
+))
+RAW_WAL_ROOT = Path(os.getenv(
+    "WSTRADE_RAW_WAL_ROOT",
+    "/home/ubuntu/smc2026_data/raw/wal",
+))
+RAW_ARCHIVE_STATE = Path(os.getenv(
+    "WSTRADE_RAW_ARCHIVE_STATE",
+    "/home/ubuntu/.local/state/wstrade/raw_archive",
 ))
 BOT_HEALTH = Path(os.getenv(
     "WSTRADE_BOT_HEALTH_PATH",
@@ -86,6 +96,18 @@ SENSITIVE_KEYS = {
 MAX_PUBLIC_DEPTH = 12
 MAX_PUBLIC_LIST = 256
 MAX_PUBLIC_STRING = 4096
+RAW_EVIDENCE_STREAMS = (
+    "futures_trade_100ms", "book_ticker", "depth_checkpoint",
+    "mark_price", "open_interest", "liquidation",
+    "binance_spot_trade_100ms", "binance_spot_ticker",
+    "coinbase_spot_trade_100ms", "coinbase_spot_ticker",
+    "bybit_derivative_state", "bybit_liquidation",
+    "feature_1s", "bot_event",
+)
+EVIDENCE_SLICE_RADIUS_MS = 5_000
+_SEALED_RAW_CACHE = {}
+_PUBLIC_RAW_MANIFESTS = {}
+_OFFHOST_SPOOL = None
 
 
 def _run(*args, cwd=None, check=True):
@@ -138,6 +160,141 @@ def _write_jsonl(path, rows):
                 row, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
             ) + "\n")
     os.replace(tmp, path)
+
+
+def _raw_partition(ts):
+    moment = datetime.fromtimestamp(float(ts), timezone.utc)
+    return moment.strftime("%Y-%m-%d"), moment.strftime("%H")
+
+
+def _spool():
+    global _OFFHOST_SPOOL
+    if _OFFHOST_SPOOL is None:
+        _OFFHOST_SPOOL = OffhostSpool(RAW_ARCHIVE_STATE / "spool")
+    return _OFFHOST_SPOOL
+
+
+def _seal_raw_partition(path, now):
+    """Seal one closed WAL once; never read or hash the active hour."""
+    path = Path(path)
+    relative = path.relative_to(RAW_WAL_ROOT).as_posix()
+    cache_key = str(path)
+    if cache_key in _SEALED_RAW_CACHE:
+        public = _SEALED_RAW_CACHE[cache_key]
+        _PUBLIC_RAW_MANIFESTS[str(public.get("artifact_id"))] = dict(public)
+        return public
+    catalog_key = hashlib.sha256(relative.encode("utf-8")).hexdigest()
+    manifest_path = RAW_ARCHIVE_STATE / "manifests" / (catalog_key + ".json")
+    manifest = _load(manifest_path, {})
+    if manifest and (
+        manifest.get("durability_schema_version") != offhost_durability.VERSION
+        or manifest.get("source_relative_path") != "raw/wal/" + relative
+        or manifest.get("byte_size") != path.stat().st_size
+    ):
+        raise offhost_durability.DurabilityError(
+            "SEALED_RAW_MANIFEST_OR_ARTIFACT_CHANGED"
+        )
+    if not manifest:
+        manifest = offhost_durability.build_manifest(
+            path, RAW_WAL_ROOT.parents[1],
+            now=datetime.fromtimestamp(float(now), timezone.utc),
+        )
+        offhost_durability.atomic_write_manifest(manifest_path, manifest)
+    enqueue = offhost_integration.enqueue_closed_reference(
+        _spool(), path, manifest_path, manifest,
+    )
+    spool_record = _spool().records.get(str(manifest.get("artifact_id") or ""))
+    offhost_state = (
+        spool_record.state if spool_record is not None
+        else "DISABLED" if enqueue.get("reason") == "OFFHOST_DISABLED"
+        else "NOT_ENQUEUED"
+    )
+    public = {
+        key: manifest.get(key) for key in (
+            "artifact_id", "artifact_kind", "source_relative_path", "stream",
+            "utc_partition", "byte_size", "sha256", "row_count",
+            "first_availability_time_ms", "last_availability_time_ms",
+            "run_id", "runtime_commit", "code_version", "config_version",
+            "runtime_mode", "source_branch", "event_contract_version",
+        )
+    }
+    public.update({
+        "ts": (
+            float(manifest.get("last_availability_time_ms")) / 1000.0
+            if manifest.get("last_availability_time_ms") is not None
+            else float(now)
+        ),
+        "manifest_ref": "raw-manifest:" + str(manifest.get("artifact_id")),
+        "offhost_state": offhost_state,
+        "offhost_ref": (
+            "offhost-artifact:" + str(manifest.get("artifact_id"))
+            if offhost_state == "ACKNOWLEDGED" else None
+        ),
+        "local_artifact_retained": True,
+    })
+    _SEALED_RAW_CACHE[cache_key] = public
+    _PUBLIC_RAW_MANIFESTS[str(public.get("artifact_id"))] = dict(public)
+    return public
+
+
+def _raw_evidence_refs(ts, now):
+    try:
+        ts = float(ts)
+        decision_date, decision_hour = _raw_partition(ts)
+        current_date, current_hour = _raw_partition(now)
+    except (TypeError, ValueError, OSError):
+        return [], "DECISION_TIME_INVALID"
+    if (decision_date, decision_hour) >= (current_date, current_hour):
+        return [], "WAITING_FOR_CLOSED_PARTITION"
+    refs = []
+    missing = []
+    errors = []
+    for stream in RAW_EVIDENCE_STREAMS:
+        path = RAW_WAL_ROOT / stream / decision_date / (decision_hour + ".jsonl")
+        if not path.is_file():
+            missing.append(stream)
+            continue
+        try:
+            refs.append(dict(_seal_raw_partition(path, now)))
+        except (OSError, ValueError, offhost_durability.DurabilityError) as exc:
+            errors.append("%s:%s" % (stream, type(exc).__name__))
+    for ref in refs:
+        ref["slice_start_ms"] = int(ts * 1000) - EVIDENCE_SLICE_RADIUS_MS
+        ref["slice_end_ms"] = int(ts * 1000) + EVIDENCE_SLICE_RADIUS_MS
+    if errors:
+        return refs, "RAW_MANIFEST_ERROR:" + ",".join(errors[:8])
+    if not refs:
+        return [], "RAW_PARTITION_MISSING"
+    status = "LOCAL_SEALED"
+    states = {ref.get("offhost_state") for ref in refs}
+    if states == {"ACKNOWLEDGED"}:
+        status = "OFFHOST_ACKNOWLEDGED"
+    elif "DISABLED" in states:
+        status = "LOCAL_SEALED_OFFHOST_DISABLED"
+    else:
+        status = "LOCAL_SEALED_OFFHOST_PENDING"
+    if missing:
+        status += "_PARTIAL"
+    return refs, status
+
+
+def _attach_raw_evidence(evidence, now):
+    evidence = dict(evidence or {})
+    refs, status = _raw_evidence_refs(evidence.get("ts"), now)
+    evidence["raw_evidence_refs"] = [{
+        key: ref.get(key) for key in (
+            "artifact_id", "manifest_ref", "stream", "utc_partition",
+            "sha256", "slice_start_ms", "slice_end_ms", "offhost_state",
+            "offhost_ref",
+        )
+    } for ref in refs]
+    evidence["raw_archive_status"] = status
+    evidence["raw_archive_ref"] = (
+        refs[0].get("offhost_ref")
+        if len(refs) == 1 and refs[0].get("offhost_ref") else None
+    )
+    evidence["raw_evidence_ref_count"] = len(refs)
+    return evidence
 
 
 def _iso(ts, zone=timezone.utc):
@@ -867,10 +1024,18 @@ def _manifest(now):
             )
         },
         "raw_archive": {
-            "configured": False,
-            "status": "OFFHOST_DISABLED",
+            "configured": offhost_integration.enabled(),
+            "status": (
+                "ENQUEUE_ENABLED_BACKEND_ACK_REQUIRED"
+                if offhost_integration.enabled() else "OFFHOST_DISABLED"
+            ),
+            "local_manifest_sealing": True,
             "reconstruction_guarantee": False,
-            "reason": "NO_OFFHOST_TARGET_CONFIGURED",
+            "reason": (
+                "OFFHOST_ACK_MUST_BE_OBSERVED_PER_ARTIFACT"
+                if offhost_integration.enabled()
+                else "NO_OFFHOST_TARGET_CONFIGURED"
+            ),
         },
     }
     manifest["identity_status"] = (
@@ -1012,16 +1177,24 @@ def _historical_run_manifest(run_id, rows, now):
         "recorded_at": _iso(now),
         "historical_manifest": True,
         "raw_archive": {
-            "configured": False,
-            "status": "OFFHOST_DISABLED",
+            "configured": offhost_integration.enabled(),
+            "status": (
+                "ENQUEUE_ENABLED_BACKEND_ACK_REQUIRED"
+                if offhost_integration.enabled() else "OFFHOST_DISABLED"
+            ),
+            "local_manifest_sealing": True,
             "reconstruction_guarantee": False,
-            "reason": "NO_OFFHOST_TARGET_CONFIGURED",
+            "reason": (
+                "OFFHOST_ACK_MUST_BE_OBSERVED_PER_ARTIFACT"
+                if offhost_integration.enabled()
+                else "NO_OFFHOST_TARGET_CONFIGURED"
+            ),
         },
     }
 
 
 def _write_run_dossier(run_root, bundle, manifest, heartbeat, data_health,
-                       source_epochs, cutoff):
+                       source_epochs, cutoff, now):
     _write_json(run_root / "manifest.json", manifest)
     _merge_run_file(
         run_root / "decisions" / "events.jsonl", bundle["decisions"],
@@ -1035,9 +1208,32 @@ def _write_run_dossier(run_root, bundle, manifest, heartbeat, data_health,
         run_root / "decisions" / "blockers.jsonl", bundle["blockers"],
         lambda row: row.get("blocker_event_id"), cutoff,
     )
+    evidence_path = run_root / "market" / "evidence_slices.jsonl"
+    evidence_rows = [
+        _attach_raw_evidence(row, now)
+        for row in _previous_rows(evidence_path) + bundle["evidence"]
+    ]
+    _write_jsonl(
+        evidence_path,
+        _merge_unique(
+            [], evidence_rows, lambda row: row.get("evidence_slice_id"),
+            cutoff, 2000,
+        ),
+    )
+    referenced_artifacts = {
+        ref.get("artifact_id")
+        for row in evidence_rows
+        for ref in row.get("raw_evidence_refs") or ()
+        if ref.get("artifact_id")
+    }
     _merge_run_file(
-        run_root / "market" / "evidence_slices.jsonl", bundle["evidence"],
-        lambda row: row.get("evidence_slice_id"), cutoff,
+        run_root / "market" / "raw_manifests.jsonl",
+        [
+            raw_manifest
+            for artifact_id, raw_manifest in _PUBLIC_RAW_MANIFESTS.items()
+            if artifact_id in referenced_artifacts
+        ],
+        lambda row: row.get("artifact_id"), cutoff,
     )
     _merge_run_file(
         run_root / "execution" / "orders.jsonl", bundle["orders"],
@@ -1203,6 +1399,14 @@ def _publish(no_push=False):
         bundle["source_rows"].append(opportunity)
         bundle["opportunities"].append(opportunity)
     _run_bundle(run_bundles, manifest.get("run_id"))
+    # Revisit retained dossiers after the hour closes so an event initially
+    # published as WAITING_FOR_CLOSED_PARTITION receives immutable raw hashes
+    # without replaying or duplicating the decision itself.
+    runs_root = target / "runs"
+    if runs_root.exists():
+        for run_dir in runs_root.iterdir():
+            if run_dir.is_dir():
+                _run_bundle(run_bundles, run_dir.name)
 
     heartbeat_rows = _merge_unique(
         _previous_rows(target / "runtime" / "heartbeat.jsonl"), [heartbeat],
@@ -1232,12 +1436,21 @@ def _publish(no_push=False):
 
     _write_json(target / "manifest.json", manifest)
     for run_id, bundle in run_bundles.items():
-        run_manifest = (
-            manifest if run_id == current_run_id
-            else _historical_run_manifest(
+        previous_manifest = _load(
+            target / "runs" / run_id / "manifest.json", {},
+        )
+        run_manifest = manifest if run_id == current_run_id else (
+            previous_manifest or _historical_run_manifest(
                 run_id, bundle["source_rows"], now,
             )
         )
+        if "raw_archive" not in run_manifest:
+            run_manifest = {
+                **run_manifest,
+                "raw_archive": _historical_run_manifest(
+                    run_id, bundle["source_rows"], now,
+                )["raw_archive"],
+            }
         current = run_id == current_run_id
         _write_run_dossier(
             target / "runs" / run_id, bundle, run_manifest,
@@ -1245,6 +1458,7 @@ def _publish(no_push=False):
             data_health if current else None,
             source_epochs if current else None,
             cutoff,
+            now,
         )
     _write_jsonl(target / "decisions" / "timeline.jsonl", timeline)
     _write_jsonl(target / "decisions" / "candidates.jsonl", candidates)

@@ -112,6 +112,9 @@ class ResearchPublisherTests(unittest.TestCase):
             self.assertIn(
                 "telemetry/runs/run-1/market/raw_archive.json", tree,
             )
+            self.assertIn(
+                "telemetry/runs/run-1/market/raw_manifests.jsonl", tree,
+            )
             self.assertNotIn("main.py", tree)
 
     def test_runtime_summary_separates_research_from_live_like(self):
@@ -263,6 +266,73 @@ class ResearchPublisherTests(unittest.TestCase):
         self.assertEqual(
             transition["state_transition"]["after"], "TERMINATED",
         )
+
+    def test_closed_raw_partition_gets_hash_manifest_and_bounded_slice(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            wal_root = root / "raw" / "wal"
+            wal = wal_root / "open_interest" / "1970-01-01" / "01.jsonl"
+            wal.parent.mkdir(parents=True)
+            wal.write_text(json.dumps({
+                "schema_version": 3, "run_id": "rec-1",
+                "runtime_commit": "a" * 40, "code_version": "code",
+                "config_version": "cfg", "runtime_mode": "SHADOW",
+                "source_branch": "main", "event_contract_version": "evt",
+                "available_time_ms": 3_600_100, "payload": {},
+            }) + "\n", encoding="utf-8")
+            originals = {
+                "RAW_WAL_ROOT": publisher.RAW_WAL_ROOT,
+                "RAW_ARCHIVE_STATE": publisher.RAW_ARCHIVE_STATE,
+                "RAW_EVIDENCE_STREAMS": publisher.RAW_EVIDENCE_STREAMS,
+                "_OFFHOST_SPOOL": publisher._OFFHOST_SPOOL,
+            }
+            old_cache = dict(publisher._SEALED_RAW_CACHE)
+            old_manifests = dict(publisher._PUBLIC_RAW_MANIFESTS)
+            try:
+                publisher.RAW_WAL_ROOT = wal_root
+                publisher.RAW_ARCHIVE_STATE = root / "archive"
+                publisher.RAW_EVIDENCE_STREAMS = ("open_interest",)
+                publisher._OFFHOST_SPOOL = None
+                publisher._SEALED_RAW_CACHE.clear()
+                publisher._PUBLIC_RAW_MANIFESTS.clear()
+                evidence = publisher._attach_raw_evidence(
+                    {"ts": 3_600.5, "evidence_slice_id": "e:1"},
+                    now=10_800.0,
+                )
+            finally:
+                for name, value in originals.items():
+                    setattr(publisher, name, value)
+                publisher._SEALED_RAW_CACHE.clear()
+                publisher._SEALED_RAW_CACHE.update(old_cache)
+                sealed = dict(publisher._PUBLIC_RAW_MANIFESTS)
+                publisher._PUBLIC_RAW_MANIFESTS.clear()
+                publisher._PUBLIC_RAW_MANIFESTS.update(old_manifests)
+        self.assertEqual(
+            evidence["raw_archive_status"],
+            "LOCAL_SEALED_OFFHOST_DISABLED",
+        )
+        self.assertEqual(evidence["raw_evidence_ref_count"], 1)
+        ref = evidence["raw_evidence_refs"][0]
+        self.assertEqual(ref["stream"], "open_interest")
+        self.assertEqual(ref["slice_start_ms"], 3_595_500)
+        self.assertEqual(ref["slice_end_ms"], 3_605_500)
+        self.assertEqual(len(ref["sha256"]), 64)
+        self.assertTrue(ref["manifest_ref"].startswith("raw-manifest:"))
+        self.assertIsNone(ref["offhost_ref"])
+        manifest = sealed[ref["artifact_id"]]
+        self.assertEqual(manifest["runtime_commit"], "a" * 40)
+        self.assertEqual(manifest["sha256"], ref["sha256"])
+
+    def test_active_raw_partition_is_never_hashed(self):
+        evidence = publisher._attach_raw_evidence(
+            {"ts": 3_600.5, "evidence_slice_id": "e:1"},
+            now=3_650.0,
+        )
+        self.assertEqual(
+            evidence["raw_archive_status"],
+            "WAITING_FOR_CLOSED_PARTITION",
+        )
+        self.assertEqual(evidence["raw_evidence_refs"], [])
 
     def test_exit_export_keeps_guardian_recovery_path_without_unknown_fields(self):
         compact = publisher._compact_event({
