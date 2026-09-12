@@ -223,6 +223,24 @@ class ResearchPublisherTests(unittest.TestCase):
         self.assertNotIn("api_secret", rows[0])
         self.assertNotIn("must-not-leak", str(rows[0]))
 
+    def test_nested_legacy_closed_trade_keeps_explicit_missing_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "trades.jsonl"
+            source.write_text(json.dumps({
+                "trade_id": "c1", "entry": {"ts": 10.0, "side": "LONG"},
+                "exit": {"ts": 20.0, "net_pnl_bps": -1.0},
+            }) + "\n", encoding="utf-8")
+            old = publisher.TRADE_AUDIT
+            publisher.TRADE_AUDIT = source
+            try:
+                rows = publisher._closed_trade_history(0.0)
+            finally:
+                publisher.TRADE_AUDIT = old
+        self.assertEqual(rows[0]["identity_status"], "LEGACY_MISSING_IDENTITY")
+        for name in publisher.IDENTITY_FIELDS:
+            self.assertIn(name, rows[0])
+            self.assertIsNone(rows[0][name])
+
     def test_checkpoint_boundary_does_not_skip_first_new_event(self):
         with tempfile.TemporaryDirectory() as folder:
             journal = Path(folder) / "events.jsonl"

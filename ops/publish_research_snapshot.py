@@ -343,6 +343,8 @@ def _closed_trade_history(cutoff):
                     if source.get(key) is not None
                 }
                 row.update(_identity(source))
+            for name in IDENTITY_FIELDS:
+                row.setdefault(name, None)
             row["ts"] = ts
             row["vn"] = _iso(ts, VN)
             rows.append(row)
