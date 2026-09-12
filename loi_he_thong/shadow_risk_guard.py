@@ -116,13 +116,18 @@ def assess(p, px, guardian=None, market_state=None, now=None):
 
 
 def guardian_ok(x):
-    v = (x or {}).get("votes") or {}
-
-    def adverse(k):
-        return (v.get(k) or {}).get("status") == "ADVERSE"
-
-    return adverse("S1_price_acceptance") and (
-        adverse("S2_executed_flow") or adverse("S3_price_x_oi")
+    """Verify Guardian routed the canonical Market Truth terminal action."""
+    row = dict((x or {}).get("canonical_thesis_action") or {})
+    observation = dict((x or {}).get("shared_thesis_observation") or {})
+    return bool(
+        str((x or {}).get("decision") or "").upper() == "EXIT"
+        and row.get("version") == "GUARDIAN_CANONICAL_THESIS_ACTION_V1"
+        and row.get("owner") == "GUARDIAN_POSITION_POLICY"
+        and row.get("authority") is True
+        and row.get("canonical_market_truth_exit_authorized") is True
+        and str(observation.get("status") or "").upper()
+        in {"CONTROL_TRANSFER", "FALSIFY"}
+        and observation.get("old_thesis_falsified") is True
     )
 
 

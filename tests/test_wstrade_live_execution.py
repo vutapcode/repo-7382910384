@@ -307,7 +307,7 @@ class LiveExecutionTests(unittest.TestCase):
         self.assertEqual(thesis['bias_thesis']['hysteresis'], 'STABLE')
         self.assertEqual(
             thesis['market_thesis']['version'],
-            'MARKET_THESIS_V3_AUTHORITY_SEPARATED',
+            'MARKET_THESIS_V4_CAUSAL_CONTROL_OWNERSHIP',
         )
         self.assertEqual(thesis['market_thesis']['side'], 'LONG')
         self.assertTrue(thesis['market_thesis']['pnl_independent'])

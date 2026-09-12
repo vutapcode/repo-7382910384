@@ -19,6 +19,7 @@ import time
 from loi_he_thong import authority_contracts
 from loi_he_thong import canonical_opportunity
 from loi_he_thong import causal_threshold_registry
+from loi_he_thong import cross_cash_causal_wave
 from loi_he_thong import decision_boundary_evidence
 from loi_he_thong import entry_action_policy
 from loi_he_thong import entry_gate_outcome
@@ -26,6 +27,7 @@ from loi_he_thong import entry_lifecycle
 from loi_he_thong import execution_causal_revalidation
 from loi_he_thong import forensic_telemetry
 from loi_he_thong import host_cpu_governor
+from loi_he_thong import ignition_signals
 from loi_he_thong import mainnet_safety
 from loi_he_thong import market_thesis
 from loi_he_thong import microstructure_regime
@@ -2249,6 +2251,34 @@ async def _bias_loop():
         await asyncio.sleep(_shadow_bias_delay(app.state))
 
 
+def _refresh_post_entry_market_evidence(state, pos, now):
+    """Keep causal cash-wave evidence alive while Entry evaluation is paused."""
+    now = float(now)
+    last = float(
+        getattr(state, "post_entry_market_evidence_updated_at", 0.0) or 0.0
+    )
+    if last > 0.0 and now - last < ENTRY_POLL:
+        return dict(
+            getattr(state, "cross_cash_causal_wave_shadow", {}) or {}
+        )
+    histories = ignition_signals.snapshot(state, int(now * 1000.0))
+    snapshot = cross_cash_causal_wave.observe(
+        state, histories, int(now * 1000.0),
+    )
+    state.post_entry_market_evidence_updated_at = now
+    for wave_event, wave_payload in tuple(
+        getattr(state, "_cross_cash_causal_wave_events", ()) or ()
+    ):
+        _append_event(wave_event, {
+            "schema_version": "CROSS_CASH_CAUSAL_WAVE_RECORD_V1",
+            "cycle_id": getattr(pos, "position_cycle_id", None),
+            "observation_scope": "POST_ENTRY_MARKET_TRUTH_EVIDENCE",
+            **dict(wave_payload or {}),
+        })
+    state._cross_cash_causal_wave_events = []
+    return snapshot
+
+
 async def _entry_loop():
     last_revision = None
     last_eval_at = 0.0
@@ -2873,6 +2903,7 @@ async def _guardian_loop():
                 s.guardian_s_decision = "HOLD_STALE_SPOT"
                 await asyncio.sleep(GUARD_POLL)
                 continue
+            _refresh_post_entry_market_evidence(s, pos, now)
             result = guardian_s.update_state(s, pos, now=now)
             if result.get("decision") == "EXIT":
                 await _close_position(pos, result, now)

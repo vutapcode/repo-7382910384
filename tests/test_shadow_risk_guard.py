@@ -73,6 +73,28 @@ class ShadowRiskGuardTests(unittest.TestCase):
         self.assertEqual(result["decision"], "EXIT")
         self.assertEqual(result["reason"], "HARD_SL")
 
+    def test_legacy_votes_cannot_authorize_guardian_exit(self):
+        legacy = guardian(
+            "ADVERSE", "ADVERSE", "ADVERSE", decision="EXIT",
+        )
+        self.assertFalse(risk.guardian_ok(legacy))
+
+    def test_canonical_terminal_contract_authorizes_guardian_exit(self):
+        canonical = guardian(
+            "NEUTRAL", "NEUTRAL", "NEUTRAL", decision="EXIT",
+            canonical_thesis_action={
+                "version": "GUARDIAN_CANONICAL_THESIS_ACTION_V1",
+                "owner": "GUARDIAN_POSITION_POLICY",
+                "authority": True,
+                "canonical_market_truth_exit_authorized": True,
+            },
+            shared_thesis_observation={
+                "status": "CONTROL_TRANSFER",
+                "old_thesis_falsified": True,
+            },
+        )
+        self.assertTrue(risk.guardian_ok(canonical))
+
     def test_support_widens_runner_but_floor_never_moves_back(self):
         p = self.position()
         supported = guardian("SUPPORTIVE", "SUPPORTIVE", "SUPPORTIVE")

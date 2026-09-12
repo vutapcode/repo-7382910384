@@ -1,12 +1,46 @@
 import copy
+import hashlib
 import importlib
+import json
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from loi_he_thong import authority_contracts, market_thesis
 
 
 guardian = importlib.import_module("3_thuc_thi.ve_si_lenh.guardian_s_tier")
+
+
+def _control_handoff(side):
+    segments = [{
+        "state": "CONVERTING", "side": side,
+        "price": {"vote": side}, "flow": {"vote": side},
+    } for _ in range(2)]
+    sealed = {
+        "version": "CASH_CONTROL_ACQUISITION_HANDOFF_V1",
+        "side": side,
+        "first_converting_segment_onset_ms": 9_000,
+        "ownership_completed_ms": 9_500,
+        "venue_epochs": {"spot": 2, "coinbase": 3},
+        "directional_cash_roots": [
+            "BINANCE_SPOT_CASH", "COINBASE_USD_CASH",
+        ],
+        "temporal_persistence_segments": 2,
+        "segment_evidence": segments,
+        "bias_version": "BIAS_TEST_V1",
+    }
+    digest = hashlib.sha256(json.dumps(
+        sealed, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode()).hexdigest()
+    return {
+        **sealed,
+        "causal_wave_id": "cash-acquisition:" + digest[:20],
+        "handoff_hash": digest,
+        "sealed_payload": sealed,
+        "status": "SEALED", "sealed": True,
+        "authority": False, "entry_authority": False,
+    }
 
 
 def _entry_result():
@@ -39,9 +73,11 @@ def _entry_result():
 
 def _observation(*, spot=-2.0, coinbase=-2.0, futures=-2.0,
                  spot_flow=-0.4, coinbase_flow=-0.4,
-                 futures_flow=-0.4, oi="NEUTRAL", source="FRESH"):
+                 futures_flow=-0.4, oi="NEUTRAL", source="FRESH",
+                 cash_wave_side=None, wave_age_ms=0,
+                 control_handoff_side=None):
     moves = {"spot": spot, "coinbase": coinbase, "futures": futures}
-    return {
+    result = {
         "version": "GUARDIAN_CANONICAL_OBSERVATION_V1",
         "causal_episode_id": "episode-shared-1",
         "position_side": "LONG",
@@ -61,18 +97,88 @@ def _observation(*, spot=-2.0, coinbase=-2.0, futures=-2.0,
         },
         "oi": {"status": oi, "fresh": True},
         "gap_or_epoch_invalid": False,
+        "observed_at_ms": 10_000,
     }
+    if cash_wave_side:
+        result["cash_control_wave"] = {
+            "version": "CROSS_CASH_CAUSAL_WAVE_V1",
+            "causal_wave_id": "cash-wave-opposing-1",
+            "side": cash_wave_side,
+            "state": "CONTROL_PERSISTING",
+            "observed_at_ms": 10_000 - wave_age_ms,
+            "cash_roots": {
+                name: {
+                    "side": cash_wave_side,
+                    "state": "FLOW_LED_CONVERSION",
+                    "conversion_held": True,
+                    "root_evidence_id": "root-" + name,
+                    "epoch": index,
+                }
+                for index, name in enumerate(
+                    ("binance_spot", "coinbase_spot"), start=1,
+                )
+            },
+        }
+    if control_handoff_side:
+        result["control_ownership"] = {
+            "current_bias_side": control_handoff_side,
+            "acquisition_handoff": _control_handoff(control_handoff_side),
+        }
+    return result
 
 
 class SharedThesisObservationTests(unittest.TestCase):
     def setUp(self):
         self.truth = market_thesis.build(_entry_result())
 
-    def test_dual_cash_opposite_control_is_control_transfer(self):
+    def test_dual_cash_snapshot_is_divergence_without_wave_identity(self):
         result = market_thesis.observe(self.truth, _observation())
+        self.assertEqual(result["status"], "DIVERGENCE")
+        self.assertFalse(result["old_thesis_falsified"])
+        self.assertTrue(
+            result["evidence"]["snapshot_persistent_dual_adverse"]
+        )
+
+    def test_opposing_micro_wave_without_control_owner_is_divergence(self):
+        result = market_thesis.observe(
+            self.truth, _observation(cash_wave_side="SHORT"),
+        )
+        self.assertEqual(result["status"], "DIVERGENCE")
+        self.assertFalse(result["old_thesis_falsified"])
+
+    def test_owned_distinct_opposing_cash_wave_is_control_transfer(self):
+        result = market_thesis.observe(
+            self.truth, _observation(
+                cash_wave_side="SHORT", control_handoff_side="SHORT",
+            ),
+        )
         self.assertEqual(result["status"], "CONTROL_TRANSFER")
         self.assertTrue(result["old_thesis_falsified"])
         self.assertIn("OPPOSITE_DUAL_CASH_CONTROL", result["observed_falsifiers"])
+
+    def test_stale_opposing_wave_cannot_transfer_control(self):
+        result = market_thesis.observe(
+            self.truth,
+            _observation(
+                cash_wave_side="SHORT", wave_age_ms=5_001,
+                control_handoff_side="SHORT",
+            ),
+        )
+        self.assertEqual(result["status"], "DIVERGENCE")
+        self.assertFalse(result["old_thesis_falsified"])
+
+    def test_unsealed_or_mutated_control_owner_cannot_transfer(self):
+        row = _observation(
+            cash_wave_side="SHORT", control_handoff_side="SHORT",
+        )
+        row["control_ownership"]["acquisition_handoff"][
+            "handoff_hash"
+        ] = "forged"
+        result = market_thesis.observe(self.truth, row)
+        self.assertEqual(result["status"], "DIVERGENCE")
+        self.assertFalse(
+            result["evidence"]["control_ownership_handoff_valid"],
+        )
 
     def test_single_cash_pullback_is_divergence_not_falsification(self):
         result = market_thesis.observe(self.truth, _observation(
@@ -145,6 +251,54 @@ class SharedThesisObservationTests(unittest.TestCase):
             self.assertFalse(result["authority"])
             self.assertFalse(result["weighted_ensemble"])
             self.assertTrue(result["safety_bypass_separate"])
+
+    def test_canonical_mapping_is_the_only_guardian_exit_authority(self):
+        terminal = guardian._canonical_thesis_action({
+            "status": "CONTROL_TRANSFER", "old_thesis_falsified": True,
+        })
+        divergence = guardian._canonical_thesis_action({
+            "status": "DIVERGENCE", "old_thesis_falsified": False,
+        })
+        self.assertEqual(terminal["decision"], "EXIT")
+        self.assertTrue(terminal["authority"])
+        self.assertTrue(terminal["canonical_market_truth_exit_authorized"])
+        self.assertEqual(divergence["decision"], "DETERIORATING")
+        self.assertFalse(divergence["canonical_market_truth_exit_authorized"])
+
+    def test_guardian_runtime_exits_only_on_canonical_terminal_truth(self):
+        state = SimpleNamespace(
+            best_bid=99.99, best_ask=100.01, coinbase_price=100.0,
+            thoi_gian_coinbase_ticker_cuoi=100.0,
+            open_interest=0.0, danh_sach_khop_lenh_futures=[],
+        )
+        position = SimpleNamespace(
+            position_cycle_id="position-canonical", side="LONG",
+            opened_at=99.0, causal_episode_id="episode-shared-1",
+            best_r=0.0, floor_r=None,
+        )
+        neutral = guardian._vote("NEUTRAL", 0.0, "TEST_NEUTRAL")
+        terminal_event = _observation(
+            cash_wave_side="SHORT", control_handoff_side="SHORT",
+        )
+        with patch.object(
+            guardian, "_s1", return_value=neutral,
+        ), patch.object(
+            guardian, "_s2", return_value=neutral,
+        ), patch.object(
+            guardian, "_s3", return_value=neutral,
+        ), patch.object(
+            guardian, "_canonical_thesis_observation",
+            return_value=(self.truth, terminal_event),
+        ):
+            result = guardian.assess(state, position, now=100.0)
+
+        self.assertEqual(result["decision"], "EXIT")
+        self.assertEqual(result["reason"], "CANONICAL_MARKET_CONTROL_TRANSFER")
+        self.assertTrue(
+            result["canonical_thesis_action"][
+                "canonical_market_truth_exit_authorized"
+            ]
+        )
 
     def test_adverse_wave_ledger_requires_distinct_causal_evidence(self):
         position = SimpleNamespace(
@@ -256,6 +410,30 @@ class SharedThesisObservationTests(unittest.TestCase):
         self.assertEqual(truth["contract_hash"], self.truth["contract_hash"])
         self.assertEqual(event["causal_episode_id"], "episode-shared-1")
         self.assertEqual(observed["status"], "SUPPORT")
+
+        state.cross_cash_causal_wave_shadow = {
+            "version": "CROSS_CASH_CAUSAL_WAVE_V1",
+            "observed_at_ms": 100_000,
+            "active_wave": {
+                "causal_wave_id": "cash-wave-short",
+                "side": "SHORT", "state": "CONTROL_PERSISTING",
+                "cash_roots": {
+                    name: {
+                        "side": "SHORT", "state": "FLOW_LED_CONVERSION",
+                        "conversion_held": True,
+                        "root_evidence_id": "root-" + name,
+                    }
+                    for name in ("binance_spot", "coinbase_spot")
+                },
+            },
+        }
+        state.bias_state = "SHORT"
+        state.bias_acquisition_handoff = _control_handoff("SHORT")
+        _, transfer_event = guardian._canonical_thesis_observation(
+            state, position, 100.0, s1, s2, s3,
+        )
+        transferred = market_thesis.observe(self.truth, transfer_event)
+        self.assertEqual(transferred["status"], "CONTROL_TRANSFER")
 
 
 if __name__ == "__main__":

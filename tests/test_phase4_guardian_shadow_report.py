@@ -75,7 +75,7 @@ class Phase4GuardianReportTests(unittest.TestCase):
                     "shared_thesis_observation": observed,
                     "shared_thesis_shadow": {
                         "version": "GUARDIAN_SHARED_THESIS_SHADOW_V1",
-                        "decision": "EXIT", "authority": False,
+                        "decision": "DETERIORATING", "authority": False,
                     },
                 },
             },
@@ -87,8 +87,10 @@ class Phase4GuardianReportTests(unittest.TestCase):
         self.assertEqual(
             first["determinism"]["recorded_observation_mismatches"], 0,
         )
-        self.assertEqual(first["status_counts"], {"CONTROL_TRANSFER": 1})
-        self.assertEqual(first["decision_pairs"], {"HOLD->EXIT": 1})
+        self.assertEqual(first["status_counts"], {"DIVERGENCE": 1})
+        self.assertEqual(
+            first["decision_pairs"], {"HOLD->DETERIORATING": 1},
+        )
         self.assertEqual(first["cutover_decision"], "KEEP_LEGACY_GUARDIAN")
 
 

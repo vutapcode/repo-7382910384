@@ -4,7 +4,7 @@ import time
 
 from loi_he_thong import authority_contracts, liquidation_context, market_thesis
 
-VERSION="GUARDIAN_S_TIER_V14_SHARED_THESIS_SHADOW"
+VERSION="GUARDIAN_S_TIER_V15_CANONICAL_MARKET_TRUTH"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -400,6 +400,7 @@ def _time_to_edge(pos, now, prices, s1, s2, s3, thesis):
     }
 
 def _entry_thesis_break(state,pos,now,s1,s2,s3):
+    """Retired local-break counterfactual; never canonical Market Truth."""
     thesis=dict(getattr(pos,"entry_causal_thesis",{}) or {})
     market_contract=dict(thesis.get("market_thesis") or {})
     primary=str(thesis.get("primary_cash_anchor") or "").lower()
@@ -427,11 +428,17 @@ def _entry_thesis_break(state,pos,now,s1,s2,s3):
         # thesis when the selected cash anchor has no adverse executed flow.
         cause=bool(selected&flow_adverse)
         broken=bool(anchor_price and cause)
-        reason="ENTRY_CASH_THESIS_BROKEN" if broken else "ENTRY_CASH_THESIS_HOLDS"
+        reason=(
+            "LEGACY_LOCAL_CASH_BREAK_SIGNAL"
+            if broken else "LEGACY_LOCAL_CASH_HOLD_SIGNAL"
+        )
     if reason=="GENERIC_CAUSAL_FALLBACK":
         thesis_status="UNKNOWN"
     else:
-        thesis_status="FALSIFIED" if broken else "VALID"
+        thesis_status=(
+            "NONCANONICAL_BREAK_SIGNAL"
+            if broken else "NONCANONICAL_HOLD_SIGNAL"
+        )
     observed_falsifiers=[]
     if broken:
         observed_falsifiers.append("PRIMARY_CASH_STOPS_OR_REVERSES_CONVERSION")
@@ -451,6 +458,9 @@ def _entry_thesis_break(state,pos,now,s1,s2,s3):
         "mechanism":market_contract.get("mechanism"),
         "observed_falsifiers":observed_falsifiers,
         "pnl_fields_used_for_thesis":False,
+        "owner":"GUARDIAN_LEGACY_DIAGNOSTIC",
+        "authority":False,
+        "can_terminalize":False,
     }
 
 
@@ -538,6 +548,23 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
             epoch_changed = True
 
     oi_metrics = dict(s3.get("metrics") or {})
+    cash_wave_snapshot = dict(
+        getattr(state, "cross_cash_causal_wave_shadow", {}) or {}
+    )
+    active_cash_wave = dict(cash_wave_snapshot.get("active_wave") or {})
+    position_wave_id = str(
+        getattr(pos, "market_wave_id", "")
+        or getattr(pos, "causal_episode_id", "")
+        or episode_id
+        or ""
+    )
+    wave_tombstones = dict(
+        getattr(state, "market_truth_wave_tombstones", {}) or {}
+    )
+    position_falsifier = wave_tombstones.get(position_wave_id)
+    acquisition_handoff = dict(
+        getattr(state, "bias_acquisition_handoff", {}) or {}
+    )
     return truth, {
         "version": "GUARDIAN_CANONICAL_OBSERVATION_V1",
         "causal_episode_id": episode_id or None,
@@ -556,6 +583,26 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
             "fresh": bool(oi_fresh),
             "change_pct": oi_metrics.get("oi_pct") if oi_fresh else None,
         },
+        "observed_at_ms": int(float(now) * 1000.0),
+        "cash_control_wave": {
+            "version": cash_wave_snapshot.get("version"),
+            "causal_wave_id": active_cash_wave.get("causal_wave_id"),
+            "side": active_cash_wave.get("side"),
+            "state": active_cash_wave.get("state"),
+            "observed_at_ms": cash_wave_snapshot.get("observed_at_ms"),
+            "cash_roots": dict(active_cash_wave.get("cash_roots") or {}),
+        },
+        "position_wave": {
+            "causal_wave_id": position_wave_id or None,
+            "status": "FALSIFIED" if position_falsifier else "UNKNOWN",
+            "falsifier": position_falsifier,
+        },
+        "control_ownership": {
+            "current_bias_side": str(
+                getattr(state, "bias_state", "ABSTAIN") or "ABSTAIN"
+            ).upper(),
+            "acquisition_handoff": acquisition_handoff,
+        },
         "gap_or_epoch_invalid": bool(
             getattr(state, "shadow_data_gap_active", False)
             or getattr(pos, "data_gap_seen", False)
@@ -565,29 +612,50 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
     }
 
 
-def _shared_thesis_shadow_action(observation):
-    """Non-authoritative migration decision from the shared truth taxonomy."""
+def _canonical_thesis_action(observation):
+    """Map the sole canonical truth contract into position policy."""
     status = str((observation or {}).get("status") or "UNKNOWN").upper()
     if status in {"CONTROL_TRANSFER", "FALSIFY"}:
         decision = "EXIT"
-        reason = "SHARED_ENTRY_THESIS_FALSIFIED"
+        reason = (
+            "CANONICAL_MARKET_CONTROL_TRANSFER"
+            if status == "CONTROL_TRANSFER"
+            else "CANONICAL_MARKET_THESIS_FALSIFIED"
+        )
     elif status == "DIVERGENCE":
         decision = "DETERIORATING"
-        reason = "SHARED_ENTRY_THESIS_DIVERGING"
+        reason = "CANONICAL_MARKET_THESIS_DIVERGING"
     elif status == "SUPPORT":
         decision = "HOLD"
-        reason = "SHARED_ENTRY_THESIS_SUPPORTED"
+        reason = "CANONICAL_MARKET_THESIS_SUPPORTED"
     else:
         decision = "HOLD"
-        reason = "SHARED_ENTRY_THESIS_UNKNOWN_SAFETY_SEPARATE"
+        reason = "CANONICAL_MARKET_THESIS_UNKNOWN_SAFETY_SEPARATE"
     return {
-        "version": "GUARDIAN_SHARED_THESIS_SHADOW_V1",
-        "authority": False,
+        "version": "GUARDIAN_CANONICAL_THESIS_ACTION_V1",
+        "owner": "GUARDIAN_POSITION_POLICY",
+        "authority": True,
         "decision": decision,
         "reason": reason,
         "thesis_status": status,
+        "market_truth_owner": "MARKET_THESIS",
+        "canonical_market_truth_exit_authorized": bool(
+            decision == "EXIT"
+            and (observation or {}).get("old_thesis_falsified") is True
+        ),
         "safety_bypass_separate": True,
         "weighted_ensemble": False,
+    }
+
+
+def _shared_thesis_shadow_action(observation):
+    """Compatibility view for old reports; it has no runtime authority."""
+    action = _canonical_thesis_action(observation)
+    return {
+        **action,
+        "version": "GUARDIAN_SHARED_THESIS_SHADOW_V1",
+        "authority": False,
+        "promoted_to_runtime_authority": True,
     }
 
 def _advance_adverse_wave_ledger(pos,now,shared,recovery):
@@ -642,7 +710,7 @@ def _advance_adverse_wave_ledger(pos,now,shared,recovery):
     row={
         "version":"GUARDIAN_ADVERSE_WAVE_LEDGER_V1",
         "authority":False,
-        "owner":"MARKET_THESIS",
+        "owner":"GUARDIAN_POSITION_OBSERVER",
         "causal_episode_id":episode_id or None,
         "state":state,
         "previous_state":prior_state,
@@ -712,13 +780,7 @@ def _trend_context_shield(state,pos):
     }
 
 def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_window=None):
-    """Separate a new opposing thesis from forced flow and pullback noise.
-
-    The classifier is intentionally narrower than Guardian itself. It may
-    grant fast-exit authority only to a confirmed break; every other state
-    falls back to the existing three-second causal deterioration path. Hard
-    Risk and critical feed handling run outside this classifier unchanged.
-    """
+    """Classify legacy deterioration for telemetry, never Market Truth."""
     primary=str(thesis.get("primary_cash_anchor") or "").lower()
     horizons=(s1.get("metrics") or {}).get("horizons") or {}
     primary_horizons=[]; dual_cash_horizons=[]
@@ -873,7 +935,7 @@ def _classify_adverse_event(state,pos,now,s1,s2,s3,profile,thesis,recovery_windo
         "kill_fast_eligible":classification=="THESIS_BREAK_CONFIRMED",
         "market_truth_owner":"MARKET_THESIS",
         "derivatives_can_create_or_rescue_direction":False,
-        "policy":"CLASSIFY_BEFORE_KILL_FAST",
+        "policy":"NONCANONICAL_DIAGNOSTIC_NO_EXIT_AUTHORITY",
     }
 
 def _recovery_anchor_price(prices,thesis):
@@ -1107,7 +1169,7 @@ def assess(state,pos,now=None):
     shared_thesis_observation=market_thesis.observe(
         frozen_truth,canonical_thesis_event
     )
-    shared_thesis_shadow=_shared_thesis_shadow_action(
+    canonical_thesis_action=_canonical_thesis_action(
         shared_thesis_observation
     )
     if profile["active"]:
@@ -1297,19 +1359,63 @@ def assess(state,pos,now=None):
         exit_profile="TIME_TO_EDGE_SUSPICION"
 
     conf=sum(votes[k]["confidence"] for k in adverse)/max(1,len(adverse))
+    legacy_guardian_diagnostic={
+        "version":"GUARDIAN_LEGACY_DIAGNOSTIC_V1",
+        "owner":"GUARDIAN_LEGACY_DIAGNOSTIC",
+        "authority":False,
+        "can_terminalize":False,
+        "decision":decision,
+        "reason":reason,
+        "exit_profile":exit_profile,
+        "hold_seconds":round(hold,4),
+        "local_break_revalidated":local_break_revalidated,
+        "path_break_authorized":path_break_authorized,
+    }
+    # Runtime action is now derived exclusively from canonical Market Truth.
+    # Legacy S1/S2/S3 and recovery machinery remain visible as deterioration
+    # diagnostics, but can no longer manufacture thesis death or close a
+    # position. Hard Risk/profit-floor authority runs outside this classifier.
+    decision=canonical_thesis_action["decision"]
+    reason=canonical_thesis_action["reason"]
+    if (
+        decision=="HOLD"
+        and shared_thesis_observation["status"]=="UNKNOWN"
+        and legacy_guardian_diagnostic["decision"] in {
+            "DETERIORATING","EXIT",
+        }
+    ):
+        # Invalid/missing old contracts fail closed for terminal authority,
+        # while the Guardian may still expose current deterioration to Risk
+        # and telemetry. This compatibility lane can never return EXIT.
+        decision="DETERIORATING"
+        reason="NONCANONICAL_DETERIORATION_OBSERVED_NO_EXIT_AUTHORITY"
+    hold=0.0
+    exit_profile=(
+        "CANONICAL_MARKET_TRUTH_TERMINAL"
+        if decision=="EXIT" else
+        "CANONICAL_MARKET_TRUTH_DIVERGENCE"
+        if decision=="DETERIORATING" else
+        "CANONICAL_MARKET_TRUTH_HOLD"
+    )
     shared_thesis_shadow={
-        **shared_thesis_shadow,
-        "legacy_guardian_decision":decision,
-        "decision_match":shared_thesis_shadow["decision"]==decision,
-        "cutover_eligible":False,
-        "cutover_blocker":"CANONICAL_WAL_ACCEPTANCE_NOT_PROVED",
+        **_shared_thesis_shadow_action(shared_thesis_observation),
+        "legacy_guardian_decision":legacy_guardian_diagnostic["decision"],
+        "decision_match":(
+            canonical_thesis_action["decision"]
+            == legacy_guardian_diagnostic["decision"]
+        ),
+        "cutover_eligible":True,
+        "cutover_blocker":None,
     }
     return {"version":VERSION,"decision":decision,"reason":reason,"side":str(pos.side).upper(),
-            "thesis_status":thesis.get("thesis_status","UNKNOWN"),
+            "thesis_status":shared_thesis_observation["status"],
+            "legacy_thesis_status":thesis.get("thesis_status","UNKNOWN"),
             "shared_thesis_status":shared_thesis_observation["status"],
             "shared_thesis_observation":shared_thesis_observation,
             "canonical_thesis_event":canonical_thesis_event,
+            "canonical_thesis_action":canonical_thesis_action,
             "shared_thesis_shadow":shared_thesis_shadow,
+            "legacy_guardian_diagnostic":legacy_guardian_diagnostic,
             "guardian_action":decision,
             "thesis_and_capital_policy_separate":True,
             "confidence":round(conf,6),"hold_seconds":round(hold,4),"votes":votes,
@@ -1332,7 +1438,7 @@ def assess(state,pos,now=None):
             "time_to_edge":time_to_edge,
             "kill_fast":kill_fast,"scout_since":float(getattr(pos,"guardian_s_scout_since",0.0) or 0.0) or None,
             "deterioration_since":float(getattr(pos,"guardian_s_candidate_since",0.0) or 0.0) or None,
-            "deterioration_elapsed_seconds":round(max(0.0,now-float(getattr(pos,"guardian_s_candidate_since",now) or now)),4) if causal_exit else 0.0,
+            "deterioration_elapsed_seconds":round(max(0.0,now-float(getattr(pos,"guardian_s_candidate_since",now) or now)),4) if decision=="DETERIORATING" else 0.0,
             "prices":p,"ts":now}
 
 def update_state(state,pos,now=None):

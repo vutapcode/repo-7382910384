@@ -173,7 +173,7 @@ class WavefrontCausalityTests(unittest.TestCase):
         self.assertFalse(entries[0][1]["authority"])
         self.assertEqual(
             h.engine.guardian.VERSION,
-            "GUARDIAN_S_TIER_V14_SHARED_THESIS_SHADOW",
+            "GUARDIAN_S_TIER_V15_CANONICAL_MARKET_TRUTH",
         )
 
     def test_maker_requires_real_trade_through_and_expires_without_it(self):

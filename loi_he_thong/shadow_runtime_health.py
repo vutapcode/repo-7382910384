@@ -117,6 +117,7 @@ def install(base,risk,edge):
                     g={"decision":"HOLD","reason":"STALE_SPOT_CAUSAL_GUARDIAN_DISABLED","votes":{},"supportive_count":0,"adverse_count":0,"ts":now}
                 else:
                     if stale:reset_guard(s,pos,"SPOT_RECONECTED",now); stale=False
+                    base._refresh_post_entry_market_evidence(s,pos,now)
                     g=guard_macro(s,pos,now)
                 rr=risk.assess(pos,px,g,market_state=s,now=now); s.mainnet_shadow_risk=rr
                 base._record_position_state(pos,g,rr,px,now)

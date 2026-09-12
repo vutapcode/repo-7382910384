@@ -465,8 +465,13 @@ class GuardianDeteriorationTests(unittest.TestCase):
         for key, value in vars(self._state(104.2, 99.90, sell=True)).items():
             setattr(state, key, value)
         exited = guardian.assess(state, pos, now=104.2)
-        self.assertEqual(exited["decision"], "EXIT")
-        self.assertGreaterEqual(exited["deterioration_elapsed_seconds"], 3.0)
+        self.assertEqual(exited["decision"], "DETERIORATING")
+        self.assertEqual(
+            exited["legacy_guardian_diagnostic"]["decision"], "EXIT",
+        )
+        self.assertFalse(
+            exited["legacy_guardian_diagnostic"]["can_terminalize"],
+        )
 
     def test_dynamic_threshold_never_below_one_point_five_bps(self):
         state = SimpleNamespace(atr_1m=0.001)
@@ -503,7 +508,10 @@ class GuardianDeteriorationTests(unittest.TestCase):
             result = guardian.assess(state, pos, now=now)
 
         self.assertEqual(result["decision"], "DETERIORATING")
-        self.assertEqual(result["reason"], "BINANCE_ONLY_ADVERSE_AWAITING_EXTERNAL_OR_OI")
+        self.assertEqual(
+            result["legacy_guardian_diagnostic"]["reason"],
+            "BINANCE_ONLY_ADVERSE_AWAITING_EXTERNAL_OR_OI",
+        )
         self.assertTrue(result["exchange_independence"]["blocks_binance_only_exit"])
 
     def test_stale_coinbase_does_not_disable_position_safety_exit(self):
@@ -518,7 +526,10 @@ class GuardianDeteriorationTests(unittest.TestCase):
             state.thoi_gian_coinbase_ticker_cuoi = 95.0
             result = guardian.assess(state, pos, now=now)
 
-        self.assertEqual(result["decision"], "EXIT")
+        self.assertEqual(result["decision"], "DETERIORATING")
+        self.assertEqual(
+            result["legacy_guardian_diagnostic"]["decision"], "EXIT",
+        )
         self.assertFalse(result["exchange_independence"]["coinbase_strict_fresh"])
         self.assertFalse(result["exchange_independence"]["blocks_binance_only_exit"])
 
@@ -651,15 +662,21 @@ class GuardianDeteriorationTests(unittest.TestCase):
 
         self._assess_with_votes(state, normal, 100.0, votes)
         normal_exit = self._assess_with_votes(state, normal, 100.80, votes)
-        self.assertEqual(normal_exit["decision"], "EXIT")
+        self.assertEqual(normal_exit["decision"], "DETERIORATING")
+        self.assertEqual(
+            normal_exit["legacy_guardian_diagnostic"]["decision"], "EXIT",
+        )
 
         self._assess_with_votes(state, runner, 101.0, votes)
         shielded = self._assess_with_votes(state, runner, 102.20, votes)
         self.assertEqual(shielded["decision"], "DETERIORATING")
         self.assertTrue(shielded["runner_shield_active"])
         runner_exit = self._assess_with_votes(state, runner, 102.81, votes)
-        self.assertEqual(runner_exit["decision"], "EXIT")
-        self.assertEqual(runner_exit["exit_profile"], "RUNNER_SHIELD")
+        self.assertEqual(runner_exit["decision"], "DETERIORATING")
+        self.assertEqual(
+            runner_exit["legacy_guardian_diagnostic"]["exit_profile"],
+            "RUNNER_SHIELD",
+        )
 
     def test_extreme_price_and_flow_bypass_runner_shield_quickly(self):
         state = self._state(100.0, 100.0, sell=True)
@@ -674,7 +691,10 @@ class GuardianDeteriorationTests(unittest.TestCase):
         first = self._assess_with_votes(state, pos, 100.0, votes)
         self.assertEqual(first["decision"], "DETERIORATING")
         exited = self._assess_with_votes(state, pos, 100.26, votes)
-        self.assertEqual(exited["decision"], "EXIT")
+        self.assertEqual(exited["decision"], "DETERIORATING")
+        self.assertEqual(
+            exited["legacy_guardian_diagnostic"]["decision"], "EXIT",
+        )
         self.assertTrue(exited["kill_fast"])
         self.assertFalse(exited["runner_shield_active"])
 
@@ -705,8 +725,11 @@ class GuardianDeteriorationTests(unittest.TestCase):
         # The slow whale-flow lane is deliberately not governed by a sub-2s
         # HFT echo. A continuous three-second causal reversal still exits.
         exited = self._assess_with_votes(state, pos, 103.01, votes)
-        self.assertEqual(exited["decision"], "EXIT")
-        self.assertEqual(exited["exit_profile"], "TREND_SHIELD")
+        self.assertEqual(exited["decision"], "DETERIORATING")
+        self.assertEqual(
+            exited["legacy_guardian_diagnostic"]["exit_profile"],
+            "TREND_SHIELD",
+        )
 
     def test_transient_abstain_keeps_frozen_trend_shield(self):
         state = self._state(100.0, 100.0, sell=True)
@@ -800,7 +823,10 @@ class GuardianDeteriorationTests(unittest.TestCase):
         )
         self._assess_with_votes(state, pos, 100.0, votes)
         exited = self._assess_with_votes(state, pos, 100.26, votes)
-        self.assertEqual(exited["decision"], "EXIT")
+        self.assertEqual(exited["decision"], "DETERIORATING")
+        self.assertEqual(
+            exited["legacy_guardian_diagnostic"]["decision"], "EXIT",
+        )
         self.assertTrue(exited["kill_fast"])
         self.assertFalse(exited["trend_shield_active"])
 
@@ -866,7 +892,10 @@ class GuardianDeteriorationTests(unittest.TestCase):
         votes = self._causal_votes()
         self._assess_with_votes(state, pos, 100.0, votes)
         exited = self._assess_with_votes(state, pos, 100.8, votes)
-        self.assertEqual(exited["decision"], "EXIT")
+        self.assertEqual(exited["decision"], "DETERIORATING")
+        self.assertEqual(
+            exited["legacy_guardian_diagnostic"]["decision"], "EXIT",
+        )
         self.assertFalse(exited["trend_shield_active"])
 
     def test_other_venue_noise_does_not_break_primary_cash_thesis(self):
@@ -886,7 +915,10 @@ class GuardianDeteriorationTests(unittest.TestCase):
 
         result = self._assess_with_votes(state, pos, 100.0, votes)
         self.assertEqual(result["decision"], "DETERIORATING")
-        self.assertEqual(result["reason"], "ENTRY_THESIS_NOT_BROKEN")
+        self.assertEqual(
+            result["legacy_guardian_diagnostic"]["reason"],
+            "ENTRY_THESIS_NOT_BROKEN",
+        )
         self.assertFalse(result["entry_thesis"]["broken"])
 
     def test_futures_and_oi_cannot_break_cash_thesis_without_cash_flow(self):
@@ -911,7 +943,7 @@ class GuardianDeteriorationTests(unittest.TestCase):
             state, pos, 100.0, s1, s2, s3,
         )
         self.assertFalse(thesis["broken"])
-        self.assertEqual(thesis["thesis_status"], "VALID")
+        self.assertEqual(thesis["thesis_status"], "NONCANONICAL_HOLD_SIGNAL")
 
     def test_coinbase_led_oi_unwind_is_flush_not_fast_thesis_break(self):
         state = self._state(100.0, 100.0, sell=True)
@@ -1055,13 +1087,19 @@ class GuardianDeteriorationTests(unittest.TestCase):
             state, pos, 100.60, (reclaim_s1, reclaim_s2, neutral_oi)
         )
         self.assertEqual(testing["guardian_phase"], "RECOVERY_TEST")
-        self.assertEqual(testing["reason"], "RECOVERY_TEST_IN_PROGRESS")
+        self.assertEqual(
+            testing["legacy_guardian_diagnostic"]["reason"],
+            "RECOVERY_TEST_IN_PROGRESS",
+        )
         recovered = self._assess_with_votes(
             state, pos, 100.70, (reclaim_s1, reclaim_s2, neutral_oi)
         )
 
         self.assertEqual(recovered["decision"], "HOLD")
-        self.assertEqual(recovered["reason"], "THESIS_RECOVERY_SHIELD")
+        self.assertEqual(
+            recovered["legacy_guardian_diagnostic"]["reason"],
+            "THESIS_RECOVERY_SHIELD",
+        )
         self.assertEqual(
             recovered["adverse_event"]["classification"],
             "THESIS_RECOVERY_CONFIRMED",
@@ -1119,7 +1157,10 @@ class GuardianDeteriorationTests(unittest.TestCase):
             (neutral_price, returning_flow, neutral_oi),
         )
         self.assertEqual(result["guardian_phase"], "RECOVERY_TEST")
-        self.assertEqual(result["reason"], "RECOVERY_TEST_IN_PROGRESS")
+        self.assertEqual(
+            result["legacy_guardian_diagnostic"]["reason"],
+            "RECOVERY_TEST_IN_PROGRESS",
+        )
 
     def test_unconfirmed_first_pullback_cannot_use_generic_causal_exit(self):
         state = self._state(100.0, 99.97, sell=True)
@@ -1144,7 +1185,7 @@ class GuardianDeteriorationTests(unittest.TestCase):
         self.assertEqual(first["guardian_phase"], "FIRST_PULLBACK")
         self.assertNotEqual(later["decision"], "EXIT")
         self.assertEqual(
-            later["reason"],
+            later["legacy_guardian_diagnostic"]["reason"],
             "TIER_S_PRICE_PLUS_CAUSE_CONVERGENCE",
         )
 
@@ -1213,7 +1254,10 @@ class GuardianDeteriorationTests(unittest.TestCase):
             result["adverse_event"]["recovery_path"]["second_adverse_kill_eligible"]
         )
         self.assertTrue(result["kill_fast"])
-        self.assertEqual(result["decision"], "EXIT")
+        self.assertEqual(result["decision"], "DETERIORATING")
+        self.assertEqual(
+            result["legacy_guardian_diagnostic"]["decision"], "EXIT",
+        )
 
     def test_failed_recovery_can_retry_before_a_new_adverse_extreme(self):
         state = self._state(100.0, 99.98, sell=True)
