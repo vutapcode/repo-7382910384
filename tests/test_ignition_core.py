@@ -2508,7 +2508,19 @@ class IgnitionCoreTests(unittest.TestCase):
     def test_persistent_is_shadow_bootstrap_and_never_live_authority(self):
         s = state(now=3.1)
         self._freeze_bias_before_wave(s)
-        histories = self._persistent_histories()
+        histories = dict(self._persistent_histories(cash="binance_spot"))
+        coinbase = self._persistent_histories(cash="coinbase_spot")
+        histories["coinbase_spot"] = coinbase["coinbase_spot"]
+        for venue in ("binance_spot", "coinbase_spot"):
+            rows = list(histories[venue])
+            latest = dict(rows[-1])
+            latest.update({
+                "receive_time_ms": 3_100,
+                "bucket_start_ms": 3_000,
+                "corrected_event_time_ms": 3_090,
+            })
+            rows.append(latest)
+            histories[venue] = tuple(rows)
         with patch.object(ignition_signals, "snapshot", return_value=histories), \
              patch.object(ignition_core, "_new_signals", return_value=[]):
             result = ignition_core.evaluate(s, now=3.1)
@@ -3292,16 +3304,27 @@ class IgnitionCoreTests(unittest.TestCase):
             "phase": "RELEASE", "execution_policy": "TAKER", "s_votes": {},
             "ignition": {
                 "state": "PROVE", "proof_type": "METAORDER_CONTINUATION",
-                "cash_venues": ["binance_spot"], "proposer": "binance_spot",
+                "cash_venues": ["binance_spot", "coinbase_spot"],
+                "proposer": "binance_spot",
                 "futures_follow_ok": True,
                 "current_cash_conversion": {
+                    "version": "CURRENT_CASH_CONVERSION_V2_ACCEPTANCE_CONTROL",
                     "confirmed": True,
-                    "accepted_cash_venues": ["binance_spot"],
+                    "accepted_cash_venues": [
+                        "binance_spot", "coinbase_spot",
+                    ],
+                    "surviving_control_venues": ["binance_spot"],
+                    "current_cross_cash_causal_survival": True,
+                    "authority": "ENTRY_TIMING_ONLY",
                 },
                 "consumed_fraction": 0.20, "residual_edge_proxy_bps": 1.0,
-                "venue_moves_bps": {"binance_spot": 0.5, "futures": 0.2},
+                "venue_moves_bps": {
+                    "binance_spot": 0.5, "coinbase_spot": 0.5,
+                    "futures": 0.2,
+                },
                 "flow_efficiency": {"venues": {
                     "binance_spot": {"state": "CONTINUING_CONFIRMED"},
+                    "coinbase_spot": {"state": "CONTINUING_CONFIRMED"},
                 }},
             },
         }
@@ -3329,17 +3352,31 @@ class IgnitionCoreTests(unittest.TestCase):
         }
         ignition = {
             "state": "PROVE", "proof_type": "METAORDER_CONTINUATION",
-            "cash_venues": ["binance_spot"], "proposer": "binance_spot",
+            "cash_venues": ["binance_spot", "coinbase_spot"],
+            "proposer": "binance_spot",
             "futures_follow_ok": True, "consumed_fraction": 0.20,
             "current_cash_conversion": {
+                "version": "CURRENT_CASH_CONVERSION_V2_ACCEPTANCE_CONTROL",
                 "confirmed": True,
-                "accepted_cash_venues": ["binance_spot"],
+                "accepted_cash_venues": [
+                    "binance_spot", "coinbase_spot",
+                ],
+                "surviving_control_venues": ["binance_spot"],
+                "current_cross_cash_causal_survival": True,
+                "authority": "ENTRY_TIMING_ONLY",
             },
             "residual_edge_proxy_bps": 0.0,
-            "venue_moves_bps": {"binance_spot": 0.5, "futures": 0.4},
-            "flow_by_venue": {"binance_spot": {"signed_imbalance": 0.6}},
+            "venue_moves_bps": {
+                "binance_spot": 0.5, "coinbase_spot": 0.5,
+                "futures": 0.4,
+            },
+            "flow_by_venue": {
+                "binance_spot": {"signed_imbalance": 0.6},
+                "coinbase_spot": {"signed_imbalance": 0.6},
+            },
             "flow_efficiency": {"venues": {
                 "binance_spot": {"state": "CONTINUING_CONFIRMED"},
+                "coinbase_spot": {"state": "CONTINUING_CONFIRMED"},
             }},
         }
         result = {

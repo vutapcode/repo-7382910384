@@ -9,7 +9,7 @@ market orders are large.
 from loi_he_thong import ignition_core
 from loi_he_thong import causal_mechanism
 
-VERSION = "ENTRY_THESIS_GATE_V10_MECHANISM_STATE_ACTION"
+VERSION = "ENTRY_THESIS_GATE_V11_CANONICAL_TIMING_OWNER"
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 BIAS_MIN_CONF = 0.55
 MAX_CONSUMED = 0.35
@@ -268,7 +268,9 @@ def _flow_question(result, ignition, impact):
         "cash_evidence_root_ids": evidence_roots,
         "evidence_provenance_status": provenance_status,
         "composite_veto": composite_veto,
+        "authority": "FALSIFICATION_ONLY",
         "converts": converts,
+        "converts_role": "DIAGNOSTIC_COMPATIBILITY_ONLY",
         "flow_efficiency": efficiency,
         "shared_flow_state": shared_flow_state,
         "policy": "MARGINAL_EXECUTED_FLOW_CONVERSION_NO_EPISODE_PROGRESS_AUTHORITY",
@@ -376,6 +378,7 @@ def evaluate(state, result, impact, basis, liquidation):
     q1 = _bias_question(result, ignition)
     q2 = _intent_question(ignition, liquidation)
     q3 = _flow_question(result, ignition, impact)
+    timing = ignition_core.resolve_entry_timing_authority(result)
     q4 = _liquidity_question(q3)
     q5 = _maturity_question(ignition)
     q6 = _independence_question(ignition, basis)
@@ -386,9 +389,6 @@ def evaluate(state, result, impact, basis, liquidation):
     )
     mature = q5["status"] == "MATURE"
     liquidation_tail = q2["status"] == "LIQUIDATION_TAIL"
-    persistent = str((result or {}).get("entry_mode") or "").upper() == (
-        "PERSISTENT_METAORDER"
-    )
     proof_type = str(ignition.get("proof_type") or "").upper()
     immediate_taker_metaorder = bool(
         str((result or {}).get("phase") or "").upper() == "RELEASE"
@@ -419,48 +419,34 @@ def evaluate(state, result, impact, basis, liquidation):
     )
     if replay_approved and q3.get("composite_veto"):
         blockers.append("FLOW_NONCONVERSION_COMPOSITE_VETO")
+    elif immediate_taker_metaorder and timing.get("status") == "WAIT":
+        soft_waits.append(timing["reason"])
     elif q3.get("composite_veto"):
         # Before empirical promotion, causal non-conversion is a retryable
-        # present-tense failure, not a legacy hard veto and not permission to
-        # hit TAKER.  A later converting window may reopen the same wave.
+        # failure under separate proof contracts. A later converting window
+        # may reopen the same wave.
         soft_waits.append("WAIT_CAUSAL_FLOW_CONVERSION_RECOVERY")
     if forced_tail_veto:
         blockers.append("UNWIND_TAIL_VETO")
-    # Persistence proves that a causal wave existed; it does not prove that a
-    # taker entry is still timely now.  DECAYING/UNKNOWN may recover on a later
-    # executed-flow window, so keep the episode retryable instead of turning
-    # either state into a hard veto.
-    if immediate_taker_metaorder and q3["status"] in ("DECAYING", "UNKNOWN"):
-        soft_waits.append(
-            "WAIT_PERSISTENT_FLOW_EFFICIENCY"
-            if persistent else "WAIT_IGNITION_FLOW_EFFICIENCY"
-        )
-    elif immediate_taker_metaorder and q3["status"] == "FADING":
-        soft_waits.append(
-            "WAIT_PERSISTENT_FLOW_FADING"
-            if persistent else "WAIT_IGNITION_FLOW_FADING"
-        )
-    elif (
-        immediate_taker_metaorder
-        and q3["status"] == "REACCELERATION_UNCONFIRMED"
-    ):
-        soft_waits.append(
-            "WAIT_PERSISTENT_REACCELERATION_CONFIRMATION"
-            if persistent else "WAIT_IGNITION_REACCELERATION_CONFIRMATION"
-        )
     current_cash = dict(ignition.get("current_cash_conversion") or {})
-    timing_conversion_alive = bool(
-        q3.get("converts")
-        or (
-            failed_reversion
-            and current_cash.get("confirmed")
-            and current_cash.get("accepted_cash_venues")
+    if immediate_taker_metaorder:
+        timing_conversion_alive = timing.get("status") == "LIVE"
+    else:
+        timing_conversion_alive = bool(
+            q3.get("converts")
+            or (
+                failed_reversion
+                and current_cash.get("confirmed")
+                and current_cash.get("accepted_cash_venues")
+            )
         )
-    )
     mechanism_state = {
-        "version": "CAUSAL_ENTRY_MECHANISM_CONTRACT_V1",
+        "version": "CAUSAL_ENTRY_MECHANISM_CONTRACT_V2_TIMING_OWNER",
         "owner": "ENTRY_THESIS_GATE",
         "direction_owner": "MARKET_THESIS",
+        "entry_timing": timing,
+        "timing_owner": "IGNITION_CORE",
+        "flow_trajectory_authority": "FALSIFICATION_ONLY",
         "mechanism": q2["mechanism_classification"],
         "positioning_state": q2["status"],
         "cash_control_state": q6["status"],

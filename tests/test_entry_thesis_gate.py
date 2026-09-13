@@ -22,11 +22,18 @@ def result(*, intent="UNWIND", consumed=0.32, recent_progress=0.02,
         "cash_venues": list(cash), "supporting_venues": list(cash) + ["futures"],
         "futures_follow_ok": True, "futures_cash_response_ok": bool(cash),
         "current_cash_conversion": {
+            "version": "CURRENT_CASH_CONVERSION_V2_ACCEPTANCE_CONTROL",
             "confirmed": bool(cash),
             "accepted_cash_venues": list(cash),
-            "dual_cash_synchronous_control": set(cash) == {
+            "surviving_control_venues": (
+                [cash[0]] if set(cash) == {
+                    "binance_spot", "coinbase_spot",
+                } else []
+            ),
+            "current_cross_cash_causal_survival": set(cash) == {
                 "binance_spot", "coinbase_spot",
             },
+            "authority": "ENTRY_TIMING_ONLY",
         },
         "consumed_fraction": consumed,
         "phase_measurement": {
@@ -356,7 +363,7 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertFalse(flow["converts"])
         self.assertGreater(flow["episode_cash_progress_bps"], 0.0)
 
-    def test_persistent_decaying_soft_waits_instead_of_immediate_taker(self):
+    def test_persistent_decaying_is_diagnostic_when_current_cash_survives(self):
         candidate = result(
             intent="POSITION_BUILD", consumed=0.20,
             flow_states={
@@ -367,14 +374,17 @@ class EntryThesisGateTests(unittest.TestCase):
             entry_economics_v6_replay_approved=False,
             wstrade_live_armed=False,
         ))
-        self.assertFalse(allowed)
+        self.assertTrue(allowed)
         self.assertEqual(report["execution_style"], "TAKER")
-        self.assertIn(
-            "WAIT_PERSISTENT_FLOW_EFFICIENCY",
-            report["soft_wait_reasons"],
-        )
-        self.assertNotIn(
-            "WAIT_PERSISTENT_FLOW_EFFICIENCY", report["hard_vetoes"]
+        self.assertEqual(report["soft_wait_reasons"], [])
+        mechanism = report["entry_thesis_audit"][
+            "causal_mechanism_contract"
+        ]
+        self.assertEqual(mechanism["entry_timing"]["status"], "LIVE")
+        self.assertEqual(mechanism["entry_timing"]["trajectory"], "DECAYING")
+        self.assertEqual(mechanism["timing_owner"], "IGNITION_CORE")
+        self.assertEqual(
+            mechanism["flow_trajectory_authority"], "FALSIFICATION_ONLY"
         )
 
     def test_persistent_continuing_remains_eligible(self):
@@ -392,7 +402,7 @@ class EntryThesisGateTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertEqual(report["soft_wait_reasons"], [])
 
-    def test_ignition_metaorder_unknown_waits_instead_of_immediate_taker(self):
+    def test_ignition_metaorder_unknown_allows_fresh_cross_cash_survival(self):
         candidate = result(
             intent="POSITION_BUILD", consumed=0.20,
             flow_states={
@@ -408,14 +418,69 @@ class EntryThesisGateTests(unittest.TestCase):
                 wstrade_live_armed=False,
             ),
         )
-        self.assertFalse(allowed)
+        self.assertTrue(allowed)
         self.assertEqual(report["execution_style"], "TAKER")
-        self.assertIn(
-            "WAIT_IGNITION_FLOW_EFFICIENCY",
-            report["soft_wait_reasons"],
-        )
         self.assertNotIn(
             "WAIT_IGNITION_FLOW_EFFICIENCY", report["hard_vetoes"]
+        )
+        self.assertNotIn(
+            "WAIT_IGNITION_FLOW_EFFICIENCY", report["soft_wait_reasons"]
+        )
+        timing = report["entry_thesis_audit"][
+            "causal_mechanism_contract"
+        ]["entry_timing"]
+        self.assertEqual(timing["status"], "LIVE")
+        self.assertEqual(timing["trajectory"], "UNKNOWN")
+        self.assertEqual(timing["reason"], "CURRENT_CROSS_CASH_SURVIVAL")
+
+    def test_metaorder_without_current_cross_cash_survival_waits(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "UNKNOWN", "coinbase_spot": "UNKNOWN",
+            },
+        )
+        current = candidate["ignition"]["current_cash_conversion"]
+        current["current_cross_cash_causal_survival"] = False
+        current["surviving_control_venues"] = []
+
+        allowed, report = entry_edge_tier.authorize(
+            candidate,
+            SimpleNamespace(
+                entry_economics_v6_replay_approved=False,
+                wstrade_live_armed=False,
+            ),
+        )
+
+        self.assertFalse(allowed)
+        self.assertEqual(
+            report["soft_wait_reasons"],
+            ["WAIT_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL"],
+        )
+
+    def test_metaorder_missing_new_survival_field_fails_closed(self):
+        candidate = result(
+            intent="POSITION_BUILD", consumed=0.20,
+            flow_states={
+                "binance_spot": "UNKNOWN", "coinbase_spot": "UNKNOWN",
+            },
+        )
+        current = candidate["ignition"]["current_cash_conversion"]
+        current.pop("current_cross_cash_causal_survival")
+        current["dual_cash_synchronous_control"] = True
+
+        allowed, report = entry_edge_tier.authorize(
+            candidate,
+            SimpleNamespace(
+                entry_economics_v6_replay_approved=False,
+                wstrade_live_armed=False,
+            ),
+        )
+
+        self.assertFalse(allowed)
+        self.assertEqual(
+            report["soft_wait_reasons"],
+            ["WAIT_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL"],
         )
 
     def test_failed_reversion_maker_keeps_its_separate_proof_contract(self):
@@ -579,6 +644,35 @@ class EntryThesisGateTests(unittest.TestCase):
             "WAIT_CAUSAL_FLOW_CONVERSION_RECOVERY",
             audit["soft_wait_reasons"],
         )
+
+    def test_explicit_negative_flow_states_keep_falsification_power(self):
+        for trajectory in ("PERSISTENT_NONCONVERSION", "PROGRESS_DECAY"):
+            with self.subTest(trajectory=trajectory):
+                candidate = result(
+                    intent="POSITION_BUILD", consumed=0.20,
+                    flow_states={
+                        "binance_spot": trajectory,
+                        "coinbase_spot": "DECAYING",
+                    },
+                )
+                allowed, report = entry_edge_tier.authorize(
+                    candidate,
+                    SimpleNamespace(
+                        entry_economics_v6_replay_approved=False,
+                        wstrade_live_armed=False,
+                    ),
+                )
+
+                self.assertFalse(allowed)
+                self.assertEqual(
+                    report["soft_wait_reasons"],
+                    ["WAIT_CAUSAL_FLOW_CONVERSION_RECOVERY"],
+                )
+                timing = report["entry_thesis_audit"][
+                    "causal_mechanism_contract"
+                ]["entry_timing"]
+                self.assertEqual(timing["status"], "WAIT")
+                self.assertTrue(timing["explicit_negative_evidence"])
 
     def test_position_build_is_not_relabelled_forced_unwind(self):
         audit = entry_thesis_gate.evaluate(

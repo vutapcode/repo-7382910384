@@ -384,6 +384,105 @@ def flow_efficiency_state(snapshot, primary_cash=None, cash_venues=None):
     }
 
 
+def resolve_entry_timing_authority(result):
+    """Resolve present-tense timing once for released metaorder entries.
+
+    Flow trajectory remains useful negative evidence, but an UNKNOWN history
+    cannot overrule fresh cross-cash causal survival.  Failed Reversion keeps
+    its separate proof contract in Entry Thesis.
+    """
+    result = dict(result or {})
+    ignition = dict(result.get("ignition") or {})
+    current = dict(ignition.get("current_cash_conversion") or {})
+    flow = dict(ignition.get("flow_efficiency") or {})
+    mode = str(result.get("entry_mode") or "").upper()
+    phase = str(result.get("phase") or "").upper()
+    proof_type = str(ignition.get("proof_type") or "").upper()
+    metaorder = bool(
+        phase == "RELEASE"
+        and proof_type in {"METAORDER_CONTINUATION", "PERSISTENT_METAORDER"}
+    )
+    if not metaorder:
+        return {
+            "status": "NOT_APPLICABLE",
+            "authority": "ENTRY_TIMING_ONLY",
+            "owner": "IGNITION_CORE",
+            "reason": "SEPARATE_PROOF_CONTRACT",
+            "retryable": False,
+        }
+
+    accepted = {
+        str(venue).lower()
+        for venue in current.get("accepted_cash_venues") or ()
+    }
+    surviving_control = {
+        str(venue).lower()
+        for venue in current.get("surviving_control_venues") or ()
+    } & CASH
+    current_survival = bool(
+        CASH.issubset(accepted)
+        and current.get("current_cross_cash_causal_survival") is True
+        and surviving_control
+    )
+    aggregate = flow_efficiency_state(
+        flow, ignition.get("proposer"), ignition.get("cash_venues"),
+    )
+    trajectory = str(aggregate.get("state") or "UNKNOWN").upper()
+    base = {
+        "authority": "ENTRY_TIMING_ONLY",
+        "owner": "IGNITION_CORE",
+        "trajectory": trajectory,
+        "current_cross_cash_causal_survival": current_survival,
+    }
+    if not current_survival:
+        return {
+            **base,
+            "status": "WAIT",
+            "reason": "WAIT_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL",
+            "retryable": True,
+        }
+    if trajectory == "FADING":
+        return {
+            **base,
+            "status": "WAIT",
+            "reason": (
+                "WAIT_PERSISTENT_FLOW_FADING"
+                if mode == "PERSISTENT_METAORDER"
+                else "WAIT_IGNITION_FLOW_FADING"
+            ),
+            "retryable": True,
+        }
+    if trajectory == "REACCELERATION_UNCONFIRMED":
+        return {
+            **base,
+            "status": "WAIT",
+            "reason": (
+                "WAIT_PERSISTENT_REACCELERATION_CONFIRMATION"
+                if mode == "PERSISTENT_METAORDER"
+                else "WAIT_IGNITION_REACCELERATION_CONFIRMATION"
+            ),
+            "retryable": True,
+        }
+    if trajectory in {"PERSISTENT_NONCONVERSION", "PROGRESS_DECAY"}:
+        return {
+            **base,
+            "status": "WAIT",
+            "reason": "WAIT_CAUSAL_FLOW_CONVERSION_RECOVERY",
+            "explicit_negative_evidence": True,
+            "retryable": True,
+        }
+    return {
+        **base,
+        "status": "LIVE",
+        "reason": (
+            "CURRENT_CROSS_CASH_SURVIVAL"
+            if trajectory in {"UNKNOWN", "DECAYING"}
+            else "CURRENT_CROSS_CASH_AND_TRAJECTORY_ALIGNED"
+        ),
+        "retryable": False,
+    }
+
+
 def causal_wave_snapshot(
     histories, side, now_ms, *, causal_wave_id=None, wave_onset_ms=None,
     primary_cash=None, cash_venues=None, flow_snapshot=None,
