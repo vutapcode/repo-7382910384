@@ -927,8 +927,18 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
     liquidation = (edge_report or {}).get("liquidation_context") or {}
     thesis_audit = (edge_report or {}).get("entry_thesis_audit") or {}
     would_enter = (result or {}).get("decision") == "GO"
+    entry_gate = dict((result or {}).get("entry_gate_outcome") or {})
+    pending_transition_wait = bool(
+        entry_gate.get("owner") == "TIMING"
+        and entry_gate.get("stage") == "FAST_TRANSITION"
+        and str(entry_gate.get("reason") or "").startswith(
+            "PENDING_REVERSAL_"
+        )
+    )
     failed = []
     diagnostic = []
+    if pending_transition_wait:
+        failed.append(str(entry_gate["reason"]))
     if "STALE" in reason or "FEED_NOT_READY" in reason:
         failed.append("WAIT_STALE_DATA")
     if "EXTERNAL" in reason:
@@ -970,7 +980,11 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         failed.extend((edge_report or {}).get("soft_wait_reasons") or ())
     if reason == "IGNITION_NOT_ALIGNED_WITH_FROZEN_BIAS":
         failed.append("BIAS_ALIGNMENT_FAIL")
-    elif "BIAS" in reason or str((result or {}).get("side", "")).upper() not in ("LONG", "SHORT"):
+    elif not pending_transition_wait and (
+        "BIAS" in reason
+        or str((result or {}).get("side", "")).upper()
+            not in ("LONG", "SHORT")
+    ):
         failed.append("BIAS_NOT_READY")
     if s1 and str(s1.get("status", "MISSING")) != "PASS":
         diagnostic.append("PRICE_QUORUM_FAIL")
@@ -998,6 +1012,13 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
     if would_enter and not quorum_ok and not failed:
         failed.append("ENTRY_AUTHORITY_CONTRACT_FAIL")
     priority = (
+        "PENDING_REVERSAL_CONTROL_TRANSFER_WAITING_FRESH_CASH",
+        "PENDING_REVERSAL_BIAS_CONFIRMATION",
+        "PENDING_REVERSAL_EVIDENCE_GAP",
+        "PENDING_REVERSAL_TTL_EXPIRED",
+        "PENDING_REVERSAL_EPOCH_RESET",
+        "PENDING_REVERSAL_CLOCK_INVALID",
+        "PENDING_REVERSAL_TRANSITION_FAILED",
         "WAIT_STALE_DATA", "WAIT_EXTERNAL_CORROBORATION", "WAIT_CHASE",
         "WAIT_CASH_RESPONSE", "WAIT_LEADER_UNCERTAIN", "WAIT_LATE_IMPULSE",
         "WAIT_CURRENT_CASH_CONVERSION", "WAIT_CAUSAL_EVIDENCE_REFRESH",

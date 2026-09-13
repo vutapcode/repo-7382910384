@@ -58,6 +58,32 @@ class EntryGateOutcomeTests(unittest.TestCase):
         self.assertEqual(row["owner"], "TIMING")
         self.assertEqual(row["stage"], "TIMING_NOW")
 
+    def test_pending_counter_wave_is_timing_not_market_truth(self):
+        row = entry_gate_outcome.from_entry_decision({
+            "decision": "WAIT", "reason": "BIAS_ABSTAIN",
+            "ignition": {
+                "causal_episode_id": "ign:binance_spot:LONG:1000",
+                "side": "LONG", "background_side": "SHORT",
+                "status": "PENDING_BIAS_FLIP",
+                "transition_confirmed": False,
+                "transition_authority": {"confirmed": False},
+            },
+        })
+        self.assertEqual(row["owner"], "TIMING")
+        self.assertEqual(row["stage"], "FAST_TRANSITION")
+        self.assertEqual(
+            row["reason"], "PENDING_REVERSAL_BIAS_CONFIRMATION",
+        )
+        self.assertEqual(row["detail"]["entry_reason"], "BIAS_ABSTAIN")
+
+    def test_plain_bias_wait_remains_market_truth(self):
+        row = entry_gate_outcome.from_entry_decision({
+            "decision": "WAIT", "reason": "BIAS_ABSTAIN",
+            "ignition": {},
+        })
+        self.assertEqual(row["owner"], "MARKET_TRUTH")
+        self.assertEqual(row["reason"], "BIAS_ABSTAIN")
+
 
 if __name__ == "__main__":
     unittest.main()

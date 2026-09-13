@@ -244,10 +244,16 @@ class MissTaxonomyTests(unittest.TestCase):
         episode_id = "ign:futures:LONG:100000"
         result = {
             "decision": "WAIT",
-            "reason": "BIAS_NOT_READY",
+            "reason": "BIAS_ABSTAIN",
             "side": "SHORT",
             "causal_episode_id": episode_id,
             "s_votes": {},
+            "entry_gate_outcome": {
+                "allowed": False,
+                "owner": "TIMING",
+                "stage": "FAST_TRANSITION",
+                "reason": "PENDING_REVERSAL_BIAS_CONFIRMATION",
+            },
             "ignition": {
                 "causal_episode_id": episode_id,
                 "episode_id": episode_id,
@@ -273,6 +279,13 @@ class MissTaxonomyTests(unittest.TestCase):
         self.assertEqual(
             snapshot["counterfactual"]["research_only_reason"],
             "UNCONFIRMED_PENDING_REVERSAL",
+        )
+        self.assertEqual(
+            snapshot["output"]["blocking_reason"],
+            "PENDING_REVERSAL_BIAS_CONFIRMATION",
+        )
+        self.assertNotIn(
+            "BIAS_NOT_READY", snapshot["output"]["blocking_reasons"],
         )
 
     def test_accepted_bootstrap_shadow_trade_is_not_a_miss(self):
