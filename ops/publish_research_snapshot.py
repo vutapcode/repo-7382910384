@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -76,7 +77,14 @@ REMOTE = os.getenv(
     "git@github.com:vutapcode/repo-7382910384.git",
 )
 BRANCH = os.getenv("WSTRADE_RESEARCH_BRANCH", "telemetry")
-RETENTION_SECONDS = 84 * 3600
+RETENTION_DAYS = int(os.getenv("WSTRADE_TELEMETRY_RETENTION_DAYS", "5"))
+RETENTION_SECONDS = RETENTION_DAYS * 24 * 3600
+MAX_DAILY_FILE_BYTES = int(os.getenv(
+    "WSTRADE_TELEMETRY_MAX_DAILY_BYTES", str(16 * 1024 * 1024),
+))
+MAX_DAILY_RECORD_BYTES = int(os.getenv(
+    "WSTRADE_TELEMETRY_MAX_RECORD_BYTES", str(128 * 1024),
+))
 MAX_DELTA_ROWS = 2000
 # Bound first-run RAM/CPU on the 2 GB Lightsail. Subsequent runs are strictly
 # incremental from the durable byte offset.
@@ -160,6 +168,142 @@ def _write_jsonl(path, rows):
                 row, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
             ) + "\n")
     os.replace(tmp, path)
+
+
+def _jsonl_bytes(row):
+    return (json.dumps(
+        row, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ) + "\n").encode("utf-8")
+
+
+def _utc_day(ts):
+    try:
+        return datetime.fromtimestamp(float(ts), timezone.utc).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _daily_record(record_type, payload, *, venue=None):
+    row = dict(_public_value(payload or {}))
+    row["record_type"] = str(record_type)
+    if venue:
+        row["venue"] = str(venue)
+    return row
+
+
+def _daily_record_key(row):
+    kind = str((row or {}).get("record_type") or "UNKNOWN")
+    for name in (
+        "blocker_event_id", "transition_id", "evidence_slice_id", "event_id",
+        "opportunity_id", "trade_id", "cycle_id",
+    ):
+        value = (row or {}).get(name)
+        if value is not None:
+            return kind, name, str(value)
+    ts = float((row or {}).get("ts", 0) or 0)
+    if kind in {
+        "summary", "runtime_heartbeat", "data_health", "source_epochs",
+        "market_observation",
+    }:
+        return kind, str((row or {}).get("venue") or ""), int(ts // 180)
+    return kind, hashlib.sha256(_jsonl_bytes(row)).hexdigest()
+
+
+def _bounded_record(row, max_record_bytes=None):
+    limit = int(max_record_bytes or MAX_DAILY_RECORD_BYTES)
+    encoded = _jsonl_bytes(row)
+    if len(encoded) <= limit:
+        return row
+    keep = {
+        name: row.get(name) for name in (
+            "record_type", "event", "event_id", "event_sequence", "ts", "utc",
+            "vn", "run_id", "runtime_commit", "code_version", "config_version",
+            "runtime_mode", "source_branch", "identity_status", "cycle_id",
+            "causal_episode_id", "timing_attempt_id", "economic_opportunity_id",
+            "opportunity_id", "trade_id", "side", "decision", "reason",
+            "blocking_stage", "miss_taxonomy", "venue",
+        ) if row.get(name) is not None
+    }
+    keep.update({
+        "payload_omitted": True,
+        "payload_omission_reason": "MAX_DAILY_RECORD_BYTES",
+        "original_bytes": len(encoded),
+        "payload_sha256": hashlib.sha256(encoded).hexdigest(),
+    })
+    return keep
+
+
+def _bounded_daily_rows(rows, max_bytes=None, max_record_bytes=None):
+    """Deduplicate a UTC day and enforce a hard serialized file-size cap."""
+    limit = int(max_bytes or MAX_DAILY_FILE_BYTES)
+    if limit <= 0:
+        raise ValueError("max daily telemetry bytes must be positive")
+    merged = {}
+    for source in rows or ():
+        if not isinstance(source, dict):
+            continue
+        row = _bounded_record(dict(source), max_record_bytes)
+        merged[_daily_record_key(row)] = row
+    ordered = sorted(
+        merged.values(), key=lambda row: float(row.get("ts", 0) or 0),
+    )
+    encoded = [(row, _jsonl_bytes(row)) for row in ordered]
+    if sum(len(raw) for _, raw in encoded) <= limit:
+        return ordered, {"dropped_records": 0, "oversize_records": sum(
+            bool(row.get("payload_omitted")) for row in ordered
+        )}
+
+    kept = []
+    used = 0
+    notice_reserve = min(2048, max(256, limit // 8))
+    for row, raw in reversed(encoded):
+        if len(raw) + used + notice_reserve > limit:
+            continue
+        kept.append(row)
+        used += len(raw)
+    kept.reverse()
+    dropped = len(ordered) - len(kept)
+    notice = {
+        "record_type": "retention_notice",
+        "ts": kept[0].get("ts") if kept else time.time(),
+        "reason": "MAX_DAILY_FILE_BYTES",
+        "dropped_records": dropped,
+        "retention_policy": "KEEP_NEWEST_COMPLETE_RECORDS",
+        "max_daily_file_bytes": limit,
+    }
+    while kept and len(_jsonl_bytes(notice)) + sum(
+        len(_jsonl_bytes(row)) for row in kept
+    ) > limit:
+        kept.pop(0)
+        dropped += 1
+        notice["dropped_records"] = dropped
+    rows_out = [notice, *kept] if len(_jsonl_bytes(notice)) <= limit else []
+    return rows_out, {
+        "dropped_records": dropped,
+        "oversize_records": sum(bool(row.get("payload_omitted")) for row in kept),
+    }
+
+
+def _reset_to_daily_layout(target):
+    """Remove obsolete telemetry layouts while preserving retained daily files."""
+    target.mkdir(parents=True, exist_ok=True)
+    for child in target.iterdir():
+        if child.name in {"daily", "manifest.json"}:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    daily = target / "daily"
+    daily.mkdir(parents=True, exist_ok=True)
+    for child in daily.iterdir():
+        if not child.is_file() or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}\.jsonl", child.name
+        ):
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
 
 
 def _raw_partition(ts):
@@ -1289,49 +1433,14 @@ def _publish(no_push=False):
     rows, next_checkpoint = _journal_delta(checkpoint)
     remote_sha, _has_head = _ensure_clone()
     target = CLONE / "telemetry"
-    legacy = CLONE / "research_live"
     now = time.time()
     cutoff = now - RETENTION_SECONDS
-
+    _reset_to_daily_layout(target)
     compact = [_compact_event(row) for row in rows]
-    trade_rows = [row for row in compact if row.get("event") in {"ENTRY", "EXIT"}]
-    candidate_rows = [
-        row for row in compact
-        if row.get("event") == "DECISION_EVALUATED"
-        and row.get("side") in {"LONG", "SHORT"}
-        and (row.get("causal_episode_id") or row.get("persistent_candidate_id"))
+    decisions = [
+        row for row in compact if row.get("event") == "DECISION_EVALUATED"
     ]
-    trades = _merge_unique(
-        _previous_rows(
-            target / "execution" / "trades.jsonl", legacy / "trades.json"
-        ), trade_rows,
-        lambda row: (row.get("event"), row.get("cycle_id"), row.get("ts")),
-        cutoff, 2000,
-    )
-    closed_trades = _closed_trade_history(cutoff)
-    opportunities = _opportunity_history(cutoff)
-    candidates = _merge_unique(
-        _previous_rows(
-            target / "decisions" / "candidates.jsonl",
-            legacy / "candidates.json",
-        ), candidate_rows,
-        lambda row: (
-            row.get("causal_episode_id") or row.get("persistent_candidate_id"),
-            row.get("reason"), row.get("side"),
-        ), cutoff, 2000,
-    )
-
-    decisions = [row for row in compact if row.get("event") == "DECISION_EVALUATED"]
     manifest = _manifest(now)
-    current_run_id = _safe_run_id(manifest.get("run_id"))
-    manifest["current_run_path"] = "telemetry/runs/%s" % current_run_id
-    manifest["canonical_decision_file"] = (
-        manifest["current_run_path"] + "/decisions/events.jsonl"
-    )
-    manifest["cross_run_indexes"] = {
-        "status": "COMPATIBILITY_ONLY",
-        "canonical_records_live_under_runs": True,
-    }
     summary = {
         "ts": now, "utc": _iso(now), "vn": _iso(now, VN),
         **_identity(manifest),
@@ -1350,127 +1459,53 @@ def _publish(no_push=False):
         },
         "runtime": _runtime_summary(),
     }
-    timeline = _merge_unique(
-        _previous_rows(
-            target / "decisions" / "timeline.jsonl",
-            legacy / "timeline.json",
-        ), [summary],
-        lambda row: int(float(row.get("ts", 0)) // 180), cutoff, 2000,
-    )
-
     heartbeat, data_health, source_epochs = _runtime_evidence(now, manifest)
-
-    run_bundles = {}
+    daily_records = [
+        _daily_record("summary", summary),
+        _daily_record("runtime_heartbeat", heartbeat),
+        _daily_record("data_health", data_health),
+        _daily_record("source_epochs", source_epochs),
+    ]
+    daily_records.extend(
+        _daily_record("journal_event", row) for row in compact
+    )
     for source_row in rows:
-        bundle = _run_bundle(run_bundles, source_row.get("run_id"))
-        bundle["source_rows"].append(source_row)
         dossier = _decision_dossier_records(source_row)
         if dossier is not None:
-            bundle["decisions"].append(dossier["decision"])
-            bundle["evidence"].append(dossier["evidence"])
-            bundle["blockers"].extend(dossier["blockers"])
+            daily_records.append(_daily_record(
+                "decision", dossier["decision"],
+            ))
+            daily_records.append(_daily_record(
+                "market_evidence",
+                _attach_raw_evidence(dossier["evidence"], now),
+            ))
+            daily_records.extend(
+                _daily_record("blocker", blocker)
+                for blocker in dossier["blockers"]
+            )
             if dossier["counterfactual"] is not None:
-                bundle["counterfactuals"].append(dossier["counterfactual"])
+                daily_records.append(_daily_record(
+                    "counterfactual", dossier["counterfactual"],
+                ))
         transition = _transition_record(source_row)
         if transition is not None:
-            bundle["transitions"].append(transition)
+            daily_records.append(_daily_record("state_transition", transition))
         execution = _execution_record(source_row)
         if execution is not None:
-            event_name = str(source_row.get("event") or "")
-            if (
-                "ORDER" in event_name
-                or event_name.startswith(("ENTRY_", "EXIT_", "SHADOW_MAKER_"))
-            ):
-                bundle["orders"].append(execution)
-            if event_name in {
-                "ENTRY", "EXIT", "LIVE_ENTRY", "LIVE_EXIT",
-                "LIVE_ORDER_UPDATE", "ENTRY_FILLED_THEN_FLATTENED",
-            }:
-                bundle["fills"].append(execution)
-            if event_name in {
-                "ENTRY", "EXIT", "LIVE_ENTRY", "LIVE_EXIT", "POSITION_STATE",
-                "ENTRY_FILLED_THEN_FLATTENED",
-            }:
-                bundle["positions"].append(execution)
-            if event_name in {"EXIT", "LIVE_EXIT", "POSITION_STATE"}:
-                bundle["guardian"].append(execution)
-    for opportunity in opportunities:
-        bundle = _run_bundle(run_bundles, opportunity.get("run_id"))
-        bundle["source_rows"].append(opportunity)
-        bundle["opportunities"].append(opportunity)
-    _run_bundle(run_bundles, manifest.get("run_id"))
-    # Revisit retained dossiers after the hour closes so an event initially
-    # published as WAITING_FOR_CLOSED_PARTITION receives immutable raw hashes
-    # without replaying or duplicating the decision itself.
-    runs_root = target / "runs"
-    if runs_root.exists():
-        for run_dir in runs_root.iterdir():
-            if run_dir.is_dir():
-                _run_bundle(run_bundles, run_dir.name)
+            daily_records.append(_daily_record("execution", execution))
+    daily_records.extend(
+        _daily_record("opportunity", row)
+        for row in _opportunity_history(cutoff)
+    )
+    daily_records.extend(
+        _daily_record("closed_trade", row)
+        for row in _closed_trade_history(cutoff)
+    )
+    for venue, observation in _market_observations().items():
+        daily_records.append(_daily_record(
+            "market_observation", observation, venue=venue,
+        ))
 
-    heartbeat_rows = _merge_unique(
-        _previous_rows(target / "runtime" / "heartbeat.jsonl"), [heartbeat],
-        lambda row: int(float(row.get("ts", 0)) // 180), cutoff, 2000,
-    )
-    health_rows = _merge_unique(
-        _previous_rows(target / "runtime" / "data_health.jsonl"), [data_health],
-        lambda row: int(float(row.get("ts", 0)) // 180), cutoff, 2000,
-    )
-    epoch_rows = _merge_unique(
-        _previous_rows(target / "runtime" / "source_epochs.jsonl"),
-        [source_epochs], lambda row: int(float(row.get("ts", 0)) // 180),
-        cutoff, 2000,
-    )
-    market = _market_observations()
-    market_rows = {}
-    for venue, observation in market.items():
-        market_rows[venue] = _merge_unique(
-            _previous_rows(target / "market" / venue / "timeline.jsonl"),
-            [observation], lambda row: int(float(row.get("ts", 0)) // 180),
-            cutoff, 2000,
-        )
-    guardian_rows = [
-        row for row in trades
-        if row.get("event") == "EXIT" and row.get("guardian")
-    ]
-
-    _write_json(target / "manifest.json", manifest)
-    for run_id, bundle in run_bundles.items():
-        previous_manifest = _load(
-            target / "runs" / run_id / "manifest.json", {},
-        )
-        run_manifest = manifest if run_id == current_run_id else (
-            previous_manifest or _historical_run_manifest(
-                run_id, bundle["source_rows"], now,
-            )
-        )
-        if "raw_archive" not in run_manifest:
-            run_manifest = {
-                **run_manifest,
-                "raw_archive": _historical_run_manifest(
-                    run_id, bundle["source_rows"], now,
-                )["raw_archive"],
-            }
-        current = run_id == current_run_id
-        _write_run_dossier(
-            target / "runs" / run_id, bundle, run_manifest,
-            heartbeat if current else None,
-            data_health if current else None,
-            source_epochs if current else None,
-            cutoff,
-            now,
-        )
-    _write_jsonl(target / "decisions" / "timeline.jsonl", timeline)
-    _write_jsonl(target / "decisions" / "candidates.jsonl", candidates)
-    _write_jsonl(target / "decisions" / "opportunities.jsonl", opportunities)
-    _write_jsonl(target / "execution" / "trades.jsonl", trades)
-    _write_jsonl(target / "execution" / "closed_trades.jsonl", closed_trades)
-    _write_jsonl(target / "execution" / "guardian.jsonl", guardian_rows)
-    _write_jsonl(target / "runtime" / "heartbeat.jsonl", heartbeat_rows)
-    _write_jsonl(target / "runtime" / "data_health.jsonl", health_rows)
-    _write_jsonl(target / "runtime" / "source_epochs.jsonl", epoch_rows)
-    for venue, venue_rows in market_rows.items():
-        _write_jsonl(target / "market" / venue / "timeline.jsonl", venue_rows)
     recorder_identity = _identity(_load(RECORDER_HEALTH, {}))
     source_status = {
         "binance": (True, "STRATEGY_AND_MARKET_TRUTH", "public_ws"),
@@ -1483,16 +1518,75 @@ def _publish(no_push=False):
         **_dict(recorder_health.get("connections")),
         **_dict(recorder_health.get("optional_connections")),
     }
-    for venue, (configured, role, connection_name) in source_status.items():
-        _write_json(target / "market" / venue / "status.json", {
+    manifest["sources"] = {
+        venue: {
             "recorded_at": _iso(now), "configured": configured, "role": role,
             "connection": connections.get(connection_name)
             if connection_name else None,
             **recorder_identity,
+        }
+        for venue, (configured, role, connection_name) in source_status.items()
+    }
+
+    current_date = datetime.fromtimestamp(now, timezone.utc).date()
+    retained_days = {
+        (current_date - timedelta(days=offset)).isoformat()
+        for offset in range(RETENTION_DAYS)
+    }
+    daily_root = target / "daily"
+    grouped = {day: [] for day in retained_days}
+    for path in daily_root.glob("*.jsonl"):
+        day = path.stem
+        if day not in retained_days:
+            path.unlink()
+            continue
+        grouped[day].extend(_load_jsonl(path))
+    for row in daily_records:
+        day = _utc_day(row.get("ts"))
+        if day in retained_days:
+            grouped[day].append(row)
+
+    day_manifests = []
+    for day in sorted(retained_days):
+        path = daily_root / (day + ".jsonl")
+        day_rows, bounds = _bounded_daily_rows(grouped.get(day, ()))
+        if not day_rows:
+            if path.exists():
+                path.unlink()
+            continue
+        _write_jsonl(path, day_rows)
+        encoded = path.read_bytes()
+        day_manifests.append({
+            "date": day,
+            "path": "telemetry/daily/%s.jsonl" % day,
+            "rows": len(day_rows),
+            "bytes": len(encoded),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            **bounds,
         })
 
+    manifest.update({
+        "schema_version": 3,
+        "telemetry_layout": "ONE_BOUNDED_JSONL_PER_UTC_DAY_V1",
+        "retention_days": RETENTION_DAYS,
+        "max_daily_file_bytes": MAX_DAILY_FILE_BYTES,
+        "max_record_bytes": MAX_DAILY_RECORD_BYTES,
+        "current_day_file": "telemetry/daily/%s.jsonl" % current_date,
+        "daily_files": day_manifests,
+        "raw_market_storage": {
+            "location": "VPS_ONLY",
+            "partition": "STREAM_UTC_HOUR",
+            "retention_hours": 120,
+            "git_upload": False,
+        },
+    })
+    _write_json(target / "manifest.json", manifest)
+
     if no_push:
-        print(json.dumps({"generated": str(target), "rows": len(rows), "push": False}))
+        print(json.dumps({
+            "generated": str(target), "rows": len(rows), "push": False,
+            "daily_files": len(day_manifests),
+        }))
         return
     # Rebuild the index from evidence only. This also migrates the original
     # polluted parentless telemetry snapshot without retaining source files.

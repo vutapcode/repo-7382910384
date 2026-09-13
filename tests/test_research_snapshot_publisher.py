@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -42,9 +43,11 @@ class ResearchPublisherTests(unittest.TestCase):
             subprocess.run(["git", "push", "origin", "telemetry"], cwd=seed,
                            check=True, stdout=subprocess.DEVNULL)
 
+            event_ts = time.time()
+            event_day = time.strftime("%Y-%m-%d", time.gmtime(event_ts))
             journal = root / "events.jsonl"
             journal.write_text(json.dumps({
-                "event": "DECISION_EVALUATED", "ts": 1000.0,
+                "event": "DECISION_EVALUATED", "ts": event_ts,
                 "run_id": "run-1", "runtime_commit": "d" * 40,
                 "code_version": "code", "config_version": "config",
                 "runtime_mode": "SHADOW", "source_branch": "main",
@@ -95,27 +98,54 @@ class ResearchPublisherTests(unittest.TestCase):
             self.assertTrue(tree)
             self.assertTrue(all(path.startswith("telemetry/") for path in tree))
             self.assertIn("telemetry/manifest.json", tree)
-            self.assertIn("telemetry/decisions/timeline.jsonl", tree)
-            self.assertIn("telemetry/runtime/heartbeat.jsonl", tree)
-            self.assertIn(
-                "telemetry/runs/run-1/decisions/events.jsonl", tree,
+            daily_path = f"telemetry/daily/{event_day}.jsonl"
+            self.assertIn(daily_path, tree)
+            self.assertEqual(
+                set(tree), {"telemetry/manifest.json", daily_path},
             )
-            self.assertIn(
-                "telemetry/runs/run-1/decisions/state_transitions.jsonl", tree,
+            daily_rows = publisher._load_jsonl(clone / daily_path)
+            self.assertTrue(any(
+                row.get("record_type") == "journal_event"
+                and row.get("event") == "DECISION_EVALUATED"
+                for row in daily_rows
+            ))
+            manifest = json.loads(
+                (clone / "telemetry" / "manifest.json").read_text()
             )
-            self.assertIn(
-                "telemetry/runs/run-1/decisions/blockers.jsonl", tree,
+            self.assertEqual(
+                manifest["telemetry_layout"],
+                "ONE_BOUNDED_JSONL_PER_UTC_DAY_V1",
             )
-            self.assertIn(
-                "telemetry/runs/run-1/market/evidence_slices.jsonl", tree,
-            )
-            self.assertIn(
-                "telemetry/runs/run-1/market/raw_archive.json", tree,
-            )
-            self.assertIn(
-                "telemetry/runs/run-1/market/raw_manifests.jsonl", tree,
-            )
+            self.assertEqual(manifest["retention_days"], 5)
             self.assertNotIn("main.py", tree)
+
+    def test_daily_file_is_hard_bounded_and_keeps_newest_records(self):
+        rows = [
+            {
+                "record_type": "decision", "event_id": f"event-{index}",
+                "ts": float(index), "payload": "x" * 900,
+            }
+            for index in range(20)
+        ]
+        bounded, stats = publisher._bounded_daily_rows(
+            rows, max_bytes=4_096, max_record_bytes=2_048,
+        )
+        encoded = b"".join(publisher._jsonl_bytes(row) for row in bounded)
+        self.assertLessEqual(len(encoded), 4_096)
+        self.assertGreater(stats["dropped_records"], 0)
+        self.assertEqual(bounded[0]["record_type"], "retention_notice")
+        self.assertEqual(bounded[-1]["event_id"], "event-19")
+
+    def test_oversize_record_becomes_hashed_identity_envelope(self):
+        row = {
+            "record_type": "decision", "event_id": "event-large",
+            "ts": 1.0, "run_id": "run-1", "payload": "x" * 10_000,
+        }
+        bounded = publisher._bounded_record(row, max_record_bytes=1_024)
+        self.assertTrue(bounded["payload_omitted"])
+        self.assertEqual(bounded["event_id"], "event-large")
+        self.assertEqual(len(bounded["payload_sha256"]), 64)
+        self.assertLessEqual(len(publisher._jsonl_bytes(bounded)), 1_024)
 
     def test_runtime_summary_separates_research_from_live_like(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -29,8 +29,8 @@ Environment=SMC_RECORDER_COINBASE_PRODUCT=BTC-USD
 Environment=SMC_RECORDER_OI_SECONDS=15
 Environment=SMC_RECORDER_OI_PRESSURE_SECONDS=5
 Environment=WSTRADE_BOT_HEALTH_PATH=/home/ubuntu/smc2026_data/health/bot_runtime.json
-# Keep the full 72-hour gate plus 12 hours within the measured disk budget.
-Environment=SMC_RECORDER_RETENTION_HOURS=84
+# Keep at most five UTC days of local raw replay evidence.
+Environment=SMC_RECORDER_RETENTION_HOURS=120
 Environment=WSTRADE_CPU_HEALTH_PATH=/home/ubuntu/smc2026_data/health/cpu_status.json
 Environment=SMC_JOURNAL_EVENTS_PATH=/home/ubuntu/.local/state/smc2026/mainnet_shadow/events.jsonl
 Environment=SMC_JOURNAL_CYCLES_PATH=/home/ubuntu/.local/state/smc2026/mainnet_shadow/cycles.json

@@ -290,11 +290,12 @@ def _partition_hour(path, base, suffix):
         return None
 
 
-def prune_expired_partitions(data_root, retention_hours=24, now=None):
+def prune_expired_partitions(data_root, retention_hours=120, now=None):
     """Delete recorder raw partitions outside a strict UTC retention window.
 
     A whole boundary hour is removed when its start precedes the exact cutoff.
-    This deliberately retains at most ``retention_hours`` (often 23-24 hours)
+    This deliberately retains at most ``retention_hours`` (120 hours in the
+    production/default five-day policy)
     instead of keeping a partial partition that contains records older than the
     configured limit. Derived research data, health, metadata and bot ROM are
     outside the two allowlisted roots and can never be touched here.

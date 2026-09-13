@@ -36,10 +36,10 @@ Recorder và dữ liệu/replay của nó **không có trading authority**. Auth
   được tính là executed flow
 
 WAL nằm ở `smc2026_data/raw/wal`; các giờ đã đóng được compact sang Parquet
-ZSTD tại `smc2026_data/raw/parquet`. Recorder giữ tối đa 24 giờ raw theo
+ZSTD tại `smc2026_data/raw/parquet`. Recorder giữ tối đa 120 giờ raw theo
 partition UTC và prune cả WAL lẫn Parquet lúc khởi động, sau đó mỗi 60 giây.
 Có thể đổi bằng `SMC_RECORDER_RETENTION_HOURS`, nhưng giá trị phải lớn hơn 0.
-Service production giữ 84 giờ: đủ cửa sổ kiểm định 72 giờ và 12 giờ dự phòng
+Service production giữ tối đa 120 giờ (5 ngày) raw replay evidence
 theo tốc độ ghi/ổ đĩa đã đo trên Lightsail hiện tại.
 Prune không chạm `derived/`, `health/`, `metadata/` hoặc ROM vị thế của bot.
 Health hiện tại: `smc2026_data/health/status.json`.
@@ -122,7 +122,7 @@ Replay tái dựng Wavefront từ raw records và trả thêm `wavefront`,
 `wavefront_generated_records`, `liquidity_response`. Kết quả không được tự
 promotion; báo cáo luôn chứa `manual_approval_required=true`.
 Thống kê promotion được checkpoint atomically theo `code_version/config_version`
-ở `derived/wavefront/`, nên gate 14 ngày không phụ thuộc retention raw 84 giờ.
+ở `derived/wavefront/`, nên gate 14 ngày không phụ thuộc retention raw 120 giờ.
 Nhánh ảo đang mở khi recorder restart luôn được đóng `valid=false` với lý do
 `RECORDER_RESTART_GAP`; không phục hồi hoặc nối causal state qua restart.
 

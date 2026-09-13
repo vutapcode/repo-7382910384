@@ -17,7 +17,7 @@ class RecorderConfig:
     # events remain append-only; only the crash-loss window changes by 1 sec.
     flush_interval: float = float(os.getenv('SMC_RECORDER_FLUSH_SECONDS', '2.0'))
     health_interval: float = float(os.getenv('SMC_RECORDER_HEALTH_SECONDS', '5'))
-    retention_hours: int = int(os.getenv('SMC_RECORDER_RETENTION_HOURS', '24'))
+    retention_hours: int = int(os.getenv('SMC_RECORDER_RETENTION_HOURS', '120'))
     retention_interval: float = float(
         os.getenv('SMC_RECORDER_RETENTION_SECONDS', '60')
     )
