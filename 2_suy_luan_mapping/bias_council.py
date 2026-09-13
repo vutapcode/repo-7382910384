@@ -35,7 +35,7 @@ import time
 
 cash_wave_observation = import_module("2_suy_luan_mapping.cash_wave_observation")
 
-VERSION = "BIAS_COUNCIL_V17_POSITION_RELATIVE_CASH_OBSERVER"
+VERSION = "BIAS_COUNCIL_V18_POSITION_THESIS_IDENTITY"
 CONTRACT = "DIRECTION_ONLY_NO_ENTRY_TIMING"
 FORECAST_SCOPE = "MEANINGFUL_DIRECTIONAL_REGIME_NOT_FIXED_TIME_TARGET"
 ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
@@ -429,6 +429,7 @@ def _segment_reports(current, buckets, now, threshold):
 def observe_cash_wave(
     state, now, previous_side, liquidity=(), *, _current=None,
     _buckets=None, _threshold=None, _segments=None,
+    position_identity=None, causal_lineage=None,
 ):
     """Observe cash control relative to one immutable prior owner.
 
@@ -509,6 +510,8 @@ def observe_cash_wave(
         if not (spot_fresh and cb_fresh):
             segments = []
 
+    identity = dict(position_identity or {})
+    lineage = dict(causal_lineage or {})
     result = cash_wave_observation.infer(
         list(segments or ()), previous_side=previous, liquidity=liquidity,
     )
@@ -516,6 +519,27 @@ def observe_cash_wave(
         **result,
         "observation_scope": "POSITION_RELATIVE_CASH_WAVE",
         "previous_side": previous,
+        "position_identity": {
+            "position_cycle_id": str(
+                identity.get("position_cycle_id") or ""
+            ) or None,
+            "market_wave_id": str(
+                identity.get("market_wave_id") or ""
+            ) or None,
+            "market_truth_hash": str(
+                identity.get("market_truth_hash") or ""
+            ) or None,
+            "entry_mechanism": str(
+                identity.get("entry_mechanism") or "UNKNOWN"
+            ).upper(),
+        },
+        "causal_lineage": lineage,
+        "identity_bound": bool(
+            identity.get("position_cycle_id")
+            and identity.get("market_wave_id")
+            and identity.get("market_truth_hash")
+            and lineage.get("entry_causal_wave_id")
+        ),
         "observed_at_ms": int(now * 1000.0),
         "source_health": {
             "spot": "FRESH" if spot_fresh else "UNKNOWN",

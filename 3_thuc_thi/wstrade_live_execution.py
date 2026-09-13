@@ -1031,10 +1031,15 @@ def _entry_causal_thesis(result):
         if primary not in anchors:
             primary = None
         return {
-            "version": "ENTRY_CAUSAL_THESIS_V3_FROZEN_ACTION_HANDOFF",
+            "version": "ENTRY_CAUSAL_THESIS_V4_POSITION_LINEAGE",
             "entry_thesis_handoff": handoff,
             "market_thesis": truth,
             "market_truth_hash": handoff.get("market_truth_hash"),
+            "market_wave_id": truth.get("market_wave_id"),
+            "entry_mechanism": truth.get("mechanism"),
+            "entry_cash_lineage": dict(
+                truth.get("entry_cash_lineage") or {}
+            ),
             "action_hash": handoff.get("action_hash"),
             "causal_episode_id": handoff.get("causal_episode_id"),
             "authority_basis": why.get("authority_basis"),

@@ -87,7 +87,7 @@ class Phase4GuardianReportTests(unittest.TestCase):
         self.assertEqual(
             first["determinism"]["recorded_observation_mismatches"], 0,
         )
-        self.assertEqual(first["status_counts"], {"DIVERGENCE": 1})
+        self.assertEqual(first["status_counts"], {"UNKNOWN": 1})
         self.assertEqual(
             first["decision_pairs"], {"HOLD->DETERIORATING": 1},
         )

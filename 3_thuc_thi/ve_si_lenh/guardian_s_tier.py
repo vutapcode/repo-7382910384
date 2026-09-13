@@ -7,7 +7,7 @@ from loi_he_thong import (
     market_thesis,
 )
 
-VERSION="GUARDIAN_S_TIER_V16_POSITION_CHALLENGE"
+VERSION="GUARDIAN_S_TIER_V17_POSITION_THESIS_LINEAGE"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -576,6 +576,21 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
         == "POSITION_RELATIVE_CASH_WAVE"
         and str(position_cash_wave.get("previous_side") or "").upper()
         == str(getattr(pos, "side", "") or "").upper()
+        and str(
+            (position_cash_wave.get("position_identity") or {}).get(
+                "position_cycle_id"
+            ) or ""
+        ) == str(getattr(pos, "position_cycle_id", "") or "")
+        and str(
+            (position_cash_wave.get("position_identity") or {}).get(
+                "market_wave_id"
+            ) or ""
+        ) == position_wave_id
+        and str(
+            (position_cash_wave.get("position_identity") or {}).get(
+                "market_truth_hash"
+            ) or ""
+        ) == str((truth or {}).get("contract_hash") or "")
         and not position_cash_wave.get("gap_or_epoch_invalid")
         and int(position_cash_wave.get("observed_at_ms", 0) or 0) > 0
         and 0 <= int(now * 1000.0)
@@ -602,8 +617,11 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
         else "NEUTRAL"
     )
     return truth, {
-        "version": "GUARDIAN_CANONICAL_OBSERVATION_V2_POSITION_CHALLENGE",
+        "version": "GUARDIAN_CANONICAL_OBSERVATION_V3_POSITION_LINEAGE",
         "causal_episode_id": episode_id or None,
+        "position_cycle_id": str(
+            getattr(pos, "position_cycle_id", "") or ""
+        ) or None,
         "position_side": str(getattr(pos, "side", "") or "").upper(),
         "source_health": {
             "spot": "FRESH" if spot_fresh else "UNKNOWN",
@@ -631,6 +649,13 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
         "cross_cash_wave": cash_wave_snapshot,
         "position_cash_wave": position_cash_wave,
         "position_market_wave_id": position_wave_id or None,
+        "position_market_truth_hash": (
+            (truth or {}).get("contract_hash")
+        ),
+        "entry_mechanism": (truth or {}).get("mechanism"),
+        "entry_cash_lineage": dict(
+            (truth or {}).get("entry_cash_lineage") or {}
+        ),
         "entry_epoch_changed": epoch_changed,
         "derivative_context": {
             "oi_regime": oi_regime if oi_fresh else "STALE_UNKNOWN",
@@ -1220,7 +1245,7 @@ def assess(state,pos,now=None):
         state,pos,now,s1,s2,s3
     )
     shared_thesis_observation=market_thesis.observe(
-        frozen_truth,canonical_thesis_event
+        frozen_truth,canonical_thesis_event,state=state
     )
     canonical_thesis_action=_canonical_thesis_action(
         shared_thesis_observation

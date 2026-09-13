@@ -10,8 +10,9 @@ never evidence that two roots are the same wave.
 import hashlib
 
 
-VERSION = "CROSS_CASH_CAUSAL_WAVE_V1"
+VERSION = "CROSS_CASH_CAUSAL_WAVE_V2_LINEAGE_TOMBSTONES"
 CASH = ("binance_spot", "coinbase_spot")
+MAX_WAVE_TOMBSTONES = 256
 MIN_PRICE_BPS = 0.15
 MAX_OBSERVATION_AGE_MS = 5_000
 MIN_QTY = {"binance_spot": 0.015, "coinbase_spot": 0.002}
@@ -230,6 +231,7 @@ def _event(name, wave, reason=None):
         "side": wave.get("side"),
         "state": wave.get("state"),
         "cash_roots": dict(wave.get("cash_roots") or {}),
+        "origin_cash_roots": dict(wave.get("origin_cash_roots") or {}),
         "venue_epochs": dict(wave.get("venue_epochs") or {}),
         "authority": False,
         "state_transition": {
@@ -245,6 +247,91 @@ def _event(name, wave, reason=None):
     if reason:
         payload["reason"] = reason
     return name, payload
+
+
+def _remember_termination(state, wave):
+    """Persist bounded, authority-free evidence for an exact dead wave."""
+    wave_id = str((wave or {}).get("causal_wave_id") or "")
+    if not wave_id:
+        return
+    rows = dict(
+        getattr(state, "_cross_cash_causal_wave_tombstones", {}) or {}
+    )
+    if wave_id not in rows and len(rows) >= MAX_WAVE_TOMBSTONES:
+        rows.pop(next(iter(rows)))
+    rows[wave_id] = {
+        "version": VERSION,
+        "causal_wave_id": wave_id,
+        "side": str((wave or {}).get("side") or "ABSTAIN").upper(),
+        "cash_roots": dict((wave or {}).get("cash_roots") or {}),
+        "origin_cash_roots": dict(
+            (wave or {}).get("origin_cash_roots") or {}
+        ),
+        "venue_epochs": dict((wave or {}).get("venue_epochs") or {}),
+        "terminated_at_ms": int(
+            (wave or {}).get("terminated_at_ms", 0) or 0
+        ),
+        "termination_reason": str(
+            (wave or {}).get("termination_reason") or "UNKNOWN"
+        ),
+        "termination_evidence": dict(
+            (wave or {}).get("termination_evidence") or {}
+        ),
+        "authority": False,
+    }
+    state._cross_cash_causal_wave_tombstones = rows
+
+
+def position_lineage(state, entry_lineage, snapshot=None):
+    """Describe continuity only; Market Thesis owns its interpretation."""
+    entry = dict(entry_lineage or {})
+    current_snapshot = dict(
+        snapshot or getattr(state, "cross_cash_causal_wave_shadow", {}) or {}
+    )
+    current = dict(current_snapshot.get("active_wave") or {})
+    entry_id = str(entry.get("causal_wave_id") or "")
+    entry_side = str(entry.get("side") or "ABSTAIN").upper()
+    current_id = str(current.get("causal_wave_id") or "")
+    current_side = str(current.get("side") or "ABSTAIN").upper()
+    terminal = dict(
+        (getattr(state, "_cross_cash_causal_wave_tombstones", {}) or {}).get(
+            entry_id, {}
+        )
+    )
+
+    if not entry_id or entry_side not in {"LONG", "SHORT"}:
+        relation = "ENTRY_LINEAGE_UNBOUND"
+    elif current_id == entry_id and current_side == entry_side:
+        relation = "SAME_CAUSAL_WAVE"
+    elif current_id and current_side == entry_side:
+        relation = "NEW_SAME_SIDE_WAVE"
+    elif current_id and current_side in {"LONG", "SHORT"}:
+        relation = "OPPOSING_WAVE"
+    elif terminal:
+        relation = "TERMINATED"
+    else:
+        relation = "UNOBSERVED"
+    return {
+        "version": "POSITION_CASH_LINEAGE_V1",
+        "entry_causal_wave_id": entry_id or None,
+        "entry_side": entry_side,
+        "entry_root_evidence_ids": dict(
+            entry.get("root_evidence_ids") or {}
+        ),
+        "entry_venue_epochs": dict(entry.get("venue_epochs") or {}),
+        "current_causal_wave_id": current_id or None,
+        "current_side": current_side,
+        "current_state": str(current.get("state") or "UNKNOWN").upper(),
+        "current_cash_roots": dict(current.get("cash_roots") or {}),
+        "lineage_relation": relation,
+        "incumbent_terminal": bool(terminal),
+        "terminal_evidence": terminal,
+        "observed_at_ms": int(
+            current_snapshot.get("observed_at_ms", 0) or 0
+        ),
+        "authority": False,
+        "can_falsify_market_thesis": False,
+    }
 
 
 def observe(state, histories, now_ms):
@@ -271,13 +358,40 @@ def observe(state, histories, now_ms):
         opposite_control = bool(
             side in {"LONG", "SHORT"} and side != active.get("side")
         )
-        nonconversion_reclaim = any(
-            str(row.get("side") or "") == str(active.get("side") or "")
+        nonconversion_reclaims = {
+            venue: dict(row) for venue, row in observations.items()
+            if str(row.get("side") or "") == str(active.get("side") or "")
             and str(row.get("state") or "") == "FLOW_NONCONVERSION"
             and bool(row.get("reclaimed_past_root"))
-            for row in observations.values()
+        }
+        pending_reclaims = dict(
+            active.get("pending_nonconversion_reclaims") or {}
         )
-        if epoch_break or opposite_control or nonconversion_reclaim:
+        prior_root_ids = {
+            str(row.get("root_evidence_id") or "")
+            for row in pending_reclaims.values()
+            if str(row.get("root_evidence_id") or "")
+        }
+        current_root_ids = {
+            str(row.get("root_evidence_id") or "")
+            for row in nonconversion_reclaims.values()
+            if str(row.get("root_evidence_id") or "")
+        }
+        confirmed_nonconversion = bool(
+            pending_reclaims
+            and current_root_ids
+            and current_root_ids - prior_root_ids
+        )
+        if nonconversion_reclaims and not confirmed_nonconversion:
+            # The first reclaim is a causal challenge, not terminal truth.
+            # It survives UNKNOWN observations, but exact dual-cash
+            # reassertion below clears it. A second distinct executed-flow
+            # root is evidence that the incumbent did not reassert.
+            active["pending_nonconversion_reclaims"] = {
+                **pending_reclaims, **nonconversion_reclaims,
+            }
+            active["state"] = "CONTROL_CHALLENGED"
+        if epoch_break or opposite_control or confirmed_nonconversion:
             reason = (
                 "VENUE_EPOCH_BREAK" if epoch_break else
                 "OPPOSITE_DUAL_CASH_CONTROL" if opposite_control else
@@ -287,8 +401,13 @@ def observe(state, histories, now_ms):
                 **active, "state": "FALSIFIED",
                 "terminated_at_ms": int(now_ms),
                 "termination_reason": reason,
+                "termination_evidence": (
+                    {**pending_reclaims, **nonconversion_reclaims}
+                    if reason == "FLOW_NONCONVERSION_WITH_RECLAIM" else {}
+                ),
                 "authority": False,
             }
+            _remember_termination(state, terminated)
             events.append(_event("CAUSAL_WAVE_TERMINATED", terminated, reason))
             active = {}
 
@@ -299,6 +418,9 @@ def observe(state, histories, now_ms):
         active.update({
             "state": "CONTROL_PERSISTING",
             "cash_roots": roots,
+            "origin_cash_roots": dict(
+                active.get("origin_cash_roots") or roots
+            ),
             "venue_epochs": {
                 venue: int(row.get("epoch", 0) or 0)
                 for venue, row in roots.items()
@@ -309,6 +431,10 @@ def observe(state, histories, now_ms):
                 "INTERVENING_CAUSAL_FALSIFIER"
             ),
         })
+        # A fresh dual-cash conversion by the exact active process answers the
+        # pending challenge. Side equality alone is not enough; both causal
+        # roots had to produce surviving conversion above.
+        active.pop("pending_nonconversion_reclaims", None)
         if old_roots != roots:
             events.append(_event("CAUSAL_WAVE_UPDATED", active))
     elif not active and side in {"LONG", "SHORT"}:
@@ -324,6 +450,7 @@ def observe(state, histories, now_ms):
             ),
             "last_observed_at_ms": int(now_ms),
             "cash_roots": roots,
+            "origin_cash_roots": roots,
             "venue_epochs": {
                 venue: int(row.get("epoch", 0) or 0)
                 for venue, row in roots.items()

@@ -45,7 +45,7 @@ os.environ["SMC_MAINNET_EXCLUSIVE_ACCOUNT"] = "false"
 
 import khoi_dong as app
 
-VERSION = "MAINNET_TIER_S_SHADOW_V4_POSITION_CHALLENGE"
+VERSION = "MAINNET_TIER_S_SHADOW_V5_POSITION_LINEAGE"
 ENTRY_POLL = 0.10
 BIAS_SCOUT = 0.25
 GUARD_POLL = 0.05
@@ -2277,6 +2277,45 @@ async def _bias_loop():
 def _refresh_post_entry_market_evidence(state, pos, now):
     """Keep causal cash-wave evidence alive while Entry evaluation is paused."""
     now = float(now)
+    entry = dict(getattr(pos, "entry_causal_thesis", {}) or {})
+    truth = dict(entry.get("market_thesis") or {})
+    if not authority_contracts.verify(truth):
+        truth = dict(
+            (entry.get("entry_thesis_handoff") or {}).get(
+                "market_thesis"
+            ) or {}
+        )
+    position_identity = {
+        "position_cycle_id": str(
+            getattr(pos, "position_cycle_id", "") or ""
+        ) or None,
+        "market_wave_id": str(
+            getattr(pos, "market_wave_id", "")
+            or truth.get("market_wave_id")
+            or getattr(pos, "causal_episode_id", "")
+            or ""
+        ) or None,
+        "market_truth_hash": str(
+            truth.get("contract_hash")
+            or entry.get("market_truth_hash")
+            or ""
+        ) or None,
+        "entry_mechanism": str(
+            truth.get("mechanism") or "UNKNOWN"
+        ).upper(),
+    }
+    identity_key = "|".join(str(position_identity.get(name) or "") for name in (
+        "position_cycle_id", "market_wave_id", "market_truth_hash",
+    ))
+    prior_key = str(
+        getattr(state, "post_entry_market_evidence_identity", "") or ""
+    )
+    if prior_key != identity_key:
+        # A new position, even on the same side inside ENTRY_POLL, cannot
+        # inherit the prior position's evidence or scheduler timestamp.
+        state.post_entry_position_cash_wave = {}
+        state.post_entry_market_evidence_updated_at = 0.0
+        state.post_entry_market_evidence_identity = identity_key
     last = float(
         getattr(state, "post_entry_market_evidence_updated_at", 0.0) or 0.0
     )
@@ -2288,12 +2327,16 @@ def _refresh_post_entry_market_evidence(state, pos, now):
     snapshot = cross_cash_causal_wave.observe(
         state, histories, int(now * 1000.0),
     )
+    causal_lineage = cross_cash_causal_wave.position_lineage(
+        state, truth.get("entry_cash_lineage") or {}, snapshot,
+    )
     # Ask the cash observer the position-relative question.  Current Bias may
     # already be neutral or opposite; it must not rewrite which old thesis is
     # being challenged.  L2 remains deliberately unpromoted in the hot path.
     position_cash_wave = bias_council.observe_cash_wave(
         state, now, previous_side=getattr(pos, "side", "ABSTAIN"),
-        liquidity=(),
+        liquidity=(), position_identity=position_identity,
+        causal_lineage=causal_lineage,
     )
     state.post_entry_position_cash_wave = json.loads(json.dumps(
         position_cash_wave, ensure_ascii=False, sort_keys=True,

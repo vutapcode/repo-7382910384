@@ -41,6 +41,17 @@ def converting(venue, start, *, side="LONG", epoch=1, base=100.0):
     ]
 
 
+def nonconverting(venue, start, *, side="LONG", epoch=1, base=100.0):
+    sign = 1.0 if side == "LONG" else -1.0
+    qty = 0.020 if venue == "binance_spot" else 0.004
+    return [
+        row(venue, start, base, side=side, epoch=epoch,
+            qty=qty, imbalance=0.70 * sign),
+        row(venue, start + 100, base - sign * 0.01, epoch=epoch),
+        row(venue, start + 200, base - sign * 0.02, epoch=epoch),
+    ]
+
+
 class CrossCashCausalWaveTests(unittest.TestCase):
     def test_flow_must_precede_and_price_response_must_hold(self):
         result = wave._venue_observation(
@@ -117,6 +128,38 @@ class CrossCashCausalWaveTests(unittest.TestCase):
         self.assertEqual(transition["state_after"], "FALSIFIED")
         self.assertNotEqual(second["causal_wave_id"], old_id)
         self.assertEqual(second["side"], "SHORT")
+        tombstone = state._cross_cash_causal_wave_tombstones[old_id]
+        self.assertEqual(
+            tombstone["termination_reason"], "OPPOSITE_DUAL_CASH_CONTROL",
+        )
+        lineage = wave.position_lineage(state, {
+            "causal_wave_id": old_id, "side": "LONG",
+        }, second)
+        self.assertTrue(lineage["incumbent_terminal"])
+        self.assertEqual(lineage["lineage_relation"], "OPPOSING_WAVE")
+
+    def test_new_same_side_wave_is_not_old_wave_continuity(self):
+        state = SimpleNamespace(
+            _cross_cash_causal_wave_tombstones={
+                "cash-wave-old": {
+                    "causal_wave_id": "cash-wave-old", "side": "LONG",
+                    "termination_reason": "FLOW_NONCONVERSION_WITH_RECLAIM",
+                    "authority": False,
+                },
+            },
+        )
+        snapshot = {
+            "observed_at_ms": 2_000,
+            "active_wave": {
+                "causal_wave_id": "cash-wave-new", "side": "LONG",
+                "state": "CONTROL_PERSISTING",
+            },
+        }
+        lineage = wave.position_lineage(state, {
+            "causal_wave_id": "cash-wave-old", "side": "LONG",
+        }, snapshot)
+        self.assertEqual(lineage["lineage_relation"], "NEW_SAME_SIDE_WAVE")
+        self.assertTrue(lineage["incumbent_terminal"])
 
     def test_epoch_break_terminates_and_never_stitches(self):
         state = SimpleNamespace()
@@ -146,6 +189,67 @@ class CrossCashCausalWaveTests(unittest.TestCase):
         later = wave.observe(state, histories, 8_000)
         self.assertEqual(later["causal_wave_id"], old_id)
         self.assertEqual(state._cross_cash_causal_wave_events, [])
+
+    def test_single_reclaim_is_challenge_and_distinct_reclaim_terminates(self):
+        state = SimpleNamespace()
+        initial = {
+            "binance_spot": converting("binance_spot", 1_000),
+            "coinbase_spot": converting("coinbase_spot", 1_100),
+        }
+        old_id = wave.observe(state, initial, 1_400)["causal_wave_id"]
+
+        challenged = {
+            "binance_spot": nonconverting("binance_spot", 1_500),
+            "coinbase_spot": initial["coinbase_spot"],
+        }
+        first = wave.observe(state, challenged, 1_800)
+        self.assertEqual(first["causal_wave_id"], old_id)
+        self.assertEqual(first["active_wave"]["state"], "CONTROL_CHALLENGED")
+        self.assertNotIn(
+            "CAUSAL_WAVE_TERMINATED",
+            [name for name, _ in state._cross_cash_causal_wave_events],
+        )
+
+        confirmed = {
+            "binance_spot": [
+                *challenged["binance_spot"],
+                *nonconverting("binance_spot", 1_900, base=99.98),
+            ],
+            "coinbase_spot": initial["coinbase_spot"],
+        }
+        wave.observe(state, confirmed, 2_200)
+        self.assertIn(old_id, state._cross_cash_causal_wave_tombstones)
+        self.assertEqual(
+            state._cross_cash_causal_wave_tombstones[old_id][
+                "termination_reason"
+            ],
+            "FLOW_NONCONVERSION_WITH_RECLAIM",
+        )
+
+    def test_exact_dual_cash_reassertion_clears_pending_reclaim(self):
+        state = SimpleNamespace()
+        initial = {
+            "binance_spot": converting("binance_spot", 1_000),
+            "coinbase_spot": converting("coinbase_spot", 1_100),
+        }
+        old_id = wave.observe(state, initial, 1_400)["causal_wave_id"]
+        wave.observe(state, {
+            "binance_spot": nonconverting("binance_spot", 1_500),
+            "coinbase_spot": initial["coinbase_spot"],
+        }, 1_800)
+
+        recovered = wave.observe(state, {
+            "binance_spot": converting("binance_spot", 1_900, base=99.98),
+            "coinbase_spot": converting("coinbase_spot", 1_950, base=99.98),
+        }, 2_250)
+        self.assertEqual(recovered["causal_wave_id"], old_id)
+        self.assertEqual(recovered["active_wave"]["state"], "CONTROL_PERSISTING")
+        self.assertNotIn(
+            "pending_nonconversion_reclaims", recovered["active_wave"],
+        )
+        self.assertNotIn(
+            old_id, getattr(state, "_cross_cash_causal_wave_tombstones", {}),
+        )
 
 
 if __name__ == "__main__":

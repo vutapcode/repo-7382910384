@@ -132,7 +132,7 @@ class Phase4EntryHandoffTests(unittest.TestCase):
             thesis = launcher.live_execution._entry_causal_thesis(result)
         self.assertEqual(
             thesis["version"],
-            "ENTRY_CAUSAL_THESIS_V3_FROZEN_ACTION_HANDOFF",
+            "ENTRY_CAUSAL_THESIS_V4_POSITION_LINEAGE",
         )
         self.assertEqual(thesis["primary_cash_anchor"], "coinbase")
         self.assertEqual(

@@ -60,7 +60,7 @@ class TierSKernelContractTests(unittest.TestCase):
         self.assertEqual(profile["mode"], "MAINNET_SHADOW")
         self.assertEqual(profile["market"], "BTCUSDT")
         self.assertIn(
-            "BIAS_COUNCIL_V17_POSITION_RELATIVE_CASH_OBSERVER",
+            "BIAS_COUNCIL_V18_POSITION_THESIS_IDENTITY",
             profile["architecture"],
         )
         self.assertIn(
@@ -78,6 +78,10 @@ class TierSKernelContractTests(unittest.TestCase):
         )
         self.assertIn("FUTURES_NEVER_SELF_OPENS", profile["invariants"])
         self.assertIn("NO_LEGACY_SMC_AUTHORITY", profile["invariants"])
+        self.assertIn(
+            "NEW_SAME_SIDE_WAVE_CANNOT_RESURRECT_DEAD_POSITION_THESIS",
+            profile["invariants"],
+        )
 
 
 if __name__ == "__main__":

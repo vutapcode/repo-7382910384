@@ -83,7 +83,7 @@ class SelectiveGuardianCutoverTests(unittest.TestCase):
                     _truth(side, episode),
                     _local_counterflow(side, episode),
                 )
-                self.assertEqual(observed["status"], "DIVERGENCE")
+                self.assertEqual(observed["status"], "UNKNOWN")
                 self.assertFalse(observed["old_thesis_falsified"])
 
                 risk = shadow_risk_guard.assess(
@@ -136,13 +136,57 @@ class SelectiveGuardianCutoverTests(unittest.TestCase):
         self.assertEqual(result, snapshot)
         self.assertEqual(state._cross_cash_causal_wave_events, [])
         self.assertEqual(state.post_entry_position_cash_wave, position_snapshot)
-        observe_position.assert_called_once_with(
-            state, 1.0, previous_side="SHORT", liquidity=(),
+        observe_position.assert_called_once()
+        call = observe_position.call_args
+        self.assertEqual(call.kwargs["previous_side"], "SHORT")
+        self.assertEqual(
+            call.kwargs["position_identity"]["position_cycle_id"],
+            "position-open",
+        )
+        self.assertEqual(
+            call.kwargs["causal_lineage"]["lineage_relation"],
+            "ENTRY_LINEAGE_UNBOUND",
         )
         append.assert_called_once()
         self.assertEqual(append.call_args.args[0], "CAUSAL_WAVE_OPENED")
         self.assertEqual(
             append.call_args.args[1]["cycle_id"], "position-open",
+        )
+
+    def test_new_position_identity_invalidates_entry_poll_cache(self):
+        truth_one = _truth("LONG", "episode-one")
+        truth_two = _truth("LONG", "episode-two")
+        state = SimpleNamespace(_cross_cash_causal_wave_events=[])
+        first = SimpleNamespace(
+            position_cycle_id="position-one", side="LONG",
+            causal_episode_id="episode-one", market_wave_id="episode-one",
+            entry_causal_thesis={"market_thesis": truth_one},
+        )
+        second = SimpleNamespace(
+            position_cycle_id="position-two", side="LONG",
+            causal_episode_id="episode-two", market_wave_id="episode-two",
+            entry_causal_thesis={"market_thesis": truth_two},
+        )
+        snapshot = {"observed_at_ms": 1_000, "active_wave": {}}
+
+        with patch.object(
+            launcher.ignition_signals, "snapshot", return_value={},
+        ), patch.object(
+            launcher.cross_cash_causal_wave, "observe", return_value=snapshot,
+        ) as observe, patch.object(
+            launcher.cross_cash_causal_wave, "position_lineage",
+            return_value={},
+        ), patch.object(
+            launcher.bias_council, "observe_cash_wave", return_value={},
+        ), patch.object(launcher, "_append_event"):
+            launcher._refresh_post_entry_market_evidence(state, first, 1.0)
+            launcher._refresh_post_entry_market_evidence(state, second, 1.01)
+
+        self.assertEqual(observe.call_count, 2)
+        self.assertTrue(
+            state.post_entry_market_evidence_identity.startswith(
+                "position-two|episode-two|"
+            )
         )
 
 
