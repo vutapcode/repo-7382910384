@@ -287,6 +287,10 @@ class MissTaxonomyTests(unittest.TestCase):
         self.assertNotIn(
             "BIAS_NOT_READY", snapshot["output"]["blocking_reasons"],
         )
+        self.assertEqual(
+            snapshot["taxonomy_version"],
+            "TIER_S_MISS_TAXONOMY_V8_PENDING_TRANSITION_OWNER",
+        )
 
     def test_accepted_bootstrap_shadow_trade_is_not_a_miss(self):
         result = {

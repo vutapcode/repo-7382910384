@@ -1190,7 +1190,9 @@ def _decision_snapshot(state, result, edge_report, quorum_ok, cycle_id, now, opp
         "strategy_authority": "IGNITION_CORE_V1",
         "strategy_code_version": getattr(state, "code_version", None),
         "strategy_config_version": getattr(state, "strategy_config_version", None),
-        "taxonomy_version": "TIER_S_MISS_TAXONOMY_V7_BOUNDARY_EVIDENCE",
+        "taxonomy_version": (
+            "TIER_S_MISS_TAXONOMY_V8_PENDING_TRANSITION_OWNER"
+        ),
         "threshold_registry_version": causal_threshold_registry.VERSION,
         "causal_episode_id": episode_id,
         "timing_attempt_id": (result or {}).get("timing_attempt_id"),
