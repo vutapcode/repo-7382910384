@@ -60,7 +60,7 @@ class TierSKernelContractTests(unittest.TestCase):
         self.assertEqual(profile["mode"], "MAINNET_SHADOW")
         self.assertEqual(profile["market"], "BTCUSDT")
         self.assertIn(
-            "BIAS_COUNCIL_V16_LULL_TOLERANT_ROLLING_ACQUISITION",
+            "BIAS_COUNCIL_V17_POSITION_RELATIVE_CASH_OBSERVER",
             profile["architecture"],
         )
         self.assertIn(

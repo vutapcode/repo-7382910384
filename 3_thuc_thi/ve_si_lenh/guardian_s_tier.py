@@ -2,9 +2,12 @@
 from collections import deque
 import time
 
-from loi_he_thong import authority_contracts, liquidation_context, market_thesis
+from loi_he_thong import (
+    authority_contracts, cross_cash_causal_wave, liquidation_context,
+    market_thesis,
+)
 
-VERSION="GUARDIAN_S_TIER_V15_CANONICAL_MARKET_TRUTH"
+VERSION="GUARDIAN_S_TIER_V16_POSITION_CHALLENGE"
 MIN_PRICE_BPS=1.50
 MAX_PRICE_BPS=3.00
 MIN_FLOW_IMB=0.20
@@ -565,8 +568,41 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
     acquisition_handoff = dict(
         getattr(state, "bias_acquisition_handoff", {}) or {}
     )
+    position_cash_wave = dict(
+        getattr(state, "post_entry_position_cash_wave", {}) or {}
+    )
+    position_cash_contiguous = bool(
+        position_cash_wave.get("observation_scope")
+        == "POSITION_RELATIVE_CASH_WAVE"
+        and str(position_cash_wave.get("previous_side") or "").upper()
+        == str(getattr(pos, "side", "") or "").upper()
+        and not position_cash_wave.get("gap_or_epoch_invalid")
+        and int(position_cash_wave.get("observed_at_ms", 0) or 0) > 0
+        and 0 <= int(now * 1000.0)
+            - int(position_cash_wave.get("observed_at_ms", 0) or 0)
+            <= cross_cash_causal_wave.MAX_OBSERVATION_AGE_MS
+    )
+    adverse_side = (
+        "SHORT" if str(getattr(pos, "side", "")).upper() == "LONG"
+        else "LONG"
+    )
+    liquidation = liquidation_context.snapshot(state, adverse_side, now)
+    oi_change = oi_metrics.get("oi_pct") if oi_fresh else None
+    try:
+        oi_change = float(oi_change) if oi_change is not None else None
+    except (TypeError, ValueError):
+        oi_change = None
+    oi_regime = (
+        "CONTRACTION"
+        if oi_change is not None and oi_change <= -MIN_OI_RISE_PCT
+        else "OPPOSITE_POSITION_BUILD"
+        if s3.get("status") == "ADVERSE"
+        else "POSITION_BUILD"
+        if s3.get("status") == "SUPPORTIVE"
+        else "NEUTRAL"
+    )
     return truth, {
-        "version": "GUARDIAN_CANONICAL_OBSERVATION_V1",
+        "version": "GUARDIAN_CANONICAL_OBSERVATION_V2_POSITION_CHALLENGE",
         "causal_episode_id": episode_id or None,
         "position_side": str(getattr(pos, "side", "") or "").upper(),
         "source_health": {
@@ -592,6 +628,19 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
             "observed_at_ms": cash_wave_snapshot.get("observed_at_ms"),
             "cash_roots": dict(active_cash_wave.get("cash_roots") or {}),
         },
+        "cross_cash_wave": cash_wave_snapshot,
+        "position_cash_wave": position_cash_wave,
+        "position_market_wave_id": position_wave_id or None,
+        "entry_epoch_changed": epoch_changed,
+        "derivative_context": {
+            "oi_regime": oi_regime if oi_fresh else "STALE_UNKNOWN",
+            "oi_change_pct": oi_change,
+            "liquidation_phase": str(
+                liquidation.get("phase") or "UNKNOWN"
+            ).upper(),
+            "authority": False,
+            "can_create_direction": False,
+        },
         "position_wave": {
             "causal_wave_id": position_wave_id or None,
             "status": "FALSIFIED" if position_falsifier else "UNKNOWN",
@@ -606,7 +655,11 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
         "gap_or_epoch_invalid": bool(
             getattr(state, "shadow_data_gap_active", False)
             or getattr(pos, "data_gap_seen", False)
-            or epoch_changed
+            # A reconnect invalidates segments crossing the epoch, not every
+            # future observation for the lifetime of the position.  Resume
+            # Market Truth only after the position-relative observer has
+            # rebuilt fresh, same-epoch causal segments.
+            or (epoch_changed and not position_cash_contiguous)
         ),
         "material_flow_imbalance": MIN_FLOW_IMB,
     }

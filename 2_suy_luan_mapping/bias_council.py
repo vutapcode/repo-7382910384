@@ -35,7 +35,7 @@ import time
 
 cash_wave_observation = import_module("2_suy_luan_mapping.cash_wave_observation")
 
-VERSION = "BIAS_COUNCIL_V16_LULL_TOLERANT_ROLLING_ACQUISITION"
+VERSION = "BIAS_COUNCIL_V17_POSITION_RELATIVE_CASH_OBSERVER"
 CONTRACT = "DIRECTION_ONLY_NO_ENTRY_TIMING"
 FORECAST_SCOPE = "MEANINGFUL_DIRECTIONAL_REGIME_NOT_FIXED_TIME_TARGET"
 ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
@@ -424,6 +424,111 @@ def _segment_reports(current, buckets, now, threshold):
         newer = older
         start_age = end_age
     return segments
+
+
+def observe_cash_wave(
+    state, now, previous_side, liquidity=(), *, _current=None,
+    _buckets=None, _threshold=None, _segments=None,
+):
+    """Observe cash control relative to one immutable prior owner.
+
+    This is an authority-free, read-only adapter.  In particular it never
+    updates Bias, acquisition state, or the shared price history.  Position
+    monitoring can therefore ask whether the side it actually owns still
+    controls cash even when the current Bias has already moved elsewhere.
+
+    The underscored inputs let :func:`evaluate` reuse its already prepared
+    snapshot and neutral-acquisition segments without creating a second
+    implementation of cash-wave inference.
+    """
+    now = float(now)
+    previous = str(previous_side or "ABSTAIN").upper()
+    spot_fresh = fresh(
+        getattr(state, "thoi_gian_tick_cuoi", 0.0), now, SPOT_AGE,
+    )
+    cb_ts = float(
+        getattr(state, "thoi_gian_coinbase_ticker_cuoi", 0.0) or 0.0
+    ) or float(getattr(state, "thoi_gian_coinbase_cuoi", 0.0) or 0.0)
+    cb_fresh = fresh(cb_ts, now, CB_AGE)
+
+    current = _current
+    if current is None:
+        spot = mid(
+            getattr(state, "best_bid", 0.0),
+            getattr(state, "best_ask", 0.0),
+        ) if spot_fresh else 0.0
+        coinbase = float(
+            getattr(state, "coinbase_price", 0.0) or 0.0
+        ) if cb_fresh else 0.0
+        futures, _ = fut_price(state, now)
+        macro_fresh = fresh(
+            getattr(state, "thoi_gian_vi_mo_cuoi", 0.0), now, OI_AGE,
+        )
+        current = {
+            "ts": now,
+            "spot": spot,
+            "coinbase": coinbase,
+            "futures": futures,
+            "oi": float(getattr(state, "open_interest", 0.0) or 0.0)
+            if macro_fresh else 0.0,
+            "cash_totals": _cash_totals(state),
+            "venue_epochs": {
+                "spot": int(getattr(state, "spot_flow_epoch", 0) or 0),
+                "coinbase": int(
+                    getattr(state, "coinbase_flow_epoch", 0) or 0
+                ),
+                "futures": int(
+                    getattr(state, "futures_flow_epoch", 0) or 0
+                ),
+            },
+        }
+
+    segments = _segments
+    if segments is None:
+        buckets = dict(_buckets or {})
+        if not buckets:
+            stored = getattr(state, "bias_price_buckets", None)
+            if isinstance(stored, dict):
+                buckets = {
+                    int(key): dict(value) for key, value in stored.items()
+                }
+            else:
+                for row in list(
+                    getattr(state, "bias_price_history", ()) or ()
+                ):
+                    try:
+                        buckets[int(float(row.get("ts", 0.0)))] = dict(row)
+                    except (AttributeError, TypeError, ValueError):
+                        continue
+        buckets[int(now)] = dict(current)
+        threshold = (
+            float(_threshold) if _threshold is not None
+            else thr(state, current.get("spot"))
+        )
+        segments = _segment_reports(current, buckets, now, threshold)
+        if not (spot_fresh and cb_fresh):
+            segments = []
+
+    result = cash_wave_observation.infer(
+        list(segments or ()), previous_side=previous, liquidity=liquidity,
+    )
+    return {
+        **result,
+        "observation_scope": "POSITION_RELATIVE_CASH_WAVE",
+        "previous_side": previous,
+        "observed_at_ms": int(now * 1000.0),
+        "source_health": {
+            "spot": "FRESH" if spot_fresh else "UNKNOWN",
+            "coinbase": "FRESH" if cb_fresh else "UNKNOWN",
+        },
+        "gap_or_epoch_invalid": bool(
+            not spot_fresh or not cb_fresh
+            or str(result.get("phase") or "") == "SOURCE_OR_EPOCH_UNKNOWN"
+        ),
+        "authority": False,
+        "entry_authority": False,
+        "action_authority": False,
+    }
 
 
 def _segment_between(newer, older, threshold):
@@ -948,13 +1053,13 @@ def evaluate(state, now=None, force_full=False):
     segments, acquisition_tracker = _neutral_acquisition_segments(
         state, current, segments, threshold, previous_wave_side,
     )
-    wave = cash_wave_observation.infer(
-        segments,
-        previous_side=previous_wave_side,
+    wave = observe_cash_wave(
+        state, now, previous_wave_side,
         # Live L2 is intentionally not promoted here. The observation owner can
         # consume execution-linked liquidity in matched replay without allowing
         # raw walls/cancels to create direction.
-        liquidity=(),
+        liquidity=(), _current=current, _buckets=buckets,
+        _threshold=threshold, _segments=segments,
     )
 
     slow = _reference(buckets, now - 60.0, 3.0)

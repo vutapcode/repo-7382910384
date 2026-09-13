@@ -15,7 +15,7 @@ from loi_he_thong import authority_contracts, cross_cash_causal_wave
 
 
 VERSION = "MARKET_THESIS_V4_CAUSAL_CONTROL_OWNERSHIP"
-OBSERVATION_VERSION = "MARKET_THESIS_OBSERVATION_V2"
+OBSERVATION_VERSION = "MARKET_THESIS_OBSERVATION_V3_POSITION_CHALLENGE"
 WAVE_LIFECYCLE_VERSION = "MARKET_TRUTH_WAVE_LIFECYCLE_V3_IDENTITY_SEPARATED"
 OWNER = "MARKET_THESIS"
 MAX_WAVE_TOMBSTONES = 256
@@ -445,6 +445,7 @@ def _observation_unknown(contract, reason, canonical=None):
         "version": OBSERVATION_VERSION,
         "status": "UNKNOWN",
         "reason": reason,
+        "challenge": "UNKNOWN",
         "causal_episode_id": contract.get("causal_episode_id"),
         "entry_market_truth_hash": contract.get("contract_hash"),
         "observation_hash": _stable_hash(canonical),
@@ -537,6 +538,15 @@ def observe(contract, observation):
             "epoch": raw_row.get("epoch"),
         }
     position_wave = dict(observation.get("position_wave") or {})
+    raw_position_cash = dict(
+        observation.get("position_cash_wave") or {}
+    )
+    raw_position_segments = [
+        dict(row or {})
+        for row in (raw_position_cash.get("segments") or ())[:3]
+    ]
+    raw_cross_cash = dict(observation.get("cross_cash_wave") or {})
+    derivative_context = dict(observation.get("derivative_context") or {})
     raw_ownership = dict(observation.get("control_ownership") or {})
     raw_handoff = dict(raw_ownership.get("acquisition_handoff") or {})
     sealed_handoff = dict(raw_handoff.get("sealed_payload") or {})
@@ -574,6 +584,77 @@ def observe(contract, observation):
             ) or None,
             "status": _u(position_wave.get("status")),
             "falsifier": str(position_wave.get("falsifier") or "") or None,
+        },
+        "position_cash_wave": {
+            "version": str(raw_position_cash.get("version") or "UNKNOWN"),
+            "observation_scope": str(
+                raw_position_cash.get("observation_scope") or ""
+            ) or None,
+            "previous_side": _u(
+                raw_position_cash.get("previous_side"), "ABSTAIN",
+            ),
+            "raw_side": _u(
+                raw_position_cash.get("raw_side"), "ABSTAIN",
+            ),
+            "candidate_side": _u(
+                raw_position_cash.get("candidate_side"), "ABSTAIN",
+            ),
+            "wave_state": _u(raw_position_cash.get("wave_state")),
+            "phase": _u(raw_position_cash.get("phase")),
+            "control_transfer_confirmed": bool(
+                raw_position_cash.get("control_transfer_confirmed")
+            ),
+            "old_side_still_converts": bool(
+                raw_position_cash.get("old_side_still_converts")
+            ),
+            "old_side_failure_evidence": bool(
+                raw_position_cash.get("old_side_failure_evidence")
+            ),
+            "old_side_still_viable": bool(
+                raw_position_cash.get("old_side_still_viable")
+            ),
+            "liquidity_state": _u(
+                raw_position_cash.get("liquidity_state")
+            ),
+            "observed_at_ms": int(_number(
+                raw_position_cash.get("observed_at_ms"), 0.0,
+            )),
+            "gap_or_epoch_invalid": bool(
+                raw_position_cash.get("gap_or_epoch_invalid")
+            ),
+            "segments": [{
+                "state": _u(row.get("state")),
+                "side": _u(row.get("side"), "ABSTAIN"),
+                "price_side": _u(row.get("price_side"), "ABSTAIN"),
+                "flow_side": _u(row.get("flow_side"), "ABSTAIN"),
+                "newer_ts": row.get("newer_ts"),
+                "older_ts": row.get("older_ts"),
+            } for row in raw_position_segments],
+            "authority": False,
+        },
+        "cross_cash_wave": {
+            "version": str(raw_cross_cash.get("version") or "UNKNOWN"),
+            "state": _u(raw_cross_cash.get("state")),
+            "side": _u(raw_cross_cash.get("side"), "ABSTAIN"),
+            "causal_wave_id": str(
+                raw_cross_cash.get("causal_wave_id") or ""
+            ) or None,
+            "observed_at_ms": int(_number(
+                raw_cross_cash.get("observed_at_ms"), 0.0,
+            )),
+            "authority": False,
+        },
+        "position_market_wave_id": str(
+            observation.get("position_market_wave_id") or ""
+        ) or None,
+        "derivative_context": {
+            "oi_regime": _u(derivative_context.get("oi_regime")),
+            "oi_change_pct": derivative_context.get("oi_change_pct"),
+            "liquidation_phase": _u(
+                derivative_context.get("liquidation_phase")
+            ),
+            "authority": False,
+            "can_create_direction": False,
         },
         "control_ownership": {
             "current_bias_side": _u(
@@ -624,6 +705,23 @@ def observe(contract, observation):
     if canonical["gap_or_epoch_invalid"]:
         return _observation_unknown(
             contract, "THESIS_OBSERVATION_DISCONTINUITY", canonical,
+        )
+    position_cash = canonical["position_cash_wave"]
+    if (
+        position_cash.get("observation_scope")
+        == "POSITION_RELATIVE_CASH_WAVE"
+        and position_cash.get("gap_or_epoch_invalid")
+    ):
+        return _observation_unknown(
+            contract, "POSITION_CASH_WAVE_DISCONTINUITY", canonical,
+        )
+    if (
+        position_cash.get("observation_scope")
+        == "POSITION_RELATIVE_CASH_WAVE"
+        and position_cash.get("previous_side") != side
+    ):
+        return _observation_unknown(
+            contract, "POSITION_CASH_WAVE_IDENTITY_MISMATCH", canonical,
         )
     if not anchors or any(
         source_health.get(anchor) != "FRESH" for anchor in anchors
@@ -770,7 +868,27 @@ def observe(contract, observation):
             name in dict(sealed.get("venue_epochs") or {})
             for name in ("spot", "coinbase")
         )
-        and ownership.get("current_bias_side") == handoff_side
+    )
+    position_wave_age_ms = (
+        canonical["observed_at_ms"]
+        - int(position_cash.get("observed_at_ms", 0) or 0)
+    )
+    position_relative_current = bool(
+        position_cash.get("observation_scope")
+        == "POSITION_RELATIVE_CASH_WAVE"
+        and position_cash.get("previous_side") == side
+        and position_cash.get("observed_at_ms", 0) > 0
+        and 0 <= position_wave_age_ms
+            <= cross_cash_causal_wave.MAX_OBSERVATION_AGE_MS
+    )
+    position_takeover_proven = bool(
+        position_relative_current
+        and position_cash.get("wave_state") == "CONTROL_TRANSFER"
+        and position_cash.get("control_transfer_confirmed")
+        and position_cash.get("candidate_side") in {"LONG", "SHORT"}
+        and position_cash.get("candidate_side") != side
+        and position_cash.get("old_side_failure_evidence")
+        and not position_cash.get("old_side_still_converts")
     )
     opposing_control_proven = bool(
         wave_current
@@ -782,6 +900,7 @@ def observe(contract, observation):
         and roots_prove_control
         and ownership_handoff_valid
         and handoff_side == cash_wave.get("side")
+        and position_takeover_proven
     )
     frozen_wave = canonical["position_wave"]
     frozen_wave_falsified = bool(
@@ -804,6 +923,52 @@ def observe(contract, observation):
         if name in set(contract.get("falsifiers") or ())
     ]
 
+    position_wave_state = str(
+        position_cash.get("wave_state") or "UNKNOWN"
+    ).upper()
+    cross_wave_state = str(
+        canonical["cross_cash_wave"].get("state") or "UNKNOWN"
+    ).upper()
+    derivative = canonical["derivative_context"]
+    oi_contraction = derivative.get("oi_regime") in {
+        "CONTRACTION", "CONTRACTING", "UNWIND",
+        "PRICE_UP_OI_CONTRACTION", "PRICE_DOWN_OI_CONTRACTION",
+    }
+    latest_position_segment = next(iter(
+        position_cash.get("segments") or ()
+    ), {})
+
+    challenge = "UNCLASSIFIED"
+    if frozen_wave_falsified:
+        challenge = "OLD_THESIS_CAUSALLY_DEAD"
+    elif opposing_control_proven:
+        challenge = "TAKEOVER_PROVEN"
+    elif position_relative_current:
+        if position_wave_state == "CONTROLLED":
+            challenge = "RECOVERED"
+        elif position_wave_state == "FAKEOUT_ABSORBED":
+            challenge = "FAKEOUT_ABSORBED"
+        elif position_wave_state in {"CONTROL_ERODING", "ABSORPTION"}:
+            challenge = "OLD_CONTROL_ERODING"
+        elif position_wave_state == "TRANSITION":
+            challenge = "UNPROVEN_TRANSITION"
+        elif position_wave_state == "CONTROL_TRANSFER":
+            # Position-relative transfer without the independent cross-cash
+            # ownership proof is only a transition candidate.
+            challenge = "UNPROVEN_TRANSITION"
+        elif position_wave_state == "PULLBACK":
+            if cross_wave_state == "PRICE_LED_CHASE" or (
+                latest_position_segment.get("state")
+                == "PRICE_ACCEPTED_FLOW_UNRESOLVED"
+            ):
+                challenge = "PRICE_LED_CHASE"
+            elif oi_contraction and not opposing_control_proven:
+                challenge = "SQUEEZE_ONLY"
+            else:
+                challenge = "PULLBACK"
+        elif position_wave_state == "LULL":
+            challenge = "PULLBACK"
+
     if opposing_control_proven:
         status = "CONTROL_TRANSFER"
         reason = "DISTINCT_OPPOSING_CASH_WAVE_OWNS_CONTROL"
@@ -812,6 +977,23 @@ def observe(contract, observation):
         status = "FALSIFY"
         reason = "FROZEN_MARKET_WAVE_CAUSALLY_FALSIFIED"
         falsified = True
+    elif position_relative_current and challenge in {
+        "RECOVERED", "FAKEOUT_ABSORBED",
+    }:
+        status = "SUPPORT"
+        reason = (
+            "POSITION_CASH_CONTROL_RECOVERED"
+            if challenge == "RECOVERED"
+            else "OPPOSITE_CASH_ATTACK_ABSORBED"
+        )
+        falsified = False
+    elif position_relative_current and challenge in {
+        "PULLBACK", "PRICE_LED_CHASE", "SQUEEZE_ONLY",
+        "OLD_CONTROL_ERODING", "UNPROVEN_TRANSITION",
+    }:
+        status = "DIVERGENCE"
+        reason = "POSITION_CHALLENGE_%s" % challenge
+        falsified = False
     elif adverse_cash_price or adverse_cash_flow or opposite_oi_build:
         status = "DIVERGENCE"
         reason = "ADVERSE_EVIDENCE_INCOMPLETE_OR_CONFLICTED"
@@ -835,6 +1017,7 @@ def observe(contract, observation):
         "observation_hash": _stable_hash(canonical),
         "observed_falsifiers": falsifiers,
         "old_thesis_falsified": falsified,
+        "challenge": challenge,
         "primary_cash_anchor": primary or None,
         "cash_anchors": anchors,
         "evidence": {
@@ -857,6 +1040,11 @@ def observe(contract, observation):
             "control_ownership": ownership,
             "control_ownership_handoff_valid": ownership_handoff_valid,
             "opposing_cash_control_proven": opposing_control_proven,
+            "position_cash_wave": position_cash,
+            "position_cash_wave_current": position_relative_current,
+            "position_takeover_proven": position_takeover_proven,
+            "cross_cash_wave": canonical["cross_cash_wave"],
+            "derivative_context": derivative,
             "position_wave": frozen_wave,
             "position_wave_falsified": frozen_wave_falsified,
             "snapshot_deterioration_can_falsify_alone": False,

@@ -75,7 +75,10 @@ def _observation(*, spot=-2.0, coinbase=-2.0, futures=-2.0,
                  spot_flow=-0.4, coinbase_flow=-0.4,
                  futures_flow=-0.4, oi="NEUTRAL", source="FRESH",
                  cash_wave_side=None, wave_age_ms=0,
-                 control_handoff_side=None):
+                 control_handoff_side=None, position_cash_state=None,
+                 position_candidate="SHORT", old_side_failure=False,
+                 old_side_still_converts=False, cross_state="UNKNOWN",
+                 oi_regime="NEUTRAL", liquidation_phase="UNKNOWN"):
     moves = {"spot": spot, "coinbase": coinbase, "futures": futures}
     result = {
         "version": "GUARDIAN_CANONICAL_OBSERVATION_V1",
@@ -98,7 +101,39 @@ def _observation(*, spot=-2.0, coinbase=-2.0, futures=-2.0,
         "oi": {"status": oi, "fresh": True},
         "gap_or_epoch_invalid": False,
         "observed_at_ms": 10_000,
+        "cross_cash_wave": {
+            "version": "CROSS_CASH_CAUSAL_WAVE_V1",
+            "state": cross_state,
+            "observed_at_ms": 10_000,
+            "authority": False,
+        },
+        "derivative_context": {
+            "oi_regime": oi_regime,
+            "liquidation_phase": liquidation_phase,
+            "authority": False,
+        },
     }
+    if position_cash_state:
+        result["position_cash_wave"] = {
+            "version": "CASH_WAVE_OBSERVATION_V3_POSITION_CHALLENGE",
+            "observation_scope": "POSITION_RELATIVE_CASH_WAVE",
+            "previous_side": "LONG",
+            "raw_side": (
+                position_candidate
+                if position_cash_state == "CONTROL_TRANSFER" else "LONG"
+            ),
+            "candidate_side": position_candidate,
+            "wave_state": position_cash_state,
+            "phase": position_cash_state,
+            "control_transfer_confirmed": (
+                position_cash_state == "CONTROL_TRANSFER"
+            ),
+            "old_side_failure_evidence": old_side_failure,
+            "old_side_still_converts": old_side_still_converts,
+            "observed_at_ms": 10_000,
+            "gap_or_epoch_invalid": False,
+            "authority": False,
+        }
     if cash_wave_side:
         result["cash_control_wave"] = {
             "version": "CROSS_CASH_CAUSAL_WAVE_V1",
@@ -150,11 +185,76 @@ class SharedThesisObservationTests(unittest.TestCase):
         result = market_thesis.observe(
             self.truth, _observation(
                 cash_wave_side="SHORT", control_handoff_side="SHORT",
+                position_cash_state="CONTROL_TRANSFER",
+                old_side_failure=True,
             ),
         )
         self.assertEqual(result["status"], "CONTROL_TRANSFER")
         self.assertTrue(result["old_thesis_falsified"])
         self.assertIn("OPPOSITE_DUAL_CASH_CONTROL", result["observed_falsifiers"])
+
+    def test_opposing_owner_without_position_failure_is_unproven_transition(self):
+        result = market_thesis.observe(
+            self.truth, _observation(
+                cash_wave_side="SHORT", control_handoff_side="SHORT",
+                position_cash_state="CONTROL_TRANSFER",
+                old_side_failure=False,
+            ),
+        )
+        self.assertEqual(result["status"], "DIVERGENCE")
+        self.assertEqual(result["challenge"], "UNPROVEN_TRANSITION")
+        self.assertFalse(result["old_thesis_falsified"])
+
+    def test_old_side_still_converting_blocks_takeover(self):
+        result = market_thesis.observe(
+            self.truth, _observation(
+                cash_wave_side="SHORT", control_handoff_side="SHORT",
+                position_cash_state="CONTROL_TRANSFER",
+                old_side_failure=True, old_side_still_converts=True,
+            ),
+        )
+        self.assertEqual(result["status"], "DIVERGENCE")
+        self.assertEqual(result["challenge"], "UNPROVEN_TRANSITION")
+        self.assertFalse(result["old_thesis_falsified"])
+
+    def test_mutable_current_bias_does_not_duplicate_sealed_takeover_proof(self):
+        row = _observation(
+            cash_wave_side="SHORT", control_handoff_side="SHORT",
+            position_cash_state="CONTROL_TRANSFER",
+            old_side_failure=True,
+        )
+        row["control_ownership"]["current_bias_side"] = "ABSTAIN"
+        result = market_thesis.observe(self.truth, row)
+        self.assertEqual(result["status"], "CONTROL_TRANSFER")
+        self.assertEqual(result["challenge"], "TAKEOVER_PROVEN")
+
+    def test_position_challenge_taxonomy_does_not_invent_exit(self):
+        cases = (
+            ("PULLBACK", {}, "PULLBACK", "DIVERGENCE"),
+            (
+                "PULLBACK", {"cross_state": "PRICE_LED_CHASE"},
+                "PRICE_LED_CHASE", "DIVERGENCE",
+            ),
+            (
+                "PULLBACK", {"oi_regime": "CONTRACTION"},
+                "SQUEEZE_ONLY", "DIVERGENCE",
+            ),
+            ("CONTROL_ERODING", {}, "OLD_CONTROL_ERODING", "DIVERGENCE"),
+            ("TRANSITION", {}, "UNPROVEN_TRANSITION", "DIVERGENCE"),
+            ("CONTROLLED", {}, "RECOVERED", "SUPPORT"),
+            ("FAKEOUT_ABSORBED", {}, "FAKEOUT_ABSORBED", "SUPPORT"),
+        )
+        for wave_state, extra, challenge, status in cases:
+            with self.subTest(wave_state=wave_state, challenge=challenge):
+                result = market_thesis.observe(
+                    self.truth,
+                    _observation(
+                        position_cash_state=wave_state, **extra,
+                    ),
+                )
+                self.assertEqual(result["challenge"], challenge)
+                self.assertEqual(result["status"], status)
+                self.assertFalse(result["old_thesis_falsified"])
 
     def test_stale_opposing_wave_cannot_transfer_control(self):
         result = market_thesis.observe(
@@ -279,6 +379,7 @@ class SharedThesisObservationTests(unittest.TestCase):
         neutral = guardian._vote("NEUTRAL", 0.0, "TEST_NEUTRAL")
         terminal_event = _observation(
             cash_wave_side="SHORT", control_handoff_side="SHORT",
+            position_cash_state="CONTROL_TRANSFER", old_side_failure=True,
         )
         with patch.object(
             guardian, "_s1", return_value=neutral,
@@ -411,6 +512,31 @@ class SharedThesisObservationTests(unittest.TestCase):
         self.assertEqual(event["causal_episode_id"], "episode-shared-1")
         self.assertEqual(observed["status"], "SUPPORT")
 
+        # A historical entry epoch mismatch remains visible, but cannot poison
+        # the position forever after fresh same-epoch segments are rebuilt.
+        state.spot_flow_epoch = 9
+        state.post_entry_position_cash_wave = {
+            "version": "CASH_WAVE_OBSERVATION_V3_POSITION_CHALLENGE",
+            "observation_scope": "POSITION_RELATIVE_CASH_WAVE",
+            "previous_side": "LONG", "raw_side": "LONG",
+            "candidate_side": "ABSTAIN", "wave_state": "CONTROLLED",
+            "phase": "ESTABLISHED_TREND",
+            "control_transfer_confirmed": False,
+            "observed_at_ms": 100_000,
+            "gap_or_epoch_invalid": False,
+            "authority": False,
+        }
+        _, recovered_event = guardian._canonical_thesis_observation(
+            state, position, 100.0, s1, s2, s3,
+        )
+        self.assertTrue(recovered_event["entry_epoch_changed"])
+        self.assertFalse(recovered_event["gap_or_epoch_invalid"])
+        state.post_entry_position_cash_wave["gap_or_epoch_invalid"] = True
+        _, interrupted_event = guardian._canonical_thesis_observation(
+            state, position, 100.0, s1, s2, s3,
+        )
+        self.assertTrue(interrupted_event["gap_or_epoch_invalid"])
+
         state.cross_cash_causal_wave_shadow = {
             "version": "CROSS_CASH_CAUSAL_WAVE_V1",
             "observed_at_ms": 100_000,
@@ -429,6 +555,20 @@ class SharedThesisObservationTests(unittest.TestCase):
         }
         state.bias_state = "SHORT"
         state.bias_acquisition_handoff = _control_handoff("SHORT")
+        state.post_entry_position_cash_wave = {
+            "version": "CASH_WAVE_OBSERVATION_V3_POSITION_CHALLENGE",
+            "observation_scope": "POSITION_RELATIVE_CASH_WAVE",
+            "previous_side": "LONG",
+            "raw_side": "SHORT", "candidate_side": "SHORT",
+            "wave_state": "CONTROL_TRANSFER",
+            "phase": "REVERSAL_CANDIDATE",
+            "control_transfer_confirmed": True,
+            "old_side_failure_evidence": True,
+            "old_side_still_converts": False,
+            "observed_at_ms": 100_000,
+            "gap_or_epoch_invalid": False,
+            "authority": False,
+        }
         _, transfer_event = guardian._canonical_thesis_observation(
             state, position, 100.0, s1, s2, s3,
         )

@@ -77,6 +77,26 @@ class CashWaveObservationTests(unittest.TestCase):
         self.assertEqual(result["raw_side"], "LONG")
         self.assertFalse(result["control_transfer_confirmed"])
 
+    def test_opposite_executed_flow_without_conversion_is_pullback(self):
+        result = wave.infer([
+            _segment(0, 15, "ABSTAIN", "SHORT"),
+            _segment(15, 60, "LONG", "LONG"),
+        ], previous_side="LONG")
+        self.assertEqual(result["wave_state"], "PULLBACK")
+        self.assertEqual(result["phase"], "OPPOSITE_FLOW_NONCONVERSION")
+        self.assertTrue(result["old_side_still_viable"])
+
+    def test_only_execution_linked_absorption_labels_opposite_fakeout(self):
+        result = wave.infer([
+            _segment(0, 15, "ABSTAIN", "SHORT"),
+            _segment(15, 60, "LONG", "LONG"),
+        ], previous_side="LONG", liquidity=[
+            {"side": "SHORT", "state": "REFILLING"},
+        ])
+        self.assertEqual(result["wave_state"], "FAKEOUT_ABSORBED")
+        self.assertEqual(result["liquidity_state"], "REFILLING")
+        self.assertFalse(result["control_transfer_confirmed"])
+
     def test_recent_opposite_dual_cash_conversion_can_transfer_without_waiting_for_old_180s_lens(self):
         result = wave.infer([
             _segment(0, 15, "SHORT", "SHORT"),
@@ -86,6 +106,7 @@ class CashWaveObservationTests(unittest.TestCase):
         self.assertEqual(result["wave_state"], "CONTROL_TRANSFER")
         self.assertEqual(result["raw_side"], "SHORT")
         self.assertTrue(result["control_transfer_confirmed"])
+        self.assertFalse(result["old_side_failure_evidence"])
 
     def test_opposite_conversion_plus_neutral_previous_cannot_transfer(self):
         result = wave.infer([
@@ -116,6 +137,7 @@ class CashWaveObservationTests(unittest.TestCase):
         self.assertEqual(result["wave_state"], "CONTROL_TRANSFER")
         self.assertEqual(result["raw_side"], "SHORT")
         self.assertTrue(result["control_transfer_confirmed"])
+        self.assertTrue(result["old_side_failure_evidence"])
 
     def test_old_side_still_converting_blocks_opposite_transfer(self):
         result = wave.infer([
@@ -125,6 +147,7 @@ class CashWaveObservationTests(unittest.TestCase):
         self.assertEqual(result["wave_state"], "TRANSITION")
         self.assertEqual(result["raw_side"], "ABSTAIN")
         self.assertFalse(result["control_transfer_confirmed"])
+        self.assertTrue(result["old_side_still_converts"])
 
     def test_flow_price_conflict_releases_direction(self):
         result = wave.infer([

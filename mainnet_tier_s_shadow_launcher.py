@@ -45,7 +45,7 @@ os.environ["SMC_MAINNET_EXCLUSIVE_ACCOUNT"] = "false"
 
 import khoi_dong as app
 
-VERSION = "MAINNET_TIER_S_SHADOW_V3_ADAPTIVE_DEMO_CPU"
+VERSION = "MAINNET_TIER_S_SHADOW_V4_POSITION_CHALLENGE"
 ENTRY_POLL = 0.10
 BIAS_SCOUT = 0.25
 GUARD_POLL = 0.05
@@ -2288,6 +2288,16 @@ def _refresh_post_entry_market_evidence(state, pos, now):
     snapshot = cross_cash_causal_wave.observe(
         state, histories, int(now * 1000.0),
     )
+    # Ask the cash observer the position-relative question.  Current Bias may
+    # already be neutral or opposite; it must not rewrite which old thesis is
+    # being challenged.  L2 remains deliberately unpromoted in the hot path.
+    position_cash_wave = bias_council.observe_cash_wave(
+        state, now, previous_side=getattr(pos, "side", "ABSTAIN"),
+        liquidity=(),
+    )
+    state.post_entry_position_cash_wave = json.loads(json.dumps(
+        position_cash_wave, ensure_ascii=False, sort_keys=True,
+    ))
     state.post_entry_market_evidence_updated_at = now
     for wave_event, wave_payload in tuple(
         getattr(state, "_cross_cash_causal_wave_events", ()) or ()

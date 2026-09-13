@@ -9,7 +9,7 @@ by dual-cash executed flow and the price response that flow actually achieved,
 not by a fixed elapsed window or a static volume/price profile.
 """
 
-VERSION = "CASH_WAVE_OBSERVATION_V2_PROVENANCE"
+VERSION = "CASH_WAVE_OBSERVATION_V3_POSITION_CHALLENGE"
 AUTHORITY = False
 VALID_SIDES = frozenset(("LONG", "SHORT"))
 
@@ -181,6 +181,11 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
                     "candidate_side": latest_side, "control_transfer_confirmed": True,
                     "meaningful_for_action": True,
                     "falsifier": "OLD_SIDE_NO_LONGER_CONVERTS",
+                    "old_side_still_converts": old_still_converts,
+                    # Two new-side conversion segments prove persistence of
+                    # the challenger, but do not retroactively manufacture an
+                    # observed failure of the old owner.
+                    "old_side_failure_evidence": old_failure_seen,
                     "segments": observations,
                 }
             return {
@@ -190,6 +195,8 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
                 "candidate_side": latest_side, "control_transfer_confirmed": False,
                 "meaningful_for_action": False,
                 "falsifier": "OLD_SIDE_FAILURE_NOT_OBSERVED",
+                "old_side_still_converts": old_still_converts,
+                "old_side_failure_evidence": old_failure_seen,
                 "segments": observations,
             }
 
@@ -211,6 +218,35 @@ def infer(segments, previous_side="ABSTAIN", liquidity=()):
                 "meaningful_for_action": False,
                 "falsifier": "EXECUTED_FLOW_ABSORBED" if absorbed else None,
                 "old_side_failure_evidence": True,
+                "liquidity_state": liquidity_state,
+                "segments": observations,
+            }
+
+        if (
+            latest["flow_side"] in VALID_SIDES
+            and latest["flow_side"] != previous
+            and latest_state == "FLOW_NONCONVERSION"
+        ):
+            liquidity_state = _liquidity_state(
+                liquidity, latest["flow_side"],
+            )
+            absorbed = liquidity_state in {"ABSORBED", "REFILLING"}
+            return {
+                "version": VERSION, "authority": False,
+                "raw_side": previous,
+                "wave_state": (
+                    "FAKEOUT_ABSORBED" if absorbed else "PULLBACK"
+                ),
+                "phase": (
+                    "OPPOSITE_FLOW_ABSORBED"
+                    if absorbed else "OPPOSITE_FLOW_NONCONVERSION"
+                ),
+                "context_side": previous,
+                "candidate_side": latest["flow_side"],
+                "control_transfer_confirmed": False,
+                "meaningful_for_action": True,
+                "falsifier": None,
+                "old_side_still_viable": True,
                 "liquidity_state": liquidity_state,
                 "segments": observations,
             }

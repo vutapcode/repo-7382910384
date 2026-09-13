@@ -96,10 +96,18 @@ class SelectiveGuardianCutoverTests(unittest.TestCase):
 
     def test_post_entry_loop_keeps_cash_wave_evidence_current_and_recorded(self):
         state = SimpleNamespace(_cross_cash_causal_wave_events=[])
-        position = SimpleNamespace(position_cycle_id="position-open")
+        position = SimpleNamespace(
+            position_cycle_id="position-open", side="SHORT",
+        )
         snapshot = {
             "version": "CROSS_CASH_CAUSAL_WAVE_V1",
             "observed_at_ms": 1_000,
+        }
+        position_snapshot = {
+            "version": "CASH_WAVE_OBSERVATION_V3_POSITION_CHALLENGE",
+            "observation_scope": "POSITION_RELATIVE_CASH_WAVE",
+            "previous_side": "SHORT", "wave_state": "PULLBACK",
+            "authority": False,
         }
 
         def observe(target, histories, now_ms):
@@ -115,13 +123,22 @@ class SelectiveGuardianCutoverTests(unittest.TestCase):
             launcher.ignition_signals, "snapshot", return_value={"spot": ()},
         ), patch.object(
             launcher.cross_cash_causal_wave, "observe", side_effect=observe,
-        ), patch.object(launcher, "_append_event") as append:
+        ), patch.object(
+            launcher.bias_council, "observe_cash_wave",
+            return_value=position_snapshot,
+        ) as observe_position, patch.object(
+            launcher, "_append_event",
+        ) as append:
             result = launcher._refresh_post_entry_market_evidence(
                 state, position, 1.0,
             )
 
         self.assertEqual(result, snapshot)
         self.assertEqual(state._cross_cash_causal_wave_events, [])
+        self.assertEqual(state.post_entry_position_cash_wave, position_snapshot)
+        observe_position.assert_called_once_with(
+            state, 1.0, previous_side="SHORT", liquidity=(),
+        )
         append.assert_called_once()
         self.assertEqual(append.call_args.args[0], "CAUSAL_WAVE_OPENED")
         self.assertEqual(

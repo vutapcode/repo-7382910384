@@ -420,6 +420,22 @@ class BiasCouncilTests(unittest.TestCase):
         for forbidden in ("entry", "zone", "setup", "action", "price_entry"):
             self.assertNotIn(forbidden, r)
 
+    def test_position_cash_observer_is_pure_and_uses_position_side(self):
+        s = state()
+        s.bias_state, s.bias_confidence = "SHORT", 0.72
+        before = copy.deepcopy(vars(s))
+
+        result = council.observe_cash_wave(
+            s, 100.0, previous_side="LONG", liquidity=(),
+        )
+
+        self.assertEqual(result["previous_side"], "LONG")
+        self.assertEqual(result["context_side"], "LONG")
+        self.assertEqual(result["wave_state"], "CONTROLLED")
+        self.assertFalse(result["authority"])
+        self.assertFalse(result["action_authority"])
+        self.assertEqual(vars(s), before)
+
     def test_direction_memory_labels_short_price_without_short_flow_as_pullback(self):
         s = state()
         s.bias_state, s.bias_confidence, s.bias_wave_state = "LONG", 0.70, "CONTROLLED"
