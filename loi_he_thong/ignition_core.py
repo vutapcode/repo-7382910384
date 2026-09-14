@@ -46,9 +46,15 @@ MIN_VOL_BTC_BY_VENUE = {
     "futures": ignition_signals.MIN_QTY["futures"],
 }
 CASH = frozenset(("binance_spot", "coinbase_spot"))
-INFERENCE_VERSION = "IGNITION_INFERENCE_V9_CAUSAL_ACQUISITION_TIMING"
+INFERENCE_VERSION = "IGNITION_INFERENCE_V10_ACQUISITION_POST_SEAL_LANE"
 ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V9_DUAL_MATURITY"
 ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
+ACQUISITION_ORIGIN_KIND = "SEALED_ACQUISITION_CONTINUATION"
+ACQUISITION_TIMING_OWNER = "IGNITION_ACQUISITION_TIMING"
+ACQUISITION_RETRYABLE_STATES = frozenset((
+    "WAIT_ACQUISITION_CURRENT_CASH",
+    "WAIT_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL",
+))
 PERSISTENT_AUTHORITY_SCOPE = {
     "shadow_bootstrap_authority": True,
     "live_authority": False,
@@ -2778,6 +2784,23 @@ def _start_acquisition_handoff_episode(state, histories, now_ms, side=None):
     first = signals[0]
     episode = {
         "causal_episode_id": handoff["causal_wave_id"],
+        "origin_kind": ACQUISITION_ORIGIN_KIND,
+        "question_owner": ACQUISITION_TIMING_OWNER,
+        "acquisition_causal_wave_id": handoff["causal_wave_id"],
+        "acquisition_handoff_hash": handoff.get("handoff_hash"),
+        "bound_side": resolved_side,
+        "bound_cash_roots": list(
+            handoff.get("directional_cash_roots") or ()
+        ),
+        "bound_cash_epochs": {
+            "binance_spot": int(epochs.get("spot", 0) or 0),
+            "coinbase_spot": int(epochs.get("coinbase", 0) or 0),
+        },
+        "ownership_completed_ms": int(
+            handoff.get("ownership_completed_ms", 0) or 0
+        ),
+        "timing_attempt_started_ms": int(now_ms),
+        "post_seal_proof_state": "PENDING",
         "side": resolved_side,
         "proposer": first.get("venue"),
         "leader": first.get("venue"),
@@ -2826,6 +2849,61 @@ def _start_acquisition_handoff_episode(state, histories, now_ms, side=None):
     state._ignition_acquisition_handoff_observation = observation
     state._ignition_episode = episode
     return episode
+
+
+def _is_acquisition_timing_episode(episode):
+    """Identify the immutable timing lane, never by side or Bias alone."""
+    episode = dict(episode or {})
+    return bool(
+        episode.get("origin_kind") == ACQUISITION_ORIGIN_KIND
+        and episode.get("question_owner") == ACQUISITION_TIMING_OWNER
+        and str(episode.get("causal_episode_id") or "")
+            == str(episode.get("acquisition_causal_wave_id") or "")
+        and str(episode.get("acquisition_handoff_hash") or "")
+        and str(episode.get("bound_side") or "").upper()
+            == str(episode.get("side") or "").upper()
+    )
+
+
+def _acquisition_timing_observation(state, episode, histories, now_ms):
+    """Revalidate one sealed lane without borrowing generic discovery gates."""
+    episode = dict(episode or {})
+    eligible, observation = _acquisition_handoff_observation(
+        state, histories, now_ms, episode.get("side"),
+    )
+    observation = dict(observation or {})
+    handoff = dict(observation.get("handoff") or {})
+    expected_wave = str(episode.get("acquisition_causal_wave_id") or "")
+    expected_hash = str(episode.get("acquisition_handoff_hash") or "")
+    observed_wave = str(observation.get("causal_wave_id") or "")
+    current_handoff = dict(
+        getattr(state, "bias_acquisition_handoff", {}) or {}
+    )
+    observed_hash = str(
+        handoff.get("handoff_hash")
+        or current_handoff.get("handoff_hash")
+        or ""
+    )
+    if observed_wave != expected_wave or observed_hash != expected_hash:
+        eligible = False
+        observation.update(
+            status="ACQUISITION_HANDOFF_IDENTITY_CHANGED",
+            expected_causal_wave_id=expected_wave,
+            observed_causal_wave_id=observed_wave or None,
+            expected_handoff_hash=expected_hash,
+            observed_handoff_hash=observed_hash or None,
+        )
+    observation.update({
+        "origin_kind": ACQUISITION_ORIGIN_KIND,
+        "question_owner": ACQUISITION_TIMING_OWNER,
+        "timing_question": "IS_THE_SEALED_CASH_PROCESS_EXECUTABLE_NOW",
+        "timing_attempt_started_ms": episode.get(
+            "timing_attempt_started_ms"
+        ),
+        "ownership_completed_ms": episode.get("ownership_completed_ms"),
+    })
+    state._ignition_acquisition_handoff_observation = observation
+    return eligible, observation
 
 
 def _freeze_authority_proof(payload, side, proof_type, causal_episode_id):
@@ -3451,6 +3529,13 @@ def _proof(episode, histories):
         epoch_names = {"binance_spot": "spot", "coinbase_spot": "coinbase"}
         ownership_completed_ms = int(
             sealed_acquisition.get("ownership_completed_ms", 0) or 0
+        )
+        # Every execution-proof route for a sealed acquisition starts after
+        # ownership completed.  Without this shared fence, the generic
+        # metaorder loop below could reuse two pre-seal rows even though the
+        # acquisition-specific candidate path correctly rejected them.
+        proof_segment_start = max(
+            proof_segment_start, ownership_completed_ms,
         )
         live_candidates = []
         for venue in cash_venues:
@@ -4602,6 +4687,15 @@ def _result_from_episode(state, episode, histories, freshness, now):
     current_cash = _current_cash_conversion(
         histories, side, int(now * 1000.0),
     )
+    acquisition_lane = _is_acquisition_timing_episode(episode)
+    acquisition_eligible = False
+    acquisition_observation = {}
+    if acquisition_lane:
+        acquisition_eligible, acquisition_observation = (
+            _acquisition_timing_observation(
+                state, episode, histories, int(now * 1000.0),
+            )
+        )
     persistent_snapshot = dict(
         getattr(state, "persistent_metaorder_shadow", {}) or {}
     )
@@ -4711,6 +4805,18 @@ def _result_from_episode(state, episode, histories, freshness, now):
         "spot_price_discovery": cash_discovery,
         "persistent_metaorder_shadow": persistent_shadow,
         "bias_snapshot": dict(episode["bias_snapshot"]), "proof_type": proof_type,
+        "origin_kind": episode.get("origin_kind"),
+        "question_owner": episode.get("question_owner"),
+        "timing_question": (
+            "IS_THE_SEALED_CASH_PROCESS_EXECUTABLE_NOW"
+            if acquisition_lane else None
+        ),
+        "timing_attempt_started_ms": episode.get(
+            "timing_attempt_started_ms"
+        ),
+        "ownership_completed_ms": episode.get("ownership_completed_ms"),
+        "post_seal_proof_state": episode.get("post_seal_proof_state"),
+        "acquisition_timing_observation": acquisition_observation,
         "acquisition_handoff": dict(
             episode.get("acquisition_handoff") or {}
         ),
@@ -4875,6 +4981,33 @@ def _result_from_episode(state, episode, histories, freshness, now):
         [resolved_reversion_venue] if resolved_reversion_venue else []
     )
     payload["unresolved_cash_opponents"] = unresolved_cash_opponents
+    if acquisition_lane and not acquisition_eligible:
+        reason = str(
+            acquisition_observation.get("status")
+            or "WAIT_ACQUISITION_CURRENT_CASH"
+        ).upper()
+        episode["post_seal_proof_state"] = "PENDING"
+        payload["post_seal_proof_state"] = "PENDING"
+        if reason not in ACQUISITION_RETRYABLE_STATES:
+            episode["post_seal_proof_state"] = "TERMINATED"
+            payload["post_seal_proof_state"] = "TERMINATED"
+            state._ignition_episode = None
+        return _wait(
+            now, side, reason,
+            "INVALID" if reason not in ACQUISITION_RETRYABLE_STATES
+            else "PROBE",
+            payload, freshness,
+        )
+    if acquisition_lane and proof_type is None:
+        episode["post_seal_proof_state"] = "PENDING"
+        payload["post_seal_proof_state"] = "PENDING"
+        return _wait(
+            now, side, "WAIT_ACQUISITION_POST_SEAL_EXECUTION_PROOF",
+            "PROBE", payload, freshness,
+        )
+    if acquisition_lane:
+        episode["post_seal_proof_state"] = "PROVEN"
+        payload["post_seal_proof_state"] = "PROVEN"
     if unresolved_cash_opponents:
         state._ignition_episode = None
         return _wait(now, side, "OPPOSING_CASH_FLOW", "INVALID", payload, freshness)
@@ -5149,17 +5282,29 @@ def evaluate(state, now=None, side=None):
         )
 
     if episode is not None:
-        age = now_ms - int(episode.get("started_receive_ms", 0))
+        acquisition_lane = _is_acquisition_timing_episode(episode)
+        lifecycle_started_ms = int(
+            episode.get("timing_attempt_started_ms", 0)
+            if acquisition_lane else episode.get("started_receive_ms", 0)
+        )
+        age = now_ms - lifecycle_started_ms
         gap = now_ms - int(episode.get("last_evidence_ms", 0))
         # A newly completed receive-time bucket is evidence that existed before
         # this evaluator wake-up. Consume it before applying decay; otherwise a
         # 1 ms scheduler delay can erase a valid 300 ms cash response.
         if age > EPISODE_MAX_MS:
-            reason = "IGNITION_EPISODE_SAFETY_EXPIRED"
+            reason = (
+                "ACQUISITION_TIMING_ATTEMPT_EXPIRED"
+                if acquisition_lane else "IGNITION_EPISODE_SAFETY_EXPIRED"
+            )
             state._ignition_episode = None
             episode = None
             state._ignition_last_reject = reason
-        elif gap > EVIDENCE_GAP_MS and not rows:
+        elif (
+            not acquisition_lane
+            and gap > EVIDENCE_GAP_MS
+            and not rows
+        ):
             episode["evidence_gap_open"] = True
             episode["evidence_gap_started_ms"] = int(
                 episode.get("last_evidence_ms", 0) or 0
@@ -5259,7 +5404,11 @@ def evaluate(state, now=None, side=None):
         return _wait(
             now, side, reason, episode=research or None, freshness=freshness
         )
-    if now_ms - int(episode.get("last_evidence_ms", 0)) > EVIDENCE_GAP_MS:
+    if (
+        not _is_acquisition_timing_episode(episode)
+        and now_ms - int(episode.get("last_evidence_ms", 0))
+            > EVIDENCE_GAP_MS
+    ):
         state._ignition_last_reject = "IGNITION_EVIDENCE_DECAYED"
         return _wait(
             now, side, "IGNITION_EVIDENCE_DECAYED", "PROBE",

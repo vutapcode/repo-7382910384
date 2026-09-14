@@ -151,6 +151,22 @@ class MissTaxonomyTests(unittest.TestCase):
         self.assertIn("BIAS_ALIGNMENT_FAIL", failed)
         self.assertNotIn("BIAS_NOT_READY", failed)
 
+    def test_acquisition_lane_preserves_exact_timing_reason(self):
+        for reason in (
+            "WAIT_ACQUISITION_POST_SEAL_EXECUTION_PROOF",
+            "WAIT_ACQUISITION_CURRENT_CASH",
+            "ACQUISITION_TIMING_CHAIN_DISCONNECTED",
+            "ACQUISITION_TIMING_ATTEMPT_EXPIRED",
+        ):
+            result = {
+                "decision": "WAIT", "reason": reason,
+                "side": "LONG", "s_votes": {},
+            }
+            primary, failed = launcher._miss_taxonomy(result, {}, False)
+            self.assertEqual(primary, reason)
+            self.assertIn(reason, failed)
+            self.assertNotIn("WAIT_IGNITION_PROOF", failed)
+
     def test_compatibility_votes_are_diagnostics_not_live_blockers(self):
         result = {
             "decision": "WAIT",

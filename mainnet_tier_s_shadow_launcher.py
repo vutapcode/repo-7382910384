@@ -949,6 +949,12 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         failed.append("WAIT_CAUSAL_PERSISTENCE")
     if "IGNITION_PROOF" in reason:
         failed.append("WAIT_IGNITION_PROOF")
+    if "ACQUISITION_POST_SEAL_EXECUTION_PROOF" in reason:
+        failed.append("WAIT_ACQUISITION_POST_SEAL_EXECUTION_PROOF")
+    if "CURRENT_CROSS_CASH_CAUSAL_SURVIVAL" in reason:
+        failed.append("WAIT_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL")
+    if reason.startswith(("WAIT_ACQUISITION_", "ACQUISITION_")):
+        failed.append(reason)
     if "EVIDENCE_DECAYED" in reason:
         failed.append("WAIT_CAUSAL_EVIDENCE_REFRESH")
     if "CURRENT_CASH_CONVERSION" in reason:
@@ -1022,6 +1028,8 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
         "WAIT_STALE_DATA", "WAIT_EXTERNAL_CORROBORATION", "WAIT_CHASE",
         "WAIT_CASH_RESPONSE", "WAIT_LEADER_UNCERTAIN", "WAIT_LATE_IMPULSE",
         "WAIT_CURRENT_CASH_CONVERSION", "WAIT_CAUSAL_EVIDENCE_REFRESH",
+        "WAIT_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL",
+        "WAIT_ACQUISITION_POST_SEAL_EXECUTION_PROOF",
         "WAIT_IGNITION_PROOF", "WAIT_CAUSAL_PERSISTENCE", "WAIT_OI_REFRESH",
         "WAIT_OI_CLOSING_CONTEXT",
         "WAIT_IGNITION_FLOW_EFFICIENCY", "WAIT_IGNITION_FLOW_FADING",
@@ -1041,6 +1049,8 @@ def _miss_taxonomy_details(result, edge_report, quorum_ok):
     unique = list(dict.fromkeys(failed))
     diagnostic = list(dict.fromkeys(diagnostic))
     primary = next((name for name in priority if name in unique), None)
+    if primary is None and reason in unique:
+        primary = reason
     return {
         "blocking_reason": primary,
         "blocking_reasons": unique,

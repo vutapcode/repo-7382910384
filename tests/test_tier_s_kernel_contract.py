@@ -64,7 +64,7 @@ class TierSKernelContractTests(unittest.TestCase):
             profile["architecture"],
         )
         self.assertIn(
-            "IGNITION_INFERENCE_V9_CAUSAL_ACQUISITION_TIMING",
+            "IGNITION_INFERENCE_V10_ACQUISITION_POST_SEAL_LANE",
             profile["architecture"],
         )
         self.assertIn("ENTRY_ECONOMICS_V9_DUAL_MATURITY", profile["architecture"])

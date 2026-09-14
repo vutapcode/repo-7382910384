@@ -142,6 +142,22 @@ class IgnitionCoreTests(unittest.TestCase):
             "futures": (futures,),
         }
 
+    @staticmethod
+    def _pre_seal_acquisition_histories(side="LONG", epoch=1):
+        first = evidence_row(99_650, side, 100.001)
+        second = evidence_row(99_750, side, 100.003)
+        coinbase = evidence_row(99_800, side, 100.002)
+        coinbase["venue"] = "coinbase_spot"
+        futures = evidence_row(99_820, side, 100.003)
+        futures.update({"venue": "futures", "total_qty": 0.20})
+        for row in (first, second, coinbase, futures):
+            row["epoch"] = epoch
+        return {
+            "binance_spot": (first, second),
+            "coinbase_spot": (coinbase,),
+            "futures": (futures,),
+        }
+
     def test_acquisition_handoff_reuses_same_wave_without_third_impulse(self):
         s = state(now=100.0)
         s.bias_version = "TEST"
@@ -348,8 +364,203 @@ class IgnitionCoreTests(unittest.TestCase):
         )
         self.assertEqual(
             s._ignition_acquisition_handoff_observation["status"],
-            "TIMING_ATTEMPT_STARTED_FROM_LIVE_WAVE",
+            "ELIGIBLE_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL",
         )
+
+    def test_pre_seal_survival_waits_for_post_seal_execution_proof(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(
+            completed_ms=99_900,
+        )
+        histories = self._pre_seal_acquisition_histories()
+        for venue in ignition_signals.engine(s).venues.values():
+            venue.epoch = 1
+
+        with patch.object(
+            ignition_signals, "snapshot", return_value=histories,
+        ):
+            result = ignition_core.evaluate(s, now=100.0)
+
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertEqual(
+            result["reason"],
+            "WAIT_ACQUISITION_POST_SEAL_EXECUTION_PROOF",
+        )
+        self.assertEqual(
+            result["ignition"]["origin_kind"],
+            ignition_core.ACQUISITION_ORIGIN_KIND,
+        )
+        self.assertEqual(
+            result["ignition"]["question_owner"],
+            ignition_core.ACQUISITION_TIMING_OWNER,
+        )
+        self.assertEqual(
+            result["ignition"]["post_seal_proof_state"], "PENDING",
+        )
+        self.assertIsNotNone(s._ignition_episode)
+
+    def test_fresh_post_seal_proof_is_not_lost_to_pre_seal_gap_clock(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(
+            completed_ms=99_900,
+        )
+        before = self._pre_seal_acquisition_histories()
+        post_seal = evidence_row(100_087, "LONG", 100.006)
+        post_seal["bucket_start_ms"] = 99_950
+        after = {
+            **before,
+            "binance_spot": before["binance_spot"] + (post_seal,),
+        }
+        for venue in ignition_signals.engine(s).venues.values():
+            venue.epoch = 1
+        phase = {
+            "valid": True, "source": "TEST", "phase_scale_bps": 20.0,
+            "cash_displacement_bps": 2.0,
+            "episode_cash_displacement_bps": 0.3,
+            "precursor_cash_displacement_bps": 0.0,
+            "acquisition_cash_displacement_bps": 2.0,
+            "consumed_fraction": 0.10,
+        }
+        with patch.object(
+            ignition_signals, "snapshot", side_effect=(before, after),
+        ), patch.object(
+            ignition_core, "_phase_measurement", return_value=phase,
+        ), patch.object(
+            ignition_core, "_oi_verification",
+            return_value={"status": "UNCHANGED_UNKNOWN", "intent": "NEUTRAL"},
+        ):
+            pending = ignition_core.evaluate(s, now=100.0)
+            proved = ignition_core.evaluate(s, now=100.1)
+
+        self.assertEqual(
+            pending["reason"],
+            "WAIT_ACQUISITION_POST_SEAL_EXECUTION_PROOF",
+        )
+        self.assertEqual(proved["decision"], "GO")
+        self.assertEqual(
+            proved["ignition"]["post_seal_proof_state"], "PROVEN",
+        )
+        self.assertGreaterEqual(
+            proved["ignition"]["current_execution_proof"]["observed_at_ms"],
+            99_900,
+        )
+
+    def test_acquisition_lull_retains_owner_but_not_entry_permission(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(
+            completed_ms=99_900,
+        )
+        histories = self._pre_seal_acquisition_histories()
+        for venue in ignition_signals.engine(s).venues.values():
+            venue.epoch = 1
+        with patch.object(
+            ignition_signals, "snapshot", return_value=histories,
+        ):
+            ignition_core.evaluate(s, now=100.0)
+            waiting = ignition_core.evaluate(s, now=100.7)
+
+        self.assertEqual(
+            waiting["reason"], "WAIT_ACQUISITION_CURRENT_CASH",
+        )
+        self.assertEqual(
+            waiting["ignition"]["question_owner"],
+            ignition_core.ACQUISITION_TIMING_OWNER,
+        )
+        self.assertIsNotNone(s._ignition_episode)
+
+    def test_dual_acceptance_without_survival_retains_acquisition_lane(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(
+            completed_ms=99_900,
+        )
+        before = self._pre_seal_acquisition_histories()
+        binance = evidence_row(100_100, "LONG", 100.004)
+        coinbase = evidence_row(100_150, "LONG", 100.003)
+        coinbase["venue"] = "coinbase_spot"
+        accepted_only = {
+            "binance_spot": (binance,),
+            "coinbase_spot": (coinbase,),
+            "futures": (),
+        }
+        for venue in ignition_signals.engine(s).venues.values():
+            venue.epoch = 1
+        with patch.object(
+            ignition_signals, "snapshot",
+            side_effect=(before, accepted_only),
+        ):
+            ignition_core.evaluate(s, now=100.0)
+            waiting = ignition_core.evaluate(s, now=100.2)
+
+        self.assertEqual(
+            waiting["reason"],
+            "WAIT_CURRENT_CROSS_CASH_CAUSAL_SURVIVAL",
+        )
+        self.assertEqual(
+            waiting["ignition"]["question_owner"],
+            ignition_core.ACQUISITION_TIMING_OWNER,
+        )
+        self.assertIsNotNone(s._ignition_episode)
+
+    def test_acquisition_timing_expiry_does_not_falsify_sealed_handoff(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(
+            completed_ms=99_900,
+        )
+        sealed_hash = s.bias_acquisition_handoff["handoff_hash"]
+        histories = self._pre_seal_acquisition_histories()
+        for venue in ignition_signals.engine(s).venues.values():
+            venue.epoch = 1
+        with patch.object(
+            ignition_signals, "snapshot", return_value=histories,
+        ):
+            ignition_core.evaluate(s, now=100.0)
+            expired = ignition_core.evaluate(s, now=105.1)
+
+        self.assertEqual(
+            expired["reason"], "ACQUISITION_TIMING_ATTEMPT_EXPIRED",
+        )
+        self.assertIsNone(s._ignition_episode)
+        self.assertEqual(s.bias_acquisition_handoff["status"], "SEALED")
+        self.assertEqual(
+            s.bias_acquisition_handoff["handoff_hash"], sealed_hash,
+        )
+
+    def test_disconnected_same_side_chain_terminates_acquisition_lane(self):
+        s = state(now=100.0)
+        s.bias_version = "TEST"
+        s.bias_acquisition_handoff = acquisition_handoff(
+            completed_ms=99_900,
+        )
+        before = self._pre_seal_acquisition_histories()
+        disconnected = self._acquisition_histories()
+        for venue, rows in disconnected.items():
+            shifted = []
+            for row in rows:
+                value = dict(row)
+                value["receive_time_ms"] += 1_000
+                value["bucket_start_ms"] += 1_000
+                shifted.append(value)
+            disconnected[venue] = tuple(shifted)
+        for venue in ignition_signals.engine(s).venues.values():
+            venue.epoch = 1
+        with patch.object(
+            ignition_signals, "snapshot", side_effect=(before, disconnected),
+        ):
+            ignition_core.evaluate(s, now=100.0)
+            result = ignition_core.evaluate(s, now=101.0)
+
+        self.assertEqual(
+            result["reason"], "ACQUISITION_TIMING_CHAIN_DISCONNECTED",
+        )
+        self.assertEqual(
+            result["ignition"]["post_seal_proof_state"], "TERMINATED",
+        )
+        self.assertIsNone(s._ignition_episode)
 
     def test_disconnected_old_ownership_cannot_seed_fresh_timing(self):
         s = state(now=100.0)
