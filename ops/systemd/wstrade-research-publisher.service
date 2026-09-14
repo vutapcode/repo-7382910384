@@ -11,6 +11,9 @@ WorkingDirectory=/home/ubuntu/WStrade
 ExecStartPre=+/usr/bin/install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.local/state/wstrade /home/ubuntu/.local/share/wstrade-telemetry
 ExecStart=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/publish_research_snapshot.py
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=WSTRADE_TELEMETRY_RETENTION_HOURS=120
+Environment=WSTRADE_TELEMETRY_MAX_HOURLY_BYTES=4194304
+Environment=WSTRADE_TELEMETRY_MAX_RECORD_BYTES=65536
 UMask=0077
 Nice=19
 CPUAccounting=true

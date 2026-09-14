@@ -14,6 +14,25 @@ spec.loader.exec_module(publisher)
 
 
 class ResearchPublisherTests(unittest.TestCase):
+    def test_vn_hour_partition_uses_utc_plus_seven(self):
+        # 17:30 UTC belongs to the following calendar day in Viet Nam.
+        ts = 1_789_387_800.0
+        self.assertEqual(
+            publisher._vn_hour(ts),
+            time.strftime(
+                "%Y-%m-%d/%H",
+                time.gmtime(ts + 7 * 3600),
+            ),
+        )
+
+    def test_vn_hour_retention_keeps_exactly_latest_120_buckets(self):
+        now = 1_789_387_800.0
+        retained = publisher._retained_vn_hours(now, retention_hours=120)
+        self.assertEqual(len(retained), 120)
+        self.assertIn(publisher._vn_hour(now), retained)
+        self.assertIn(publisher._vn_hour(now - 119 * 3600), retained)
+        self.assertNotIn(publisher._vn_hour(now - 120 * 3600), retained)
+
     def test_publish_rewrites_polluted_branch_as_evidence_only(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -44,7 +63,7 @@ class ResearchPublisherTests(unittest.TestCase):
                            check=True, stdout=subprocess.DEVNULL)
 
             event_ts = time.time()
-            event_day = time.strftime("%Y-%m-%d", time.gmtime(event_ts))
+            event_hour = publisher._vn_hour(event_ts)
             journal = root / "events.jsonl"
             journal.write_text(json.dumps({
                 "event": "DECISION_EVALUATED", "ts": event_ts,
@@ -98,43 +117,75 @@ class ResearchPublisherTests(unittest.TestCase):
             self.assertTrue(tree)
             self.assertTrue(all(path.startswith("telemetry/") for path in tree))
             self.assertIn("telemetry/manifest.json", tree)
-            daily_path = f"telemetry/daily/{event_day}.jsonl"
-            self.assertIn(daily_path, tree)
+            hourly_path = f"telemetry/hourly/{event_hour}.jsonl"
+            self.assertIn(hourly_path, tree)
             self.assertEqual(
-                set(tree), {"telemetry/manifest.json", daily_path},
+                set(tree), {"telemetry/manifest.json", hourly_path},
             )
-            daily_rows = publisher._load_jsonl(clone / daily_path)
+            hourly_rows = publisher._load_jsonl(clone / hourly_path)
             self.assertTrue(any(
-                row.get("record_type") == "journal_event"
+                row.get("record_type") == "decision"
                 and row.get("event") == "DECISION_EVALUATED"
-                for row in daily_rows
+                for row in hourly_rows
             ))
             manifest = json.loads(
                 (clone / "telemetry" / "manifest.json").read_text()
             )
             self.assertEqual(
                 manifest["telemetry_layout"],
-                "ONE_BOUNDED_JSONL_PER_UTC_DAY_V1",
+                "ONE_BOUNDED_JSONL_PER_VN_HOUR_V1",
             )
+            self.assertEqual(manifest["telemetry_timezone"], "UTC+07:00")
+            self.assertEqual(manifest["retention_hours"], 120)
             self.assertEqual(manifest["retention_days"], 5)
             self.assertNotIn("main.py", tree)
 
-    def test_daily_file_is_hard_bounded_and_keeps_newest_records(self):
+    def test_hourly_file_is_hard_bounded_and_keeps_newest_records(self):
         rows = [
             {
-                "record_type": "decision", "event_id": f"event-{index}",
+                "record_type": "journal_event", "event_id": f"event-{index}",
                 "ts": float(index), "payload": "x" * 900,
             }
             for index in range(20)
         ]
-        bounded, stats = publisher._bounded_daily_rows(
+        bounded, stats = publisher._bounded_hourly_rows(
             rows, max_bytes=4_096, max_record_bytes=2_048,
         )
         encoded = b"".join(publisher._jsonl_bytes(row) for row in bounded)
         self.assertLessEqual(len(encoded), 4_096)
         self.assertGreater(stats["dropped_records"], 0)
+        self.assertEqual(stats["critical_records_dropped"], 0)
         self.assertEqual(bounded[0]["record_type"], "retention_notice")
         self.assertEqual(bounded[-1]["event_id"], "event-19")
+
+    def test_hourly_file_never_drops_trade_or_opportunity_records(self):
+        critical = [
+            {
+                "record_type": "execution", "event": "EXIT",
+                "event_id": "exit-1", "ts": 1.0, "payload": "x" * 700,
+            },
+            {
+                "record_type": "opportunity", "opportunity_id": 8,
+                "ts": 2.0, "payload": "x" * 700,
+            },
+        ]
+        diagnostics = [
+            {
+                "record_type": "journal_event", "event_id": f"wait-{index}",
+                "ts": 3.0 + index,
+                "payload": "x" * 700,
+            }
+            for index in range(10)
+        ]
+        bounded, stats = publisher._bounded_hourly_rows(
+            [*critical, *diagnostics], max_bytes=3_000,
+            max_record_bytes=1_024,
+        )
+        ids = {row.get("event_id") for row in bounded}
+        opportunities = {row.get("opportunity_id") for row in bounded}
+        self.assertIn("exit-1", ids)
+        self.assertIn(8, opportunities)
+        self.assertEqual(stats["critical_records_dropped"], 0)
 
     def test_oversize_record_becomes_hashed_identity_envelope(self):
         row = {

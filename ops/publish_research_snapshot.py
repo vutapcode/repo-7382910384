@@ -77,14 +77,15 @@ REMOTE = os.getenv(
     "git@github.com:vutapcode/repo-7382910384.git",
 )
 BRANCH = os.getenv("WSTRADE_RESEARCH_BRANCH", "telemetry")
-RETENTION_DAYS = int(os.getenv("WSTRADE_TELEMETRY_RETENTION_DAYS", "5"))
-RETENTION_SECONDS = RETENTION_DAYS * 24 * 3600
-MAX_DAILY_FILE_BYTES = int(os.getenv(
-    "WSTRADE_TELEMETRY_MAX_DAILY_BYTES", str(16 * 1024 * 1024),
+RETENTION_HOURS = int(os.getenv("WSTRADE_TELEMETRY_RETENTION_HOURS", "120"))
+RETENTION_SECONDS = RETENTION_HOURS * 3600
+MAX_HOURLY_FILE_BYTES = int(os.getenv(
+    "WSTRADE_TELEMETRY_MAX_HOURLY_BYTES", str(4 * 1024 * 1024),
 ))
-MAX_DAILY_RECORD_BYTES = int(os.getenv(
-    "WSTRADE_TELEMETRY_MAX_RECORD_BYTES", str(128 * 1024),
+MAX_RECORD_BYTES = int(os.getenv(
+    "WSTRADE_TELEMETRY_MAX_RECORD_BYTES", str(64 * 1024),
 ))
+PERIODIC_SAMPLE_SECONDS = 15 * 60
 MAX_DELTA_ROWS = 2000
 # Bound first-run RAM/CPU on the 2 GB Lightsail. Subsequent runs are strictly
 # incremental from the durable byte offset.
@@ -176,14 +177,27 @@ def _jsonl_bytes(row):
     ) + "\n").encode("utf-8")
 
 
-def _utc_day(ts):
+def _vn_hour(ts):
     try:
-        return datetime.fromtimestamp(float(ts), timezone.utc).strftime("%Y-%m-%d")
+        return datetime.fromtimestamp(float(ts), VN).strftime("%Y-%m-%d/%H")
     except (TypeError, ValueError, OSError):
         return None
 
 
-def _daily_record(record_type, payload, *, venue=None):
+def _retained_vn_hours(now, retention_hours=None):
+    hours = int(retention_hours or RETENTION_HOURS)
+    if hours <= 0:
+        raise ValueError("telemetry retention hours must be positive")
+    current = datetime.fromtimestamp(float(now), VN).replace(
+        minute=0, second=0, microsecond=0,
+    )
+    return {
+        (current - timedelta(hours=offset)).strftime("%Y-%m-%d/%H")
+        for offset in range(hours)
+    }
+
+
+def _hourly_record(record_type, payload, *, venue=None):
     row = dict(_public_value(payload or {}))
     row["record_type"] = str(record_type)
     if venue:
@@ -191,8 +205,22 @@ def _daily_record(record_type, payload, *, venue=None):
     return row
 
 
-def _daily_record_key(row):
+def _hourly_record_key(row):
     kind = str((row or {}).get("record_type") or "UNKNOWN")
+    if (
+        kind == "decision"
+        and str((row or {}).get("decision") or "WAIT").upper() == "WAIT"
+        and not (row or {}).get("economic_opportunity_id")
+        and not (row or {}).get("qualified_now")
+        and not (row or {}).get("qualified_ever")
+    ):
+        ts = float((row or {}).get("ts", 0) or 0)
+        return (
+            kind, "wait_minute", str((row or {}).get("run_id") or ""),
+            str((row or {}).get("side") or ""),
+            str((row or {}).get("reason") or ""),
+            str((row or {}).get("blocking_stage") or ""), int(ts // 60),
+        )
     for name in (
         "blocker_event_id", "transition_id", "evidence_slice_id", "event_id",
         "opportunity_id", "trade_id", "cycle_id",
@@ -205,12 +233,15 @@ def _daily_record_key(row):
         "summary", "runtime_heartbeat", "data_health", "source_epochs",
         "market_observation",
     }:
-        return kind, str((row or {}).get("venue") or ""), int(ts // 180)
+        return (
+            kind, str((row or {}).get("venue") or ""),
+            int(ts // PERIODIC_SAMPLE_SECONDS),
+        )
     return kind, hashlib.sha256(_jsonl_bytes(row)).hexdigest()
 
 
 def _bounded_record(row, max_record_bytes=None):
-    limit = int(max_record_bytes or MAX_DAILY_RECORD_BYTES)
+    limit = int(max_record_bytes or MAX_RECORD_BYTES)
     encoded = _jsonl_bytes(row)
     if len(encoded) <= limit:
         return row
@@ -226,84 +257,114 @@ def _bounded_record(row, max_record_bytes=None):
     }
     keep.update({
         "payload_omitted": True,
-        "payload_omission_reason": "MAX_DAILY_RECORD_BYTES",
+        "payload_omission_reason": "MAX_HOURLY_RECORD_BYTES",
         "original_bytes": len(encoded),
         "payload_sha256": hashlib.sha256(encoded).hexdigest(),
     })
     return keep
 
 
-def _bounded_daily_rows(rows, max_bytes=None, max_record_bytes=None):
-    """Deduplicate a UTC day and enforce a hard serialized file-size cap."""
-    limit = int(max_bytes or MAX_DAILY_FILE_BYTES)
+def _critical_hourly_record(row):
+    kind = str((row or {}).get("record_type") or "")
+    event = str((row or {}).get("event") or "").upper()
+    if kind in {"closed_trade", "execution", "opportunity", "state_transition"}:
+        return True
+    if event in {"ENTRY", "EXIT", "LIVE_ENTRY", "LIVE_EXIT"}:
+        return True
+    return bool(
+        kind == "decision" and (
+            str((row or {}).get("decision") or "").upper() == "GO"
+            or (row or {}).get("economic_opportunity_id")
+            or (row or {}).get("qualified_now")
+            or (row or {}).get("qualified_ever")
+        )
+    )
+
+
+def _bounded_hourly_rows(rows, max_bytes=None, max_record_bytes=None):
+    """Deduplicate one VN hour without ever dropping trade/opportunity evidence."""
+    limit = int(max_bytes or MAX_HOURLY_FILE_BYTES)
     if limit <= 0:
-        raise ValueError("max daily telemetry bytes must be positive")
+        raise ValueError("max hourly telemetry bytes must be positive")
     merged = {}
     for source in rows or ():
         if not isinstance(source, dict):
             continue
         row = _bounded_record(dict(source), max_record_bytes)
-        merged[_daily_record_key(row)] = row
+        merged[_hourly_record_key(row)] = row
     ordered = sorted(
         merged.values(), key=lambda row: float(row.get("ts", 0) or 0),
     )
     encoded = [(row, _jsonl_bytes(row)) for row in ordered]
     if sum(len(raw) for _, raw in encoded) <= limit:
-        return ordered, {"dropped_records": 0, "oversize_records": sum(
-            bool(row.get("payload_omitted")) for row in ordered
-        )}
+        return ordered, {
+            "dropped_records": 0,
+            "critical_records_dropped": 0,
+            "oversize_records": sum(
+                bool(row.get("payload_omitted")) for row in ordered
+            ),
+        }
 
-    kept = []
-    used = 0
     notice_reserve = min(2048, max(256, limit // 8))
-    for row, raw in reversed(encoded):
+    critical = [(row, raw) for row, raw in encoded if _critical_hourly_record(row)]
+    optional = [(row, raw) for row, raw in encoded if not _critical_hourly_record(row)]
+    used = sum(len(raw) for _, raw in critical)
+    if used + notice_reserve > limit:
+        raise RuntimeError("critical hourly telemetry exceeds hard file cap")
+    kept = [row for row, _raw in critical]
+    for row, raw in reversed(optional):
         if len(raw) + used + notice_reserve > limit:
             continue
         kept.append(row)
         used += len(raw)
-    kept.reverse()
+    kept = sorted(kept, key=lambda row: float(row.get("ts", 0) or 0))
     dropped = len(ordered) - len(kept)
     notice = {
         "record_type": "retention_notice",
         "ts": kept[0].get("ts") if kept else time.time(),
-        "reason": "MAX_DAILY_FILE_BYTES",
+        "reason": "MAX_HOURLY_FILE_BYTES",
         "dropped_records": dropped,
-        "retention_policy": "KEEP_NEWEST_COMPLETE_RECORDS",
-        "max_daily_file_bytes": limit,
+        "critical_records_dropped": 0,
+        "retention_policy": "KEEP_ALL_CRITICAL_THEN_NEWEST_DIAGNOSTICS",
+        "max_hourly_file_bytes": limit,
     }
-    while kept and len(_jsonl_bytes(notice)) + sum(
+    if len(_jsonl_bytes(notice)) + sum(
         len(_jsonl_bytes(row)) for row in kept
     ) > limit:
-        kept.pop(0)
-        dropped += 1
-        notice["dropped_records"] = dropped
+        raise RuntimeError("hourly telemetry cap accounting failed")
     rows_out = [notice, *kept] if len(_jsonl_bytes(notice)) <= limit else []
     return rows_out, {
         "dropped_records": dropped,
+        "critical_records_dropped": 0,
         "oversize_records": sum(bool(row.get("payload_omitted")) for row in kept),
     }
 
 
-def _reset_to_daily_layout(target):
-    """Remove obsolete telemetry layouts while preserving retained daily files."""
+def _reset_to_hourly_layout(target):
+    """Remove obsolete layouts while preserving valid VN-hour partitions."""
     target.mkdir(parents=True, exist_ok=True)
     for child in target.iterdir():
-        if child.name in {"daily", "manifest.json"}:
+        if child.name in {"hourly", "manifest.json"}:
             continue
         if child.is_dir():
             shutil.rmtree(child)
         else:
             child.unlink()
-    daily = target / "daily"
-    daily.mkdir(parents=True, exist_ok=True)
-    for child in daily.iterdir():
-        if not child.is_file() or not re.fullmatch(
-            r"\d{4}-\d{2}-\d{2}\.jsonl", child.name
-        ):
-            if child.is_dir():
-                shutil.rmtree(child)
+    hourly = target / "hourly"
+    hourly.mkdir(parents=True, exist_ok=True)
+    for day in hourly.iterdir():
+        if not day.is_dir() or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day.name):
+            if day.is_dir():
+                shutil.rmtree(day)
             else:
-                child.unlink()
+                day.unlink()
+            continue
+        for child in day.iterdir():
+            if not child.is_file() or not re.fullmatch(r"(?:[01]\d|2[0-3])\.jsonl", child.name):
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
 
 
 def _raw_partition(ts):
@@ -704,6 +765,32 @@ def _decision_dossier_records(row):
         "blockers": _public_value(blocker_rows),
         "counterfactual": _public_value(counterfactual),
     }
+
+
+def _hourly_decision_record(row, now):
+    """Represent a decision once; expand only investigation-worthy events."""
+    dossier = _decision_dossier_records(row)
+    if dossier is None:
+        return None
+    important = bool(
+        str(row.get("decision") or "").upper() == "GO"
+        or row.get("economic_opportunity_id")
+        or row.get("qualified_now")
+        or row.get("qualified_ever")
+        or row.get("near_miss")
+    )
+    if not important:
+        compact = _compact_event(row)
+        compact["telemetry_detail"] = "SUMMARY"
+        return _hourly_record("decision", compact)
+    combined = dict(dossier["decision"])
+    combined.update({
+        "telemetry_detail": "INVESTIGATION_DOSSIER",
+        "market_evidence": _attach_raw_evidence(dossier["evidence"], now),
+        "blockers": dossier["blockers"],
+        "counterfactual": dossier["counterfactual"],
+    })
+    return _hourly_record("decision", combined)
 
 
 def _transition_record(row):
@@ -1435,7 +1522,7 @@ def _publish(no_push=False):
     target = CLONE / "telemetry"
     now = time.time()
     cutoff = now - RETENTION_SECONDS
-    _reset_to_daily_layout(target)
+    _reset_to_hourly_layout(target)
     compact = [_compact_event(row) for row in rows]
     decisions = [
         row for row in compact if row.get("event") == "DECISION_EVALUATED"
@@ -1460,51 +1547,46 @@ def _publish(no_push=False):
         "runtime": _runtime_summary(),
     }
     heartbeat, data_health, source_epochs = _runtime_evidence(now, manifest)
-    daily_records = [
-        _daily_record("summary", summary),
-        _daily_record("runtime_heartbeat", heartbeat),
-        _daily_record("data_health", data_health),
-        _daily_record("source_epochs", source_epochs),
-    ]
-    daily_records.extend(
-        _daily_record("journal_event", row) for row in compact
-    )
-    for source_row in rows:
-        dossier = _decision_dossier_records(source_row)
-        if dossier is not None:
-            daily_records.append(_daily_record(
-                "decision", dossier["decision"],
-            ))
-            daily_records.append(_daily_record(
-                "market_evidence",
-                _attach_raw_evidence(dossier["evidence"], now),
-            ))
-            daily_records.extend(
-                _daily_record("blocker", blocker)
-                for blocker in dossier["blockers"]
-            )
-            if dossier["counterfactual"] is not None:
-                daily_records.append(_daily_record(
-                    "counterfactual", dossier["counterfactual"],
-                ))
-        transition = _transition_record(source_row)
-        if transition is not None:
-            daily_records.append(_daily_record("state_transition", transition))
+    sample_bucket = int(now // PERIODIC_SAMPLE_SECONDS)
+    emit_periodic = int(
+        checkpoint.get("telemetry_sample_bucket", -1) or -1
+    ) != sample_bucket
+    next_checkpoint["telemetry_sample_bucket"] = sample_bucket
+    hourly_records = []
+    if emit_periodic:
+        hourly_records.extend((
+            _hourly_record("summary", summary),
+            _hourly_record("runtime_heartbeat", heartbeat),
+            _hourly_record("data_health", data_health),
+            _hourly_record("source_epochs", source_epochs),
+        ))
+    for source_row, compact_row in zip(rows, compact):
+        decision = _hourly_decision_record(source_row, now)
+        if decision is not None:
+            hourly_records.append(decision)
+            continue
         execution = _execution_record(source_row)
         if execution is not None:
-            daily_records.append(_daily_record("execution", execution))
-    daily_records.extend(
-        _daily_record("opportunity", row)
+            hourly_records.append(_hourly_record("execution", execution))
+            continue
+        transition = _transition_record(source_row)
+        if transition is not None:
+            hourly_records.append(_hourly_record("state_transition", transition))
+            continue
+        hourly_records.append(_hourly_record("journal_event", compact_row))
+    hourly_records.extend(
+        _hourly_record("opportunity", row)
         for row in _opportunity_history(cutoff)
     )
-    daily_records.extend(
-        _daily_record("closed_trade", row)
+    hourly_records.extend(
+        _hourly_record("closed_trade", row)
         for row in _closed_trade_history(cutoff)
     )
-    for venue, observation in _market_observations().items():
-        daily_records.append(_daily_record(
-            "market_observation", observation, venue=venue,
-        ))
+    if emit_periodic:
+        for venue, observation in _market_observations().items():
+            hourly_records.append(_hourly_record(
+                "market_observation", observation, venue=venue,
+            ))
 
     recorder_identity = _identity(_load(RECORDER_HEALTH, {}))
     source_status = {
@@ -1528,51 +1610,61 @@ def _publish(no_push=False):
         for venue, (configured, role, connection_name) in source_status.items()
     }
 
-    current_date = datetime.fromtimestamp(now, timezone.utc).date()
-    retained_days = {
-        (current_date - timedelta(days=offset)).isoformat()
-        for offset in range(RETENTION_DAYS)
-    }
-    daily_root = target / "daily"
-    grouped = {day: [] for day in retained_days}
-    for path in daily_root.glob("*.jsonl"):
-        day = path.stem
-        if day not in retained_days:
+    retained_hours = _retained_vn_hours(now)
+    hourly_root = target / "hourly"
+    grouped = {hour: [] for hour in retained_hours}
+    for path in hourly_root.glob("*/*.jsonl"):
+        hour = "%s/%s" % (path.parent.name, path.stem)
+        if hour not in retained_hours:
             path.unlink()
             continue
-        grouped[day].extend(_load_jsonl(path))
-    for row in daily_records:
-        day = _utc_day(row.get("ts"))
-        if day in retained_days:
-            grouped[day].append(row)
+        grouped[hour].extend(_load_jsonl(path))
+    for row in hourly_records:
+        hour = _vn_hour(row.get("ts"))
+        if hour in retained_hours:
+            grouped[hour].append(row)
 
-    day_manifests = []
-    for day in sorted(retained_days):
-        path = daily_root / (day + ".jsonl")
-        day_rows, bounds = _bounded_daily_rows(grouped.get(day, ()))
-        if not day_rows:
+    hour_manifests = []
+    for hour in sorted(retained_hours):
+        path = hourly_root / (hour + ".jsonl")
+        hour_rows, bounds = _bounded_hourly_rows(grouped.get(hour, ()))
+        if not hour_rows:
             if path.exists():
                 path.unlink()
             continue
-        _write_jsonl(path, day_rows)
+        _write_jsonl(path, hour_rows)
         encoded = path.read_bytes()
-        day_manifests.append({
-            "date": day,
-            "path": "telemetry/daily/%s.jsonl" % day,
-            "rows": len(day_rows),
+        timestamps = [
+            float(row.get("ts", 0) or 0) for row in hour_rows
+            if float(row.get("ts", 0) or 0) > 0
+        ]
+        hour_manifests.append({
+            "hour_vn": hour,
+            "path": "telemetry/hourly/%s.jsonl" % hour,
+            "rows": len(hour_rows),
             "bytes": len(encoded),
             "sha256": hashlib.sha256(encoded).hexdigest(),
+            "coverage_start": _iso(min(timestamps), VN) if timestamps else None,
+            "coverage_end": _iso(max(timestamps), VN) if timestamps else None,
             **bounds,
         })
+    for day in hourly_root.iterdir():
+        if day.is_dir():
+            try:
+                day.rmdir()
+            except OSError:
+                pass
 
     manifest.update({
-        "schema_version": 3,
-        "telemetry_layout": "ONE_BOUNDED_JSONL_PER_UTC_DAY_V1",
-        "retention_days": RETENTION_DAYS,
-        "max_daily_file_bytes": MAX_DAILY_FILE_BYTES,
-        "max_record_bytes": MAX_DAILY_RECORD_BYTES,
-        "current_day_file": "telemetry/daily/%s.jsonl" % current_date,
-        "daily_files": day_manifests,
+        "schema_version": 4,
+        "telemetry_layout": "ONE_BOUNDED_JSONL_PER_VN_HOUR_V1",
+        "telemetry_timezone": "UTC+07:00",
+        "retention_hours": RETENTION_HOURS,
+        "retention_days": RETENTION_HOURS / 24,
+        "max_hourly_file_bytes": MAX_HOURLY_FILE_BYTES,
+        "max_record_bytes": MAX_RECORD_BYTES,
+        "current_hour_file": "telemetry/hourly/%s.jsonl" % _vn_hour(now),
+        "hourly_files": hour_manifests,
         "raw_market_storage": {
             "location": "VPS_ONLY",
             "partition": "STREAM_UTC_HOUR",
@@ -1585,7 +1677,7 @@ def _publish(no_push=False):
     if no_push:
         print(json.dumps({
             "generated": str(target), "rows": len(rows), "push": False,
-            "daily_files": len(day_manifests),
+            "hourly_files": len(hour_manifests),
         }))
         return
     # Rebuild the index from evidence only. This also migrates the original
