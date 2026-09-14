@@ -1515,11 +1515,13 @@ def _write_run_dossier(run_root, bundle, manifest, heartbeat, data_health,
     _write_json(run_root / "market" / "raw_archive.json", manifest["raw_archive"])
 
 
-def _publish(no_push=False):
-    checkpoint = _load(PUBLISH_STATE, {})
+def _publish(no_push=False, reset_history=False):
+    checkpoint = {} if reset_history else _load(PUBLISH_STATE, {})
     rows, next_checkpoint = _journal_delta(checkpoint)
     remote_sha, _has_head = _ensure_clone()
     target = CLONE / "telemetry"
+    if reset_history and target.exists():
+        shutil.rmtree(target)
     now = time.time()
     cutoff = now - RETENTION_SECONDS
     _reset_to_hourly_layout(target)
@@ -1714,6 +1716,7 @@ def _publish(no_push=False):
 
 def main():
     no_push = "--no-push" in sys.argv[1:]
+    reset_history = "--reset-history" in sys.argv[1:]
     PUBLISH_STATE.parent.mkdir(parents=True, exist_ok=True)
     lock_path = PUBLISH_STATE.with_suffix(".lock")
     with lock_path.open("w") as lock:
@@ -1722,7 +1725,7 @@ def main():
         except BlockingIOError:
             print("publisher already running", file=sys.stderr)
             return 0
-        _publish(no_push=no_push)
+        _publish(no_push=no_push, reset_history=reset_history)
     return 0
 
 

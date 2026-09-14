@@ -39,6 +39,8 @@ class ResearchPublisherTests(unittest.TestCase):
             remote = root / "remote.git"
             seed = root / "seed"
             clone = root / "publisher"
+            event_ts = time.time()
+            event_hour = publisher._vn_hour(event_ts)
             subprocess.run(["git", "init", "--bare", str(remote)], check=True,
                            stdout=subprocess.DEVNULL)
             subprocess.run(["git", "init", "-b", "telemetry", str(seed)],
@@ -54,6 +56,12 @@ class ResearchPublisherTests(unittest.TestCase):
             (seed / "research_live" / "timeline.json").write_text(
                 "[]\n", encoding="utf-8",
             )
+            old_hour = seed / "telemetry" / "hourly" / (event_hour + ".jsonl")
+            old_hour.parent.mkdir(parents=True)
+            old_hour.write_text(json.dumps({
+                "record_type": "closed_trade", "trade_id": "old-history",
+                "ts": event_ts - 60,
+            }) + "\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=seed, check=True)
             subprocess.run(["git", "commit", "-m", "polluted"], cwd=seed,
                            check=True, stdout=subprocess.DEVNULL)
@@ -62,8 +70,6 @@ class ResearchPublisherTests(unittest.TestCase):
             subprocess.run(["git", "push", "origin", "telemetry"], cwd=seed,
                            check=True, stdout=subprocess.DEVNULL)
 
-            event_ts = time.time()
-            event_hour = publisher._vn_hour(event_ts)
             journal = root / "events.jsonl"
             journal.write_text(json.dumps({
                 "event": "DECISION_EVALUATED", "ts": event_ts,
@@ -104,7 +110,7 @@ class ResearchPublisherTests(unittest.TestCase):
                 publisher.CLONE = clone
                 publisher.REMOTE = str(remote)
                 publisher._service_state = lambda _name: "active"
-                publisher._publish()
+                publisher._publish(reset_history=True)
             finally:
                 for name, value in originals.items():
                     setattr(publisher, name, value)
@@ -127,6 +133,9 @@ class ResearchPublisherTests(unittest.TestCase):
                 row.get("record_type") == "decision"
                 and row.get("event") == "DECISION_EVALUATED"
                 for row in hourly_rows
+            ))
+            self.assertFalse(any(
+                row.get("trade_id") == "old-history" for row in hourly_rows
             ))
             manifest = json.loads(
                 (clone / "telemetry" / "manifest.json").read_text()
