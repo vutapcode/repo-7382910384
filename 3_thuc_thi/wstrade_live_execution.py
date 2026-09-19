@@ -1031,11 +1031,14 @@ def _entry_causal_thesis(result):
         if primary not in anchors:
             primary = None
         return {
-            "version": "ENTRY_CAUSAL_THESIS_V4_POSITION_LINEAGE",
+            "version": "ENTRY_CAUSAL_THESIS_V5_POSITION_THESIS_SEED",
             "entry_thesis_handoff": handoff,
             "market_thesis": truth,
             "market_truth_hash": handoff.get("market_truth_hash"),
             "market_wave_id": truth.get("market_wave_id"),
+            "position_thesis_seed": dict(
+                truth.get("position_thesis_seed") or {}
+            ),
             "entry_mechanism": truth.get("mechanism"),
             "entry_cash_lineage": dict(
                 truth.get("entry_cash_lineage") or {}
@@ -1144,6 +1147,8 @@ def _position(side, qty, fill_price, hard_sl, risk_plan, now, client_id, result)
         fill_price * float(risk_plan.get("fee_reserve_usdt", 0.0) or 0.0)
         / max(fill_price * qty * r_value, 1e-12)
     )
+    handoff = dict(result.get("entry_thesis_handoff") or {})
+    position_seed = dict(handoff.get("position_thesis_seed") or {})
     return SimpleNamespace(
         active=True, live=True, side=side, qty=qty, initial_qty=qty,
         opened_at=now, position_cycle_id=f"live:{side}:{int(now * 1000)}",
@@ -1160,6 +1165,10 @@ def _position(side, qty, fill_price, hard_sl, risk_plan, now, client_id, result)
         decision_cycle_id=result.get("decision_cycle_id"),
         canonical_opportunity_id=int(result.get("canonical_opportunity_id", 0) or 0),
         causal_episode_id=result.get("causal_episode_id"),
+        market_wave_id=(
+            position_seed.get("root_id") or result.get("market_wave_id")
+        ),
+        position_thesis_seed=position_seed,
         authority_contracts=dict(result.get("authority_contracts") or {}),
         entry_causal_thesis=_entry_causal_thesis(result),
         edge_first_positive_net_at=None,
@@ -1192,14 +1201,28 @@ async def _open_position_locked(
         expected_side=side,
         expected_episode_id=result.get("causal_episode_id"),
     ):
+        rejected_handoff = dict(result.get("entry_thesis_handoff") or {})
+        rejected_truth = dict(rejected_handoff.get("market_thesis") or {})
+        reject_reason = (
+            "POSITION_THESIS_SEED_UNBOUND"
+            if authority_contracts.verify(rejected_truth)
+            and not authority_contracts.verify_position_thesis_seed(
+                rejected_truth
+            )
+            else "ENTRY_HANDOFF_CONTRACT_INVALID"
+        )
         state.wstrade_live_last_entry_outcome.update({
             "status": "REJECTED_BEFORE_SUBMIT",
-            "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
+            "reason": reject_reason,
         })
         state.wstrade_live_last_entry_gate = {
             "ok": False,
-            "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
-            "detail": "ACTION_APPROVED_MARKET_TRUTH_REQUIRED",
+            "reason": reject_reason,
+            "detail": (
+                "MONITORABLE_POSITION_THESIS_ROOT_REQUIRED"
+                if reject_reason == "POSITION_THESIS_SEED_UNBOUND"
+                else "ACTION_APPROVED_MARKET_TRUTH_REQUIRED"
+            ),
         }
         if event_callback:
             event_callback("LIVE_ENTRY_HANDOFF_REJECTED", {
@@ -1208,7 +1231,7 @@ async def _open_position_locked(
                     "canonical_opportunity_id"
                 ),
                 "side": side,
-                "reason": "ENTRY_HANDOFF_CONTRACT_INVALID",
+                "reason": reject_reason,
             })
         return None
     if not bool(getattr(state, "wstrade_live_armed", False)):
@@ -1667,6 +1690,8 @@ async def _open_position_locked(
             "decision_cycle_id": result.get("decision_cycle_id"),
             "canonical_opportunity_id": result.get("canonical_opportunity_id"),
             "causal_episode_id": result.get("causal_episode_id"),
+            "market_wave_id": position.market_wave_id,
+            "position_thesis_seed": dict(position.position_thesis_seed),
             "proof_type": ignition.get("proof_type"),
             "proposer": ignition.get("proposer"),
             "regime": regime.get("regime"),
@@ -1793,6 +1818,10 @@ async def _close_position_locked(
             "client_order_id": client_id,
             "decision_cycle_id": getattr(position, "decision_cycle_id", None),
             "causal_episode_id": getattr(position, "causal_episode_id", None),
+            "market_wave_id": getattr(position, "market_wave_id", None),
+            "position_thesis_seed": dict(
+                getattr(position, "position_thesis_seed", {}) or {}
+            ),
             "gross_pnl_bps": round(gross_bps, 6) if gross_bps is not None else None,
             "fee_bps": round(fee_bps, 6),
             "net_pnl_bps": (

@@ -1,6 +1,8 @@
 import asyncio
 import copy
+import hashlib
 import inspect
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -9,13 +11,45 @@ import mainnet_tier_s_shadow_launcher as launcher
 from loi_he_thong import authority_contracts
 
 
+def acquisition_handoff(side="LONG"):
+    segments = [{
+        "state": "CONVERTING", "side": side,
+        "price": {"vote": side}, "flow": {"vote": side},
+    } for _ in range(2)]
+    sealed = {
+        "version": "CASH_CONTROL_ACQUISITION_HANDOFF_V1",
+        "side": side,
+        "first_converting_segment_onset_ms": 9_000,
+        "ownership_completed_ms": 9_500,
+        "venue_epochs": {"spot": 3, "coinbase": 4},
+        "directional_cash_roots": [
+            "BINANCE_SPOT_CASH", "COINBASE_USD_CASH",
+        ],
+        "temporal_persistence_segments": 2,
+        "segment_evidence": segments,
+        "bias_version": "BIAS_TEST_V1",
+    }
+    digest = hashlib.sha256(json.dumps(
+        sealed, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode()).hexdigest()
+    return {
+        **sealed, "sealed_payload": sealed,
+        "causal_wave_id": "cash-acquisition:" + digest[:20],
+        "handoff_hash": digest, "status": "SEALED", "sealed": True,
+        "authority": False, "entry_authority": False,
+    }
+
+
 def approved_result():
+    handoff = acquisition_handoff()
     return {
         "decision": "GO",
         "reason": "IGNITION_METAORDER_CONTINUATION",
         "side": "LONG",
         "execution_policy": "TAKER",
-        "causal_episode_id": "episode-4a",
+        "causal_episode_id": handoff["causal_wave_id"],
+        "market_wave_id": handoff["causal_wave_id"],
+        "bias_acquisition_handoff": handoff,
         "authority_basis": "BIAS_ALIGNED",
         "edge_tier": {
             "cost_ok": True,
@@ -29,7 +63,10 @@ def approved_result():
             "forward_edge_status": "BOOTSTRAP_UNVERIFIED",
         },
         "ignition": {
-            "causal_episode_id": "episode-4a",
+            "causal_episode_id": handoff["causal_wave_id"],
+            "origin_kind": "SEALED_ACQUISITION_CONTINUATION",
+            "acquisition_causal_wave_id": handoff["causal_wave_id"],
+            "acquisition_handoff_hash": handoff["handoff_hash"],
             "side": "LONG",
             "proof_type": "PERSISTENT_METAORDER",
             "proposer": "coinbase_spot",
@@ -80,9 +117,17 @@ class Phase4EntryHandoffTests(unittest.TestCase):
         handoff = result["entry_thesis_handoff"]
         self.assertTrue(authority_contracts.verify_entry_handoff(
             handoff, expected_side="LONG",
-            expected_episode_id="episode-4a",
+            expected_episode_id=result["causal_episode_id"],
         ))
         self.assertEqual(handoff["mechanism"], "CASH_METAORDER")
+        self.assertEqual(
+            handoff["position_thesis_seed"]["identity_kind"],
+            "BIAS_CASH_ACQUISITION",
+        )
+        self.assertEqual(
+            handoff["position_thesis_seed"]["root_id"],
+            result["bias_acquisition_handoff"]["causal_wave_id"],
+        )
         self.assertEqual(
             handoff["market_truth_hash"],
             result["authority_contracts"]["contracts"][
@@ -117,6 +162,23 @@ class Phase4EntryHandoffTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ENTRY_HANDOFF_EPISODE_MISSING"):
             launcher._freeze_entry_handoff(entry, "")
 
+    def test_go_without_monitorable_position_seed_is_rejected(self):
+        result = approved_result()
+        result.pop("bias_acquisition_handoff")
+        result["ignition"].pop("origin_kind")
+        result["authority_contracts"] = launcher._authority_contract_bundle(
+            SimpleNamespace(mainnet_shadow_health={}), result, True,
+            result["causal_episode_id"],
+        )
+        truth = result["authority_contracts"]["contracts"]["MARKET_TRUTH"]
+        self.assertEqual(truth["position_thesis_seed"]["status"], "UNBOUND")
+        with self.assertRaisesRegex(
+            ValueError, "POSITION_THESIS_SEED_UNBOUND",
+        ):
+            launcher._freeze_entry_handoff(
+                result, result["causal_episode_id"],
+            )
+
     def test_truth_rewrite_invalidates_handoff(self):
         result = seal_approved()
         changed = copy.deepcopy(result["entry_thesis_handoff"])
@@ -132,7 +194,7 @@ class Phase4EntryHandoffTests(unittest.TestCase):
             thesis = launcher.live_execution._entry_causal_thesis(result)
         self.assertEqual(
             thesis["version"],
-            "ENTRY_CAUSAL_THESIS_V4_POSITION_LINEAGE",
+            "ENTRY_CAUSAL_THESIS_V5_POSITION_THESIS_SEED",
         )
         self.assertEqual(thesis["primary_cash_anchor"], "coinbase")
         self.assertEqual(
@@ -156,7 +218,7 @@ class Phase4EntryHandoffTests(unittest.TestCase):
         snapshot = launcher._decision_snapshot(
             state, result, result["edge_tier"], True,
             "cycle-invalid", 100.0,
-            opportunity={"causal_episode_id": "episode-4a"},
+            opportunity={"causal_episode_id": result["causal_episode_id"]},
         )
         self.assertEqual(snapshot["output"]["decision"], "WAIT")
         self.assertEqual(
@@ -169,7 +231,7 @@ class Phase4EntryHandoffTests(unittest.TestCase):
         snapshot = launcher._decision_snapshot(
             state, approved, approved["edge_tier"], True,
             "cycle-valid", 100.0,
-            opportunity={"causal_episode_id": "episode-4a"},
+            opportunity={"causal_episode_id": approved["causal_episode_id"]},
         )
         self.assertEqual(snapshot["output"]["decision"], "GO")
         self.assertTrue(snapshot["output"]["entry_handoff_valid"])

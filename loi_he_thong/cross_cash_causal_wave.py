@@ -334,6 +334,48 @@ def position_lineage(state, entry_lineage, snapshot=None):
     }
 
 
+def current_process_lineage(state, position_thesis_seed, snapshot=None):
+    """Describe the transient cash process without impersonating position ID."""
+    seed = dict(position_thesis_seed or {})
+    current_snapshot = dict(
+        snapshot or getattr(state, "cross_cash_causal_wave_shadow", {}) or {}
+    )
+    current = dict(current_snapshot.get("active_wave") or {})
+    root_side = str(seed.get("side") or "ABSTAIN").upper()
+    current_id = str(current.get("causal_wave_id") or "")
+    current_side = str(current.get("side") or "ABSTAIN").upper()
+    if not current_id:
+        relation = "UNOBSERVED"
+    elif current_side == root_side:
+        relation = "SAME_SIDE_PROCESS"
+    elif current_side in {"LONG", "SHORT"}:
+        relation = "OPPOSING_PROCESS"
+    else:
+        relation = "UNOBSERVED"
+    return {
+        "version": "CURRENT_CASH_PROCESS_LINEAGE_V1",
+        "position_root_id": str(seed.get("root_id") or "") or None,
+        "position_root_hash": str(seed.get("root_hash") or "") or None,
+        "position_identity_kind": str(
+            seed.get("identity_kind") or "UNKNOWN"
+        ),
+        "position_side": root_side,
+        "current_causal_wave_id": current_id or None,
+        "current_side": current_side,
+        "current_state": str(current.get("state") or "UNKNOWN").upper(),
+        "current_cash_roots": dict(current.get("cash_roots") or {}),
+        "lineage_relation": relation,
+        # A cash-wave tombstone is deliberately not a position-root tombstone.
+        "incumbent_terminal": False,
+        "terminal_evidence": {},
+        "observed_at_ms": int(
+            current_snapshot.get("observed_at_ms", 0) or 0
+        ),
+        "authority": False,
+        "can_falsify_market_thesis": False,
+    }
+
+
 def observe(state, histories, now_ms):
     """Update the bounded shadow observation and return recorder events."""
     observations = {

@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -143,6 +145,32 @@ def action_approved_result(result, side='LONG'):
         'binance_spot': {'valid': True, 'epoch': 1},
         'coinbase_spot': {'valid': True, 'epoch': 1},
     })
+    segments = [{
+        'state': 'CONVERTING', 'side': side,
+        'price': {'vote': side}, 'flow': {'vote': side},
+    } for _ in range(2)]
+    sealed = {
+        'version': 'CASH_CONTROL_ACQUISITION_HANDOFF_V1',
+        'side': side,
+        'first_converting_segment_onset_ms': 9_000,
+        'ownership_completed_ms': 9_500,
+        'venue_epochs': {'spot': 1, 'coinbase': 1},
+        'directional_cash_roots': [
+            'BINANCE_SPOT_CASH', 'COINBASE_USD_CASH',
+        ],
+        'temporal_persistence_segments': 2,
+        'segment_evidence': segments,
+        'bias_version': 'BIAS_TEST_V1',
+    }
+    digest = hashlib.sha256(json.dumps(
+        sealed, sort_keys=True, separators=(',', ':'), ensure_ascii=True,
+    ).encode()).hexdigest()
+    result['bias_acquisition_handoff'] = {
+        **sealed, 'sealed_payload': sealed,
+        'causal_wave_id': 'cash-acquisition:' + digest[:20],
+        'handoff_hash': digest, 'status': 'SEALED', 'sealed': True,
+        'authority': False, 'entry_authority': False,
+    }
     result.update({
         'decision': 'GO', 'reason': 'IGNITION_PROVED', 'side': side,
         'causal_episode_id': episode_id, 'ignition': ignition,
@@ -307,7 +335,7 @@ class LiveExecutionTests(unittest.TestCase):
         self.assertEqual(thesis['bias_thesis']['hysteresis'], 'STABLE')
         self.assertEqual(
             thesis['market_thesis']['version'],
-            'MARKET_THESIS_V5_POSITION_LINEAGE',
+            'MARKET_THESIS_V6_POSITION_THESIS_SEED',
         )
         self.assertEqual(thesis['market_thesis']['side'], 'LONG')
         self.assertTrue(thesis['market_thesis']['pnl_independent'])

@@ -1,0 +1,26 @@
+[Unit]
+Description=WStrade shadow-to-Binance-Futures-testnet order mirror
+After=network-online.target wstrade-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/WStrade
+ExecStart=/home/ubuntu/WStrade/.venv/bin/python /home/ubuntu/WStrade/ops/shadow_demo_mirror.py
+Restart=on-failure
+RestartSec=60s
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/.local/state/wstrade
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

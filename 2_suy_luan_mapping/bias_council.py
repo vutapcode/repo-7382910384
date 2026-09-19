@@ -532,13 +532,25 @@ def observe_cash_wave(
             "entry_mechanism": str(
                 identity.get("entry_mechanism") or "UNKNOWN"
             ).upper(),
+            "position_root_id": str(
+                identity.get("position_root_id") or ""
+            ) or None,
+            "position_root_hash": str(
+                identity.get("position_root_hash") or ""
+            ) or None,
+            "position_identity_kind": str(
+                identity.get("position_identity_kind") or "UNKNOWN"
+            ),
         },
         "causal_lineage": lineage,
         "identity_bound": bool(
             identity.get("position_cycle_id")
             and identity.get("market_wave_id")
             and identity.get("market_truth_hash")
-            and lineage.get("entry_causal_wave_id")
+            and identity.get("position_root_id")
+            and identity.get("position_root_hash")
+            and lineage.get("position_root_id")
+                == identity.get("position_root_id")
         ),
         "observed_at_ms": int(now * 1000.0),
         "source_health": {
@@ -859,6 +871,38 @@ def _terminate_acquisition_wave(existing, report, completed_at):
         "termination_reason": reason,
     })
     return existing
+
+
+def _remember_acquisition_terminal(state, handoff):
+    """Preserve exact terminal evidence before mutable Bias advances again."""
+    handoff = dict(handoff or {})
+    root_id = str(handoff.get("causal_wave_id") or "")
+    if not root_id or not str(handoff.get("status") or "").startswith(
+        ("TERMINATED_", "INVALIDATED_")
+    ):
+        return
+    rows = dict(getattr(state, "bias_acquisition_terminal_events", {}) or {})
+    if root_id not in rows and len(rows) >= 256:
+        rows.pop(next(iter(rows)))
+    rows[root_id] = {
+        "root_id": root_id,
+        "root_hash": str(handoff.get("handoff_hash") or "") or None,
+        "side": str(handoff.get("side") or "ABSTAIN").upper(),
+        "status": str(handoff.get("status") or "UNKNOWN"),
+        "reason": str(
+            handoff.get("termination_reason")
+            or handoff.get("invalidation_reason")
+            or handoff.get("status")
+            or "UNKNOWN"
+        ),
+        "terminated_at_ms": int(
+            handoff.get("terminated_at_ms")
+            or handoff.get("invalidated_at_ms")
+            or 0
+        ),
+        "authority": False,
+    }
+    state.bias_acquisition_terminal_events = rows
 
 
 def _adaptive_cash_regime(reports):
@@ -1194,6 +1238,7 @@ def update_state(state, now=None, force_full=False):
         getattr(state, "bias_acquisition_handoff", {}), out, completed_at,
     )
     if existing:
+        _remember_acquisition_terminal(state, existing)
         state.bias_acquisition_handoff = existing
     handoff = None
     if previous_side not in ("LONG", "SHORT") and out.get("bias") in (
@@ -1226,6 +1271,8 @@ def update_state(state, now=None, force_full=False):
         if epoch_changed:
             existing["status"] = "INVALIDATED_EPOCH_CHANGE"
             existing["invalidated_at_ms"] = int(completed_at * 1000.0)
+            existing["invalidation_reason"] = "VENUE_EPOCH_BREAK"
+            _remember_acquisition_terminal(state, existing)
             state.bias_acquisition_handoff = existing
         out["acquisition_handoff"] = dict(existing)
     state.bias_state = out["bias"]

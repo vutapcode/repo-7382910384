@@ -11,12 +11,14 @@ absent from both contracts.
 import hashlib
 import json
 
-from loi_he_thong import authority_contracts, cross_cash_causal_wave
+from loi_he_thong import (
+    acquisition_identity, authority_contracts, cross_cash_causal_wave,
+)
 
 
-VERSION = "MARKET_THESIS_V5_POSITION_LINEAGE"
-OBSERVATION_VERSION = "MARKET_THESIS_OBSERVATION_V4_THESIS_LIFECYCLE"
-WAVE_LIFECYCLE_VERSION = "MARKET_TRUTH_WAVE_LIFECYCLE_V3_IDENTITY_SEPARATED"
+VERSION = "MARKET_THESIS_V6_POSITION_THESIS_SEED"
+OBSERVATION_VERSION = "MARKET_THESIS_OBSERVATION_V5_ROOT_PROCESS_SEPARATED"
+WAVE_LIFECYCLE_VERSION = "MARKET_TRUTH_WAVE_LIFECYCLE_V4_POSITION_ROOT"
 OWNER = "MARKET_THESIS"
 MAX_WAVE_TOMBSTONES = 256
 OBSERVATION_STATUSES = {
@@ -77,7 +79,13 @@ def _wave_tombstones(state):
     return dict(raw) if isinstance(raw, dict) else {}
 
 
-def _remember_wave_falsifier(state, episode_id, falsifier):
+def _tombstone_reason(value):
+    if isinstance(value, dict):
+        return str(value.get("reason") or "MARKET_TRUTH_CAUSAL_FALSIFIER")
+    return str(value or "")
+
+
+def _remember_wave_falsifier(state, episode_id, falsifier, **evidence):
     """Keep terminal Market Truth across later handoff replacement.
 
     The ledger is deliberately bounded and keyed only by immutable causal-wave
@@ -89,8 +97,41 @@ def _remember_wave_falsifier(state, episode_id, falsifier):
     rows = _wave_tombstones(state)
     if episode_id not in rows and len(rows) >= MAX_WAVE_TOMBSTONES:
         rows.pop(next(iter(rows)))
-    rows[episode_id] = str(falsifier or "MARKET_TRUTH_CAUSAL_FALSIFIER")
+    prior = rows.get(episode_id)
+    if prior:
+        return
+    rows[episode_id] = {
+        "root_id": episode_id,
+        "reason": str(falsifier or "MARKET_TRUTH_CAUSAL_FALSIFIER"),
+        "terminal": True,
+        **{
+            str(name): value for name, value in evidence.items()
+            if value is not None
+        },
+    }
     state.market_truth_wave_tombstones = rows
+
+
+def ingest_bias_acquisition_terminals(state):
+    """Promote exact Bias terminal evidence into Market Truth's sole ledger."""
+    for root_id, raw in dict(
+        getattr(state, "bias_acquisition_terminal_events", {}) or {}
+    ).items():
+        row = dict(raw or {})
+        if (
+            str(row.get("root_id") or "") == str(root_id)
+            and str(root_id).startswith("cash-acquisition:")
+            and str(row.get("status") or "").startswith("TERMINATED_")
+            and str(row.get("reason") or "")
+        ):
+            _remember_wave_falsifier(
+                state, root_id, row["reason"],
+                identity_kind=acquisition_identity.IDENTITY_KIND,
+                root_hash=row.get("root_hash"),
+                side=row.get("side"),
+                terminated_at_ms=row.get("terminated_at_ms"),
+                evidence_source="BIAS_ACQUISITION_TERMINAL_EVENT",
+            )
 
 
 def wave_lifecycle(state, result):
@@ -102,6 +143,7 @@ def wave_lifecycle(state, result):
     falsifier.
     """
     result = dict(result or {})
+    ingest_bias_acquisition_terminals(state)
     ignition = dict(result.get("ignition") or {})
     wave = dict(ignition.get("causal_wave_snapshot") or {})
     timing_episode_id = str(
@@ -131,7 +173,10 @@ def wave_lifecycle(state, result):
     )
     handoff_terminates_wave = bool(
         handoff_wave_id
-        and handoff_status.startswith(("TERMINATED_", "INVALIDATED_"))
+        and handoff_status.startswith("TERMINATED_")
+    )
+    handoff_source_invalid = bool(
+        handoff_wave_id and handoff_status.startswith("INVALIDATED_")
     )
     transition_owns_side = bool(
         str(transition.get("status") or "").upper() == "REVERSAL_CONFIRMED"
@@ -139,7 +184,7 @@ def wave_lifecycle(state, result):
             == "CONTROL_OWNED"
         and str(transition.get("side") or "").upper() == side
     )
-    if handoff_owns_side or handoff_terminates_wave:
+    if handoff_owns_side or handoff_terminates_wave or handoff_source_invalid:
         # A terminal handoff no longer owns direction, but it still owns the
         # immutable identity of the wave it falsifies.  Falling back to the
         # timing-attempt id here would strand the old canonical opportunity.
@@ -173,7 +218,7 @@ def wave_lifecycle(state, result):
         row.update(
             status="FALSIFIED",
             reason="MARKET_TRUTH_TERMINAL_WAVE",
-            falsifier=str(tombstone),
+            falsifier=_tombstone_reason(tombstone),
         )
         return row
 
@@ -181,7 +226,7 @@ def wave_lifecycle(state, result):
         handoff_status = str(handoff.get("status") or "UNKNOWN").upper()
         if handoff_status == "SEALED":
             row.update(status="ACTIVE", reason="BIAS_CASH_WAVE_OWNED")
-        elif handoff_status.startswith(("TERMINATED_", "INVALIDATED_")):
+        elif handoff_status.startswith("TERMINATED_"):
             falsifier = str(
                 handoff.get("termination_reason")
                 or handoff.get("invalidation_reason")
@@ -192,6 +237,11 @@ def wave_lifecycle(state, result):
                 falsifier=falsifier,
             )
             _remember_wave_falsifier(state, market_wave_id, falsifier)
+        elif handoff_status.startswith("INVALIDATED_"):
+            row.update(
+                status="UNKNOWN",
+                reason="BIAS_ACQUISITION_SOURCE_INVALID",
+            )
         return row
 
     contradictions = dict(wave.get("contradictions") or {})
@@ -253,7 +303,7 @@ def _source_health(ignition, knowledge_state):
 
 
 def _entry_cash_lineage(result, side):
-    """Freeze the authority-free root identity already observed at Entry."""
+    """Freeze a transient process snapshot for compatibility/diagnostics."""
     snapshot = dict((result or {}).get("cross_cash_causal_wave") or {})
     active = dict(snapshot.get("active_wave") or {})
     aliases = {
@@ -312,6 +362,73 @@ def _entry_cash_lineage(result, side):
         "observed_at_ms": int(snapshot.get("observed_at_ms", 0) or 0),
         "authority": False,
         "entry_authority": False,
+    }
+
+
+def _position_thesis_seed(result, side, mechanism, market_wave_id):
+    """Freeze the mechanism-owned root a filled position will actually own."""
+    result = dict(result or {})
+    ignition = dict(result.get("ignition") or {})
+    if mechanism == "CASH_METAORDER":
+        seed = acquisition_identity.position_thesis_seed(
+            result.get("bias_acquisition_handoff"), side,
+        )
+        origin_kind = str(ignition.get("origin_kind") or "")
+        if seed.get("status") == "BOUND" and origin_kind:
+            if (
+                origin_kind != "SEALED_ACQUISITION_CONTINUATION"
+                or str(ignition.get("acquisition_causal_wave_id") or "")
+                    != seed.get("root_id")
+                or str(ignition.get("acquisition_handoff_hash") or "")
+                    != seed.get("root_hash")
+            ):
+                seed.update(
+                    status="UNBOUND",
+                    reason="IGNITION_ACQUISITION_IDENTITY_MISMATCH",
+                )
+        seed["mechanism"] = mechanism
+        return seed
+
+    identity_kinds = {
+        "CASH_CONTROL_TRANSFER": "FAST_TRANSITION_CONTROL_ROOT",
+        "FAILED_REVERSION_CONTINUATION": "FAILED_REVERSION_CAUSAL_ROOT",
+        "CASH_IGNITION": "IGNITION_CAUSAL_ROOT",
+    }
+    identity_kind = identity_kinds.get(mechanism)
+    root_id = str(market_wave_id or "")
+    proof_type = _u(ignition.get("proof_type"))
+    root_evidence = {
+        "identity_kind": identity_kind,
+        "root_id": root_id or None,
+        "side": side,
+        "mechanism": mechanism,
+        "proof_type": proof_type,
+        "causal_origin_proof": dict(
+            ignition.get("causal_origin_proof") or {}
+        ),
+        "transition_authority": (
+            dict(ignition.get("transition_authority") or {})
+            if mechanism == "CASH_CONTROL_TRANSFER" else {}
+        ),
+    }
+    valid = bool(
+        identity_kind and root_id and side in {"LONG", "SHORT"}
+        and proof_type != "UNKNOWN"
+    )
+    return {
+        "version": acquisition_identity.SEED_VERSION,
+        "status": "BOUND" if valid else "UNBOUND",
+        "reason": (
+            "MECHANISM_OWNED_CAUSAL_ROOT_FROZEN"
+            if valid else "MECHANISM_OWNED_CAUSAL_ROOT_MISSING"
+        ),
+        "identity_kind": identity_kind,
+        "root_id": root_id or None,
+        "root_hash": _stable_hash(root_evidence) if valid else None,
+        "side": side,
+        "mechanism": mechanism,
+        "frozen_evidence": root_evidence if valid else {},
+        "authority": False,
     }
 
 
@@ -381,6 +498,12 @@ def build(result, *, primary_cash_anchor=None, cash_anchors=()):
         mechanism = "UNRESOLVED_MARKET_MECHANISM"
         expected_sequence = []
 
+    position_thesis_seed = _position_thesis_seed(
+        result, side, mechanism, market_wave_id,
+    )
+    if position_thesis_seed.get("status") == "BOUND":
+        market_wave_id = str(position_thesis_seed.get("root_id") or "")
+
     if not cash_anchors:
         aliases = {
             "binance_spot": "spot", "spot": "spot",
@@ -438,6 +561,9 @@ def build(result, *, primary_cash_anchor=None, cash_anchors=()):
         "knowledge_state": knowledge_state,
         "side": side,
         "market_wave_id": market_wave_id or None,
+        "position_thesis_seed": position_thesis_seed,
+        # Deprecated: this is a transient process snapshot, never the
+        # position-owned identity.
         "entry_cash_lineage": entry_cash_lineage,
         "mechanism": mechanism,
         "why_entry": {
@@ -558,6 +684,8 @@ def observe(contract, observation, *, state=None):
         return _observation_unknown(
             contract, "ENTRY_MARKET_THESIS_INVALID", {},
         )
+    if state is not None:
+        ingest_bias_acquisition_terminals(state)
 
     why = dict(contract.get("why_entry") or {})
     anchors = sorted({
@@ -621,6 +749,7 @@ def observe(contract, observation, *, state=None):
             "epoch": raw_row.get("epoch"),
         }
     position_wave = dict(observation.get("position_wave") or {})
+    observed_seed = dict(observation.get("position_thesis_seed") or {})
     raw_position_cash = dict(
         observation.get("position_cash_wave") or {}
     )
@@ -754,8 +883,31 @@ def observe(contract, observation, *, state=None):
                 "entry_mechanism": _u(
                     raw_position_identity.get("entry_mechanism")
                 ),
+                "position_root_id": str(
+                    raw_position_identity.get("position_root_id") or ""
+                ) or None,
+                "position_root_hash": str(
+                    raw_position_identity.get("position_root_hash") or ""
+                ) or None,
+                "position_identity_kind": str(
+                    raw_position_identity.get("position_identity_kind")
+                    or "UNKNOWN"
+                ),
             },
             "causal_lineage": {
+                "version": str(raw_lineage.get("version") or "UNKNOWN"),
+                "position_root_id": str(
+                    raw_lineage.get("position_root_id") or ""
+                ) or None,
+                "position_root_hash": str(
+                    raw_lineage.get("position_root_hash") or ""
+                ) or None,
+                "position_identity_kind": str(
+                    raw_lineage.get("position_identity_kind") or "UNKNOWN"
+                ),
+                "position_side": _u(
+                    raw_lineage.get("position_side"), "ABSTAIN"
+                ),
                 "entry_causal_wave_id": str(
                     raw_lineage.get("entry_causal_wave_id") or ""
                 ) or None,
@@ -811,6 +963,7 @@ def observe(contract, observation, *, state=None):
         "position_market_truth_hash": str(
             observation.get("position_market_truth_hash") or ""
         ) or None,
+        "position_thesis_seed": observed_seed,
         "derivative_context": {
             "oi_regime": _u(derivative_context.get("oi_regime")),
             "oi_change_pct": derivative_context.get("oi_change_pct"),
@@ -869,11 +1022,14 @@ def observe(contract, observation, *, state=None):
     market_wave_id = str(
         contract.get("market_wave_id") or episode_id or ""
     )
+    position_seed = dict(contract.get("position_thesis_seed") or {})
     position_identity = canonical["position_cash_wave"][
         "position_identity"
     ]
     if (
-        canonical["position_market_wave_id"] != market_wave_id
+        not authority_contracts.verify_position_thesis_seed(contract)
+        or canonical["position_thesis_seed"] != position_seed
+        or canonical["position_market_wave_id"] != market_wave_id
         or canonical["position_market_truth_hash"]
             != contract.get("contract_hash")
         or position_identity.get("position_cycle_id")
@@ -883,6 +1039,12 @@ def observe(contract, observation, *, state=None):
             != contract.get("contract_hash")
         or position_identity.get("entry_mechanism")
             != _u(contract.get("mechanism"))
+        or position_identity.get("position_root_id")
+            != position_seed.get("root_id")
+        or position_identity.get("position_root_hash")
+            != position_seed.get("root_hash")
+        or position_identity.get("position_identity_kind")
+            != position_seed.get("identity_kind")
     ):
         return _observation_unknown(
             contract, "POSITION_THESIS_IDENTITY_MISMATCH", canonical,
@@ -1059,6 +1221,14 @@ def observe(contract, observation, *, state=None):
             for name in ("spot", "coinbase")
         )
     )
+    exact_acquisition_root_current = bool(
+        position_seed.get("identity_kind")
+            == acquisition_identity.IDENTITY_KIND
+        and ownership_handoff_valid
+        and handoff.get("causal_wave_id") == position_seed.get("root_id")
+        and handoff.get("handoff_hash") == position_seed.get("root_hash")
+        and handoff_side == side
+    )
     position_wave_age_ms = (
         canonical["observed_at_ms"]
         - int(position_cash.get("observed_at_ms", 0) or 0)
@@ -1093,31 +1263,19 @@ def observe(contract, observation, *, state=None):
     ), {})
     entry_lineage = dict(contract.get("entry_cash_lineage") or {})
     lineage = dict(position_cash.get("causal_lineage") or {})
-    entry_cross_id = str(entry_lineage.get("causal_wave_id") or "")
-    terminal = dict(lineage.get("terminal_evidence") or {})
-    terminal_reason = _u(terminal.get("termination_reason"))
-    terminal_reclaims = dict(terminal.get("termination_evidence") or {})
-    primary_reclaim = dict(terminal_reclaims.get(primary) or {})
-    primary_reclaim_proven = bool(
-        primary
-        and primary_reclaim.get("side") == side
-        and primary_reclaim.get("state") == "FLOW_NONCONVERSION"
-        and primary_reclaim.get("reclaimed_past_root")
-        and primary_reclaim.get("root_evidence_id")
-    )
+    position_root_id = str(position_seed.get("root_id") or "")
     relation = _u(lineage.get("lineage_relation"))
-    lineage_bound = bool(
-        entry_lineage.get("status") == "BOUND"
-        and entry_cross_id
-        and _u(entry_lineage.get("side"), "ABSTAIN") == side
-        and lineage.get("entry_causal_wave_id") == entry_cross_id
-        and lineage.get("entry_side") == side
+    seed_bound = bool(
+        authority_contracts.verify_position_thesis_seed(contract)
+        and position_root_id == market_wave_id
+        and lineage.get("position_root_id") == position_root_id
+        and lineage.get("position_root_hash") == position_seed.get("root_hash")
+        and lineage.get("position_side") == side
     )
 
     distinct_opposing_wave = bool(
         wave_current
         and cash_wave.get("causal_wave_id")
-        and cash_wave.get("causal_wave_id") != entry_cross_id
         and cash_wave.get("side") in {"LONG", "SHORT"}
         and cash_wave.get("side") != side
     )
@@ -1147,53 +1305,46 @@ def observe(contract, observation, *, state=None):
         challenger_reason = "CHALLENGER_EVIDENCE_UNAVAILABLE"
 
     mechanism = _u(contract.get("mechanism"))
-    terminal_market_reason = str(known_terminal or "")
-    incumbent_reason = "EXACT_ENTRY_LINEAGE_UNRESOLVED"
+    terminal_market_reason = _tombstone_reason(known_terminal)
+    incumbent_reason = "POSITION_THESIS_ROOT_UNRESOLVED"
+    positive_incumbent_survival = bool(
+        position_relative_current
+        and (
+            exact_acquisition_root_current
+            if position_seed.get("identity_kind")
+                == acquisition_identity.IDENTITY_KIND
+            else frozen_wave.get("status") == "ACTIVE"
+        )
+        and (
+            position_cash.get("old_side_still_converts")
+            or position_wave_state in {"CONTROLLED", "RECOVERED"}
+        )
+    )
+    incumbent_eroding = bool(
+        position_relative_current
+        and position_wave_state in {"CONTROL_ERODING", "ABSORPTION"}
+    )
     if known_terminal or frozen_wave_falsified:
         incumbent_state = "FAILED"
         incumbent_reason = (
             terminal_market_reason
             or str(frozen_wave.get("falsifier") or "MARKET_TRUTH_TERMINAL")
         )
-    elif not lineage_bound or not position_relative_current:
+    elif not seed_bound:
         incumbent_state = "UNKNOWN"
-        incumbent_reason = "EXACT_ENTRY_LINEAGE_NOT_CURRENT"
-    elif lineage.get("incumbent_terminal"):
-        if terminal.get("causal_wave_id") != entry_cross_id:
-            incumbent_state = "UNKNOWN"
-            incumbent_reason = "TERMINAL_EVIDENCE_IDENTITY_MISMATCH"
-        elif terminal_reason == "VENUE_EPOCH_BREAK":
-            incumbent_state = "UNKNOWN"
-            incumbent_reason = "ENTRY_LINEAGE_BROKEN_BY_SOURCE_EPOCH"
-        elif (
-            terminal_reason == "FLOW_NONCONVERSION_WITH_RECLAIM"
-            and not primary_reclaim_proven
-        ):
-            incumbent_state = "ERODING"
-            incumbent_reason = "PRIMARY_CASH_RECLAIM_NOT_PROVEN"
-        elif (
-            mechanism == "FAILED_REVERSION_CONTINUATION"
-            and terminal_reason == "FLOW_NONCONVERSION_WITH_RECLAIM"
-            and challenger_state != "PERSISTING"
-        ):
-            incumbent_state = "ERODING"
-            incumbent_reason = "REVERSION_ACCEPTANCE_NOT_YET_SURVIVING"
-        else:
-            incumbent_state = "FAILED"
-            incumbent_reason = "%s_%s" % (mechanism, terminal_reason)
-    elif relation == "SAME_CAUSAL_WAVE":
-        if position_wave_state in {"CONTROL_ERODING", "ABSORPTION"}:
-            incumbent_state = "ERODING"
-            incumbent_reason = "EXACT_WAVE_FLOW_NO_LONGER_CONVERTING"
-        else:
-            incumbent_state = "ALIVE"
-            incumbent_reason = "EXACT_ENTRY_CAUSAL_WAVE_PERSISTS"
-    elif relation == "NEW_SAME_SIDE_WAVE":
+        incumbent_reason = "POSITION_THESIS_SEED_NOT_CURRENT"
+    elif incumbent_eroding:
+        incumbent_state = "ERODING"
+        incumbent_reason = "INCUMBENT_CASH_CONTROL_ERODING"
+    elif positive_incumbent_survival:
+        incumbent_state = "ALIVE"
+        incumbent_reason = "POSITION_ROOT_HAS_POSITIVE_SURVIVAL_EVIDENCE"
+    elif relation == "SAME_SIDE_PROCESS":
         incumbent_state = "UNKNOWN"
-        incumbent_reason = "NEW_SAME_SIDE_WAVE_CANNOT_RESURRECT_ENTRY_WAVE"
+        incumbent_reason = "SAME_SIDE_PROCESS_CANNOT_PROVE_ROOT_SURVIVAL"
     else:
         incumbent_state = "UNKNOWN"
-        incumbent_reason = "ENTRY_CAUSAL_WAVE_NOT_OBSERVED"
+        incumbent_reason = "POSITION_ROOT_SURVIVAL_NOT_OBSERVED"
 
     if incumbent_state == "FAILED" and state is not None and not known_terminal:
         _remember_wave_falsifier(state, market_wave_id, incumbent_reason)
@@ -1240,8 +1391,8 @@ def observe(contract, observation, *, state=None):
         status = "UNKNOWN"
         reason = incumbent_reason
         challenge = (
-            "NEW_SAME_SIDE_WAVE"
-            if relation == "NEW_SAME_SIDE_WAVE" else "UNKNOWN"
+            "SAME_SIDE_PROCESS_NOT_ROOT_PROOF"
+            if relation == "SAME_SIDE_PROCESS" else "UNKNOWN"
         )
         falsified = False
 
@@ -1274,8 +1425,10 @@ def observe(contract, observation, *, state=None):
             "state": incumbent_state,
             "reason": incumbent_reason,
             "market_wave_id": market_wave_id,
-            "entry_causal_wave_id": entry_cross_id or None,
-            "lineage_relation": relation,
+            "position_root_id": position_root_id or None,
+            "position_root_hash": position_seed.get("root_hash"),
+            "identity_kind": position_seed.get("identity_kind"),
+            "current_process_relation": relation,
             "mechanism": mechanism,
             "terminal": incumbent_state == "FAILED",
         },
@@ -1315,8 +1468,10 @@ def observe(contract, observation, *, state=None):
             "derivative_context": derivative,
             "position_wave": frozen_wave,
             "position_wave_falsified": frozen_wave_falsified,
+            "position_thesis_seed": position_seed,
+            "current_process_lineage": lineage,
             "entry_cash_lineage": entry_lineage,
-            "lineage_bound": lineage_bound,
+            "position_seed_bound": seed_bound,
             "snapshot_deterioration_can_falsify_alone": False,
         },
         "pnl_fields_used_for_thesis": False,

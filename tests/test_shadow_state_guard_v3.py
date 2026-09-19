@@ -10,6 +10,41 @@ GUARD = ROOT / "ops" / "shadow_state_guard.py"
 
 
 class ShadowStateGuardV3Tests(unittest.TestCase):
+    def test_v16_position_thesis_checkpoint_is_accepted(self):
+        ledgers = {
+            "version": "SHADOW_LEDGER_METRICS_V1",
+            "research_probe": {
+                "trades": 0, "wins": 0, "losses": 0,
+                "breakevens": 0, "realized_pnl": 0.0,
+                "gross_profit": 0.0, "gross_loss": 0.0,
+                "stress_25bps_pnl": 0.0,
+            },
+            "live_like": {
+                "trades": 0, "wins": 0, "losses": 0,
+                "breakevens": 0, "realized_pnl": 0.0,
+                "gross_profit": 0.0, "gross_loss": 0.0,
+                "stress_25bps_pnl": 0.0,
+            },
+        }
+        result = self.run_guard({
+            "version": "SHADOW_RUNTIME_STATE_V16_POSITION_THESIS_ROOT",
+            "balance": 5000.0, "realized_pnl": 0.0,
+            "trades": 0, "wins": 0, "losses": 0, "breakevens": 0,
+            "event_seq": 0, "decision_evaluations": 0,
+            "near_misses": 0, "decision_funnel": {},
+            "edge_calibration_rows": [],
+            "edge_calibration_code_version": "code-v16",
+            "edge_calibration_config_version": "config-v16",
+            "entry_economics_v2_rows": [],
+            "entry_economics_code_version": "code-v16",
+            "entry_economics_config_version": "config-v16",
+            "execution_transaction": None,
+            "execution_control_plane": {},
+            "shadow_ledgers": ledgers,
+            "position": None,
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def run_guard(self, payload):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "runtime_state.json"

@@ -7,7 +7,7 @@ import time
 
 from loi_he_thong import execution_transaction, shadow_ledger_metrics
 
-VERSION = "SHADOW_RUNTIME_STATE_V15_SPLIT_DEMO_LEDGERS"
+VERSION = "SHADOW_RUNTIME_STATE_V16_POSITION_THESIS_ROOT"
 SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V1",
     "SHADOW_RUNTIME_STATE_V2",
@@ -23,6 +23,7 @@ SUPPORTED_VERSIONS = {
     "SHADOW_RUNTIME_STATE_V12_ENTRY_ECONOMICS_V8_TIME_TO_EVENT",
     "SHADOW_RUNTIME_STATE_V13_EXECUTION_PROTECTION_TRANSACTION",
     "SHADOW_RUNTIME_STATE_V14_AUTHORITY_CONTRACTS",
+    "SHADOW_RUNTIME_STATE_V15_SPLIT_DEMO_LEDGERS",
     VERSION,
 }
 
@@ -47,7 +48,7 @@ PERSIST_FIELDS = (
     "live", "entry_client_order_id", "hard_sl_algo_id",
     "hard_sl_client_algo_id", "mainnet_risk_plan", "entry_lane",
     "canonical_opportunity_id",
-    "causal_episode_id",
+    "causal_episode_id", "market_wave_id", "position_thesis_seed",
     "decision_cycle_id", "entry_regime", "entry_edge_class",
     "entry_causal_thesis", "authority_contracts",
     "shadow_cost_plan", "execution_cost_plan",
@@ -231,6 +232,12 @@ def snapshot(base):
         "execution_control_plane": dict(
             getattr(state, "wstrade_execution_control_plane", {}) or {}
         ),
+        "market_truth_wave_tombstones": dict(
+            getattr(state, "market_truth_wave_tombstones", {}) or {}
+        ),
+        "bias_acquisition_terminal_events": dict(
+            getattr(state, "bias_acquisition_terminal_events", {}) or {}
+        ),
     }
     if pos is not None and bool(getattr(pos, "active", False)):
         data["position"] = {
@@ -274,6 +281,12 @@ def restore(base):
         raise RuntimeError(f"SHADOW_RUNTIME_STATE_UNSUPPORTED:{version}")
 
     state = base.app.state
+    state.market_truth_wave_tombstones = dict(
+        raw.get("market_truth_wave_tombstones") or {}
+    )
+    state.bias_acquisition_terminal_events = dict(
+        raw.get("bias_acquisition_terminal_events") or {}
+    )
     state.mainnet_shadow_checkpoint_ts = float(raw.get("ts", 0.0) or 0.0)
     for key, attr in (
         ("balance", "mainnet_shadow_balance_usdt"),

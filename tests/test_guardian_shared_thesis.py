@@ -12,7 +12,7 @@ from loi_he_thong import authority_contracts, market_thesis
 guardian = importlib.import_module("3_thuc_thi.ve_si_lenh.guardian_s_tier")
 
 
-def _control_handoff(side):
+def _control_handoff(side, offset=0):
     segments = [{
         "state": "CONVERTING", "side": side,
         "price": {"vote": side}, "flow": {"vote": side},
@@ -20,8 +20,8 @@ def _control_handoff(side):
     sealed = {
         "version": "CASH_CONTROL_ACQUISITION_HANDOFF_V1",
         "side": side,
-        "first_converting_segment_onset_ms": 9_000,
-        "ownership_completed_ms": 9_500,
+        "first_converting_segment_onset_ms": 9_000 + offset,
+        "ownership_completed_ms": 9_500 + offset,
         "venue_epochs": {"spot": 2, "coinbase": 3},
         "directional_cash_roots": [
             "BINANCE_SPOT_CASH", "COINBASE_USD_CASH",
@@ -44,6 +44,7 @@ def _control_handoff(side):
 
 
 def _entry_result(proof_type="PERSISTENT_METAORDER"):
+    handoff = _control_handoff("LONG")
     roots = {
         name: {
             "side": "LONG", "state": "FLOW_LED_CONVERSION",
@@ -59,11 +60,15 @@ def _entry_result(proof_type="PERSISTENT_METAORDER"):
         "decision": "GO",
         "reason": "IGNITION_PROVED",
         "side": "LONG",
-        "causal_episode_id": "episode-shared-1",
-        "market_wave_id": "market-wave-shared-1",
+        "causal_episode_id": handoff["causal_wave_id"],
+        "market_wave_id": handoff["causal_wave_id"],
+        "bias_acquisition_handoff": handoff,
         "authority_basis": "BIAS_ALIGNED",
         "ignition": {
-            "causal_episode_id": "episode-shared-1",
+            "causal_episode_id": handoff["causal_wave_id"],
+            "origin_kind": "SEALED_ACQUISITION_CONTINUATION",
+            "acquisition_causal_wave_id": handoff["causal_wave_id"],
+            "acquisition_handoff_hash": handoff["handoff_hash"],
             "side": "LONG",
             "proof_type": proof_type,
             "proposer": "binance_spot",
@@ -98,20 +103,27 @@ def _observation(*, spot=-2.0, coinbase=-2.0, futures=-2.0,
                  cash_wave_side=None, wave_age_ms=0,
                  control_handoff_side=None, position_cash_state=None,
                  position_candidate="SHORT", old_side_failure=False,
-                 old_side_still_converts=False, cross_state="UNKNOWN",
+                 old_side_still_converts=None, cross_state="UNKNOWN",
                  oi_regime="NEUTRAL", liquidation_phase="UNKNOWN",
-                 lineage_relation="SAME_CAUSAL_WAVE",
+                 lineage_relation="SAME_SIDE_PROCESS",
                  terminal_reason="OPPOSITE_DUAL_CASH_CONTROL",
                  proof_type="PERSISTENT_METAORDER"):
-    truth = market_thesis.build(_entry_result(proof_type))
+    entry_result = _entry_result(proof_type)
+    truth = market_thesis.build(entry_result)
+    if old_side_still_converts is None:
+        old_side_still_converts = not old_side_failure and (
+            position_cash_state != "CONTROL_ERODING"
+        )
+    root_id = truth["position_thesis_seed"]["root_id"]
     moves = {"spot": spot, "coinbase": coinbase, "futures": futures}
     result = {
         "version": "GUARDIAN_CANONICAL_OBSERVATION_V1",
-        "causal_episode_id": "episode-shared-1",
+        "causal_episode_id": truth["causal_episode_id"],
         "position_cycle_id": "position-shared-1",
         "position_side": "LONG",
-        "position_market_wave_id": "market-wave-shared-1",
+        "position_market_wave_id": root_id,
         "position_market_truth_hash": truth["contract_hash"],
+        "position_thesis_seed": truth["position_thesis_seed"],
         "source_health": {
             "spot": source,
             "coinbase": source,
@@ -140,6 +152,12 @@ def _observation(*, spot=-2.0, coinbase=-2.0, futures=-2.0,
             "liquidation_phase": liquidation_phase,
             "authority": False,
         },
+        "control_ownership": {
+            "current_bias_side": "LONG",
+            "acquisition_handoff": entry_result[
+                "bias_acquisition_handoff"
+            ],
+        },
     }
     terminal = bool(old_side_failure and not old_side_still_converts)
     current_wave_id = "cash-wave-entry-1"
@@ -158,18 +176,38 @@ def _observation(*, spot=-2.0, coinbase=-2.0, futures=-2.0,
             "previous_side": "LONG",
             "position_identity": {
                 "position_cycle_id": "position-shared-1",
-                "market_wave_id": "market-wave-shared-1",
+                "market_wave_id": root_id,
                 "market_truth_hash": truth["contract_hash"],
                 "entry_mechanism": truth["mechanism"],
+                "position_root_id": root_id,
+                "position_root_hash": truth["position_thesis_seed"][
+                    "root_hash"
+                ],
+                "position_identity_kind": truth["position_thesis_seed"][
+                    "identity_kind"
+                ],
             },
             "causal_lineage": {
+                "version": "CURRENT_CASH_PROCESS_LINEAGE_V1",
+                "position_root_id": root_id,
+                "position_root_hash": truth["position_thesis_seed"][
+                    "root_hash"
+                ],
+                "position_identity_kind": truth["position_thesis_seed"][
+                    "identity_kind"
+                ],
+                "position_side": "LONG",
                 "entry_causal_wave_id": "cash-wave-entry-1",
                 "entry_side": "LONG",
                 "current_causal_wave_id": current_wave_id,
                 "current_side": current_side,
                 "current_state": "CONTROL_PERSISTING",
                 "lineage_relation": (
-                    "OPPOSING_WAVE" if cash_wave_side else lineage_relation
+                    "OPPOSING_PROCESS" if cash_wave_side else (
+                        "SAME_SIDE_PROCESS"
+                        if lineage_relation == "NEW_SAME_SIDE_WAVE"
+                        else lineage_relation
+                    )
                 ),
                 "incumbent_terminal": terminal,
                 "terminal_evidence": ({
@@ -238,6 +276,13 @@ class SharedThesisObservationTests(unittest.TestCase):
     def setUp(self):
         self.truth = market_thesis.build(_entry_result())
 
+    def _terminal_state(self, truth=None, reason="FLOW_NONCONVERSION_WITH_RECLAIM"):
+        truth = truth or self.truth
+        root_id = truth["position_thesis_seed"]["root_id"]
+        return SimpleNamespace(market_truth_wave_tombstones={
+            root_id: {"root_id": root_id, "reason": reason, "terminal": True},
+        })
+
     def test_snapshot_cannot_overturn_exact_alive_incumbent(self):
         result = market_thesis.observe(self.truth, _observation())
         self.assertEqual(result["status"], "SUPPORT")
@@ -251,7 +296,7 @@ class SharedThesisObservationTests(unittest.TestCase):
         result = market_thesis.observe(
             self.truth, _observation(cash_wave_side="SHORT"),
         )
-        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["status"], "DIVERGENCE")
         self.assertFalse(result["old_thesis_falsified"])
 
     def test_owned_distinct_opposing_cash_wave_is_control_transfer(self):
@@ -261,6 +306,7 @@ class SharedThesisObservationTests(unittest.TestCase):
                 position_cash_state="CONTROL_TRANSFER",
                 old_side_failure=True,
             ),
+            state=self._terminal_state(reason="OPPOSITE_DUAL_CASH_CONTROL"),
         )
         self.assertEqual(result["status"], "CONTROL_TRANSFER")
         self.assertTrue(result["old_thesis_falsified"])
@@ -275,6 +321,7 @@ class SharedThesisObservationTests(unittest.TestCase):
                 lineage_relation="TERMINATED",
                 terminal_reason="FLOW_NONCONVERSION_WITH_RECLAIM",
             ),
+            state=self._terminal_state(),
         )
         self.assertEqual(result["incumbent_thesis"]["state"], "FAILED")
         self.assertEqual(result["challenger_process"]["state"], "NONE")
@@ -318,7 +365,9 @@ class SharedThesisObservationTests(unittest.TestCase):
             "current_causal_wave_id": "cash-wave-short-emerging",
             "current_side": "SHORT",
         })
-        result = market_thesis.observe(self.truth, row)
+        result = market_thesis.observe(
+            self.truth, row, state=self._terminal_state(),
+        )
         self.assertEqual(result["incumbent_thesis"]["state"], "FAILED")
         self.assertEqual(result["challenger_process"]["state"], "EMERGING")
         self.assertEqual(result["status"], "FALSIFY")
@@ -347,6 +396,9 @@ class SharedThesisObservationTests(unittest.TestCase):
                 terminal_reason="OPPOSITE_DUAL_CASH_CONTROL",
                 proof_type="FAILED_REVERSION",
             ),
+            state=self._terminal_state(
+                truth, "OPPOSITE_DUAL_CASH_CONTROL"
+            ),
         )
         self.assertEqual(accepted["incumbent_thesis"]["state"], "FAILED")
         self.assertEqual(accepted["status"], "CONTROL_TRANSFER")
@@ -356,7 +408,7 @@ class SharedThesisObservationTests(unittest.TestCase):
         self.assertEqual(truth["mechanism"], "CASH_METAORDER")
 
     def test_dead_wave_cannot_be_resurrected_by_new_same_side_wave(self):
-        state = SimpleNamespace()
+        state = self._terminal_state()
         dead = market_thesis.observe(
             self.truth,
             _observation(
@@ -379,15 +431,18 @@ class SharedThesisObservationTests(unittest.TestCase):
         self.assertNotEqual(replayed["challenge"], "RECOVERED")
 
     def test_new_same_side_wave_without_terminal_proof_is_unknown(self):
-        result = market_thesis.observe(
-            self.truth,
-            _observation(
-                position_cash_state="CONTROLLED",
-                lineage_relation="NEW_SAME_SIDE_WAVE",
-            ),
+        row = _observation(
+            position_cash_state="CONTROLLED",
+            lineage_relation="NEW_SAME_SIDE_WAVE",
         )
+        row["control_ownership"]["acquisition_handoff"] = (
+            _control_handoff("LONG", offset=1_000)
+        )
+        result = market_thesis.observe(self.truth, row)
         self.assertEqual(result["incumbent_thesis"]["state"], "UNKNOWN")
-        self.assertEqual(result["challenge"], "NEW_SAME_SIDE_WAVE")
+        self.assertEqual(
+            result["challenge"], "SAME_SIDE_PROCESS_NOT_ROOT_PROOF",
+        )
         self.assertFalse(result["old_thesis_falsified"])
 
     def test_opposing_owner_without_position_failure_is_unproven_transition(self):
@@ -421,7 +476,10 @@ class SharedThesisObservationTests(unittest.TestCase):
             old_side_failure=True,
         )
         row["control_ownership"]["current_bias_side"] = "ABSTAIN"
-        result = market_thesis.observe(self.truth, row)
+        result = market_thesis.observe(
+            self.truth, row,
+            state=self._terminal_state(reason="OPPOSITE_DUAL_CASH_CONTROL"),
+        )
         self.assertEqual(result["status"], "CONTROL_TRANSFER")
         self.assertEqual(result["challenge"], "TAKEOVER_PROVEN")
 
@@ -567,6 +625,11 @@ class SharedThesisObservationTests(unittest.TestCase):
             best_bid=99.99, best_ask=100.01, coinbase_price=100.0,
             thoi_gian_coinbase_ticker_cuoi=100.0,
             open_interest=0.0, danh_sach_khop_lenh_futures=[],
+            market_truth_wave_tombstones=(
+                self._terminal_state(
+                    reason="OPPOSITE_DUAL_CASH_CONTROL"
+                ).market_truth_wave_tombstones
+            ),
         )
         position = SimpleNamespace(
             position_cycle_id="position-canonical", side="LONG",
@@ -656,29 +719,32 @@ class SharedThesisObservationTests(unittest.TestCase):
         self.assertFalse(row["unknown_falsifies"])
 
     def test_guardian_adapter_reads_exact_frozen_handoff(self):
+        episode_id = self.truth["causal_episode_id"]
         action = authority_contracts.seal(
-            "ACTION", "ENTRY_ACTION_POLICY", "episode-shared-1",
+            "ACTION", "ENTRY_ACTION_POLICY", episode_id,
             {"action": "ACT_TAKER_NOW"},
         )
         bundle = authority_contracts.bundle(
             self.truth,
             action,
             authority_contracts.seal(
-                "EXECUTION", "EXECUTION_REVALIDATION", "episode-shared-1",
+                "EXECUTION", "EXECUTION_REVALIDATION", episode_id,
                 {"execution_action": "EXECUTE"},
             ),
             authority_contracts.seal(
-                "SAFETY", "MAINNET_SAFETY", "episode-shared-1",
+                "SAFETY", "MAINNET_SAFETY", episode_id,
                 {"safety_state": "SAFE"},
             ),
         )
         handoff = authority_contracts.freeze_entry_handoff(bundle)
+        root_id = self.truth["position_thesis_seed"]["root_id"]
         position = SimpleNamespace(
-            side="LONG", causal_episode_id="episode-shared-1",
+            side="LONG", causal_episode_id=episode_id,
             position_cycle_id="position-shared-1",
-            market_wave_id="market-wave-shared-1",
+            market_wave_id=root_id,
+            position_thesis_seed=self.truth["position_thesis_seed"],
             entry_causal_thesis={
-                "causal_episode_id": "episode-shared-1",
+                "causal_episode_id": episode_id,
                 "entry_thesis_handoff": handoff,
             },
         )
@@ -688,6 +754,10 @@ class SharedThesisObservationTests(unittest.TestCase):
             coinbase_flow_3s_ts=100.0, thoi_gian_vi_mo_cuoi=100.0,
             guardian_s_spot_flow_ordering="MONOTONIC",
             guardian_s_futures_flow_ordering="MONOTONIC",
+            bias_state="LONG",
+            bias_acquisition_handoff=_entry_result()[
+                "bias_acquisition_handoff"
+            ],
             spot_flow_epoch=2, coinbase_flow_epoch=3,
             danh_sach_khop_lenh_futures=[{
                 "thoi_gian_ms": 100_000, "gia": 100.0,
@@ -714,7 +784,7 @@ class SharedThesisObservationTests(unittest.TestCase):
         observed = market_thesis.observe(truth, event)
 
         self.assertEqual(truth["contract_hash"], self.truth["contract_hash"])
-        self.assertEqual(event["causal_episode_id"], "episode-shared-1")
+        self.assertEqual(event["causal_episode_id"], episode_id)
         self.assertEqual(observed["status"], "SUPPORT")
 
         # A historical entry epoch mismatch remains visible, but cannot poison
@@ -755,6 +825,11 @@ class SharedThesisObservationTests(unittest.TestCase):
         }
         state.bias_state = "SHORT"
         state.bias_acquisition_handoff = _control_handoff("SHORT")
+        state.market_truth_wave_tombstones = (
+            self._terminal_state(
+                reason="OPPOSITE_DUAL_CASH_CONTROL"
+            ).market_truth_wave_tombstones
+        )
         state.post_entry_position_cash_wave = copy.deepcopy(
             _observation(
                 cash_wave_side="SHORT",
@@ -766,7 +841,9 @@ class SharedThesisObservationTests(unittest.TestCase):
         _, transfer_event = guardian._canonical_thesis_observation(
             state, position, 100.0, s1, s2, s3,
         )
-        transferred = market_thesis.observe(self.truth, transfer_event)
+        transferred = market_thesis.observe(
+            self.truth, transfer_event, state=state,
+        )
         self.assertEqual(transferred["status"], "CONTROL_TRANSFER")
 
 

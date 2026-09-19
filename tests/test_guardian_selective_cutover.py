@@ -145,7 +145,7 @@ class SelectiveGuardianCutoverTests(unittest.TestCase):
         )
         self.assertEqual(
             call.kwargs["causal_lineage"]["lineage_relation"],
-            "ENTRY_LINEAGE_UNBOUND",
+            "UNOBSERVED",
         )
         append.assert_called_once()
         self.assertEqual(append.call_args.args[0], "CAUSAL_WAVE_OPENED")
@@ -174,7 +174,7 @@ class SelectiveGuardianCutoverTests(unittest.TestCase):
         ), patch.object(
             launcher.cross_cash_causal_wave, "observe", return_value=snapshot,
         ) as observe, patch.object(
-            launcher.cross_cash_causal_wave, "position_lineage",
+            launcher.cross_cash_causal_wave, "current_process_lineage",
             return_value={},
         ), patch.object(
             launcher.bias_council, "observe_cash_wave", return_value={},

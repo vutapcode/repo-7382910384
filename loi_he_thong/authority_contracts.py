@@ -15,6 +15,7 @@ VERSION = "FOUR_AUTHORITY_CONTRACTS_V1"
 ENTRY_HANDOFF_VERSION = "ENTRY_THESIS_HANDOFF_V1"
 LAYERS = {"MARKET_TRUTH", "ACTION", "EXECUTION", "SAFETY"}
 ENTRY_ACTIONS = {"ACT_TAKER_NOW", "POST_MAKER"}
+POSITION_THESIS_SEED_VERSION = "POSITION_THESIS_SEED_V1"
 
 
 def _plain(value):
@@ -118,6 +119,25 @@ def verify_bundle(value):
     )
 
 
+def verify_position_thesis_seed(truth):
+    """Verify structure only; Market Truth owns the seed's correctness."""
+    truth = dict(truth or {})
+    seed = dict(truth.get("position_thesis_seed") or {})
+    side = str(truth.get("side") or "ABSTAIN").upper()
+    return bool(
+        seed.get("version") == POSITION_THESIS_SEED_VERSION
+        and seed.get("status") == "BOUND"
+        and str(seed.get("identity_kind") or "")
+        and str(seed.get("root_id") or "")
+        and str(seed.get("root_hash") or "")
+        and str(seed.get("side") or "ABSTAIN").upper() == side
+        and side in {"LONG", "SHORT"}
+        and str(truth.get("market_wave_id") or "")
+            == str(seed.get("root_id") or "")
+        and seed.get("authority") is False
+    )
+
+
 def freeze_entry_handoff(value, *, expected_side=None, expected_episode_id=None):
     """Freeze the exact Truth and Action contracts that approved an Entry.
 
@@ -138,6 +158,8 @@ def freeze_entry_handoff(value, *, expected_side=None, expected_episode_id=None)
         raise ValueError("ACTION_NOT_ENTRY_APPROVED")
     if truth.get("status") != "SUPPORTED":
         raise ValueError("MARKET_TRUTH_NOT_SUPPORTED")
+    if not verify_position_thesis_seed(truth):
+        raise ValueError("POSITION_THESIS_SEED_UNBOUND")
     if side not in {"LONG", "SHORT"}:
         raise ValueError("MARKET_TRUTH_SIDE_INVALID")
     if expected_side is not None and side != str(expected_side).upper():
@@ -163,6 +185,9 @@ def freeze_entry_handoff(value, *, expected_side=None, expected_episode_id=None)
         ),
         "source_health": dict(truth.get("source_health") or {}),
         "market_truth_hash": truth.get("contract_hash"),
+        "position_thesis_seed": dict(
+            truth.get("position_thesis_seed") or {}
+        ),
         "action_hash": action.get("contract_hash"),
         "market_thesis": truth,
         "action_contract": action,
@@ -186,6 +211,9 @@ def verify_entry_handoff(value, *, expected_side=None, expected_episode_id=None)
         and truth.get("layer") == "MARKET_TRUTH"
         and action.get("layer") == "ACTION"
         and truth.get("status") == "SUPPORTED"
+        and verify_position_thesis_seed(truth)
+        and value.get("position_thesis_seed")
+            == truth.get("position_thesis_seed")
         and str(action.get("action") or "") in ENTRY_ACTIONS
         and bool(episode_id)
         and truth.get("contract_hash") == value.get("market_truth_hash")

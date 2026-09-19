@@ -1562,6 +1562,11 @@ def _open_shadow(side, result, now):
         entry_regime=entry_regime,
         entry_edge_class=(result.get("edge_tier") or {}).get("edge_class"),
         entry_causal_thesis=live_execution._entry_causal_thesis(result),
+        position_thesis_seed=dict(
+            (result.get("entry_thesis_handoff") or {}).get(
+                "position_thesis_seed"
+            ) or {}
+        ),
         edge_first_positive_net_at=None,
         edge_time_to_positive_net_seconds=None,
         shadow_cost_plan=shadow_cost_plan,
@@ -1587,7 +1592,12 @@ def _open_shadow(side, result, now):
         timing_attempt_id=result.get("timing_attempt_id"),
         economic_opportunity_id=result.get("economic_opportunity_id"),
         causal_episode_id=result.get("causal_episode_id"),
-        market_wave_id=result.get("market_wave_id"),
+        market_wave_id=(
+            (result.get("entry_thesis_handoff") or {}).get(
+                "position_thesis_seed", {}
+            ).get("root_id")
+            or result.get("market_wave_id")
+        ),
         authority_contracts=dict(result.get("authority_contracts") or {}),
         shadow_execution=execution or {
             "style": "MARKET",
@@ -1635,6 +1645,7 @@ def _open_shadow(side, result, now):
             "economic_opportunity_id": pos.economic_opportunity_id,
             "causal_episode_id": pos.causal_episode_id,
             "market_wave_id": pos.market_wave_id,
+            "position_thesis_seed": dict(pos.position_thesis_seed),
             "authority_contracts": dict(pos.authority_contracts or {}),
             "feasibility": feasibility,
             "filter_status": (feasibility.get("execution_filters") or {}).get("mode"),
@@ -1869,6 +1880,9 @@ def _close_shadow(pos, guardian_result, now):
             "decision_cycle_id": getattr(pos, "decision_cycle_id", None),
             "causal_episode_id": getattr(pos, "causal_episode_id", None),
             "market_wave_id": getattr(pos, "market_wave_id", None),
+            "position_thesis_seed": dict(
+                getattr(pos, "position_thesis_seed", {}) or {}
+            ),
             "timing_attempt_id": getattr(pos, "timing_attempt_id", None),
             "economic_opportunity_id": getattr(
                 pos, "economic_opportunity_id", None
@@ -2277,6 +2291,7 @@ async def _bias_loop():
             # control moves ABSTAIN -> directional. Calling evaluate() directly
             # would update Bias while silently dropping that handoff.
             bias_council.update_state(s, now=now)
+            market_thesis.ingest_bias_acquisition_terminals(s)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -2314,6 +2329,16 @@ def _refresh_post_entry_market_evidence(state, pos, now):
             truth.get("mechanism") or "UNKNOWN"
         ).upper(),
     }
+    position_seed = dict(
+        getattr(pos, "position_thesis_seed", {})
+        or truth.get("position_thesis_seed")
+        or {}
+    )
+    position_identity.update({
+        "position_root_id": position_seed.get("root_id"),
+        "position_root_hash": position_seed.get("root_hash"),
+        "position_identity_kind": position_seed.get("identity_kind"),
+    })
     identity_key = "|".join(str(position_identity.get(name) or "") for name in (
         "position_cycle_id", "market_wave_id", "market_truth_hash",
     ))
@@ -2337,8 +2362,8 @@ def _refresh_post_entry_market_evidence(state, pos, now):
     snapshot = cross_cash_causal_wave.observe(
         state, histories, int(now * 1000.0),
     )
-    causal_lineage = cross_cash_causal_wave.position_lineage(
-        state, truth.get("entry_cash_lineage") or {}, snapshot,
+    causal_lineage = cross_cash_causal_wave.current_process_lineage(
+        state, position_seed, snapshot,
     )
     # Ask the cash observer the position-relative question.  Current Bias may
     # already be neutral or opposite; it must not rewrite which old thesis is

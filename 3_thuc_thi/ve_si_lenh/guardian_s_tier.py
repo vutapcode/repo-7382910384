@@ -565,6 +565,8 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
         getattr(state, "market_truth_wave_tombstones", {}) or {}
     )
     position_falsifier = wave_tombstones.get(position_wave_id)
+    if isinstance(position_falsifier, dict):
+        position_falsifier = position_falsifier.get("reason")
     acquisition_handoff = dict(
         getattr(state, "bias_acquisition_handoff", {}) or {}
     )
@@ -653,6 +655,9 @@ def _canonical_thesis_observation(state, pos, now, s1, s2, s3):
             (truth or {}).get("contract_hash")
         ),
         "entry_mechanism": (truth or {}).get("mechanism"),
+        "position_thesis_seed": dict(
+            (truth or {}).get("position_thesis_seed") or {}
+        ),
         "entry_cash_lineage": dict(
             (truth or {}).get("entry_cash_lineage") or {}
         ),

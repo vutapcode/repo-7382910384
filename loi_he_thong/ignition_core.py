@@ -10,6 +10,7 @@ import hashlib
 import json
 import time
 
+from loi_he_thong import acquisition_identity
 from loi_he_thong import cross_cash_causal_wave
 from loi_he_thong import ignition_signals
 
@@ -48,7 +49,7 @@ MIN_VOL_BTC_BY_VENUE = {
 CASH = frozenset(("binance_spot", "coinbase_spot"))
 INFERENCE_VERSION = "IGNITION_INFERENCE_V10_ACQUISITION_POST_SEAL_LANE"
 ECONOMIC_CONTRACT_VERSION = "ENTRY_ECONOMICS_V9_DUAL_MATURITY"
-ACQUISITION_HANDOFF_VERSION = "CASH_CONTROL_ACQUISITION_HANDOFF_V1"
+ACQUISITION_HANDOFF_VERSION = acquisition_identity.HANDOFF_VERSION
 ACQUISITION_ORIGIN_KIND = "SEALED_ACQUISITION_CONTINUATION"
 ACQUISITION_TIMING_OWNER = "IGNITION_ACQUISITION_TIMING"
 ACQUISITION_RETRYABLE_STATES = frozenset((
@@ -2408,85 +2409,14 @@ def _current_cash_conversion(histories, side, now_ms):
     }
 
 
-def _canonical_json_hash(payload):
-    encoded = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _validate_sealed_acquisition_handoff(handoff, expected_side=None):
     """Validate Bias provenance without granting Entry timing authority."""
-    handoff = dict(handoff or {})
-    sealed = dict(handoff.get("sealed_payload") or {})
-    side = str(sealed.get("side") or "ABSTAIN").upper()
-    if not handoff:
-        return False, "ACQUISITION_HANDOFF_MISSING", {}
-    if not (
-        handoff.get("sealed") is True
-        and str(handoff.get("status") or "") == "SEALED"
-        and handoff.get("authority") is False
-        and handoff.get("entry_authority") is False
-    ):
-        return False, "ACQUISITION_HANDOFF_NOT_SEALED", {}
-    if str(sealed.get("version") or "") != ACQUISITION_HANDOFF_VERSION:
-        return False, "ACQUISITION_HANDOFF_VERSION_INVALID", {}
-    digest = _canonical_json_hash(sealed)
-    if str(handoff.get("handoff_hash") or "") != digest:
-        return False, "ACQUISITION_HANDOFF_HASH_INVALID", {}
-    if str(handoff.get("causal_wave_id") or "") != (
-        "cash-acquisition:%s" % digest[:20]
-    ):
-        return False, "ACQUISITION_HANDOFF_WAVE_ID_INVALID", {}
-    if side not in ("LONG", "SHORT") or (
-        expected_side is not None
-        and side != str(expected_side or "ABSTAIN").upper()
-    ):
-        return False, "ACQUISITION_HANDOFF_SIDE_INVALID", {}
-    roots = set(sealed.get("directional_cash_roots") or ())
-    if roots != {"BINANCE_SPOT_CASH", "COINBASE_USD_CASH"}:
-        return False, "ACQUISITION_HANDOFF_CASH_ROOTS_INVALID", {}
-    evidence = list(sealed.get("segment_evidence") or ())
-    if int(sealed.get("temporal_persistence_segments", 0) or 0) < 2 or len(
-        evidence
-    ) < 2:
-        return False, "ACQUISITION_HANDOFF_PERSISTENCE_MISSING", {}
-    for segment in evidence[:2]:
-        segment = dict(segment or {})
-        if not (
-            str(segment.get("state") or "").upper() == "CONVERTING"
-            and str(segment.get("side") or "ABSTAIN").upper() == side
-            and str((segment.get("price") or {}).get("vote") or "").upper()
-                == side
-            and str((segment.get("flow") or {}).get("vote") or "").upper()
-                == side
-        ):
-            return False, "ACQUISITION_HANDOFF_SEGMENT_INVALID", {}
-    onset_ms = int(sealed.get("first_converting_segment_onset_ms", 0) or 0)
-    completed_ms = int(sealed.get("ownership_completed_ms", 0) or 0)
-    if onset_ms <= 0 or completed_ms <= onset_ms:
-        return False, "ACQUISITION_HANDOFF_TIME_INVALID", {}
-    epochs = dict(sealed.get("venue_epochs") or {})
-    if not all(name in epochs for name in ("spot", "coinbase")):
-        return False, "ACQUISITION_HANDOFF_EPOCHS_MISSING", {}
-    # Outer fields are convenient telemetry only; they may not contradict the
-    # immutable payload that owns the seal.
-    for name in (
-        "side", "first_converting_segment_onset_ms",
-        "ownership_completed_ms", "bias_version",
-    ):
-        if handoff.get(name) != sealed.get(name):
-            return False, "ACQUISITION_HANDOFF_OUTER_FIELD_CHANGED", {}
-    return True, "PASS", {
-        **sealed,
-        "handoff_hash": digest,
-        "causal_wave_id": handoff["causal_wave_id"],
-        "sealed_payload": sealed,
-        "status": "SEALED",
-        "sealed": True,
-        "authority": False,
-        "entry_authority": False,
-    }
+    return acquisition_identity.validate(handoff, expected_side)
+
+
+def _canonical_json_hash(payload):
+    """Compatibility alias; canonical acquisition hashing has one owner."""
+    return acquisition_identity.canonical_hash(payload)
 
 
 def _acquisition_displacement_bps(handoff, side):

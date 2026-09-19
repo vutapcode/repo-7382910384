@@ -135,6 +135,62 @@ class MarketTruthWaveLifecycleTests(unittest.TestCase):
         })
         self.assertEqual(row["identity_authority"], "TIMING_EPISODE_FALLBACK")
 
+    def test_bias_terminal_event_is_preserved_by_exact_acquisition_root(self):
+        state = SimpleNamespace(bias_acquisition_terminal_events={
+            "cash-acquisition:old": {
+                "root_id": "cash-acquisition:old",
+                "root_hash": "hash-old",
+                "side": "LONG",
+                "status": "TERMINATED_CAUSAL_FALSIFIER",
+                "reason": "DUAL_CASH_FLOW_PRICE_CONTRADICTION",
+                "terminated_at_ms": 12_000,
+            },
+        })
+        market_thesis.ingest_bias_acquisition_terminals(state)
+        terminal = state.market_truth_wave_tombstones[
+            "cash-acquisition:old"
+        ]
+        self.assertEqual(
+            terminal["reason"], "DUAL_CASH_FLOW_PRICE_CONTRADICTION",
+        )
+        self.assertEqual(terminal["root_hash"], "hash-old")
+
+    def test_epoch_invalidation_is_not_market_truth_falsification(self):
+        state = SimpleNamespace(bias_acquisition_terminal_events={
+            "cash-acquisition:uncertain": {
+                "root_id": "cash-acquisition:uncertain",
+                "root_hash": "hash-uncertain",
+                "side": "LONG",
+                "status": "INVALIDATED_EPOCH_CHANGE",
+                "reason": "VENUE_EPOCH_BREAK",
+                "terminated_at_ms": 12_000,
+            },
+        })
+        market_thesis.ingest_bias_acquisition_terminals(state)
+        self.assertNotIn(
+            "cash-acquisition:uncertain",
+            getattr(state, "market_truth_wave_tombstones", {}),
+        )
+
+        lifecycle = market_thesis.wave_lifecycle(state, {
+            "side": "LONG",
+            "causal_episode_id": "timing-uncertain",
+            "bias_acquisition_handoff": {
+                "causal_wave_id": "cash-acquisition:uncertain",
+                "side": "LONG",
+                "status": "INVALIDATED_EPOCH_CHANGE",
+                "invalidation_reason": "VENUE_EPOCH_BREAK",
+            },
+        })
+        self.assertEqual(lifecycle["status"], "UNKNOWN")
+        self.assertEqual(
+            lifecycle["market_wave_id"], "cash-acquisition:uncertain",
+        )
+        self.assertNotIn(
+            "cash-acquisition:uncertain",
+            getattr(state, "market_truth_wave_tombstones", {}),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

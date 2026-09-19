@@ -7,6 +7,38 @@ from loi_he_thong import shadow_runtime_state as runtime_state
 
 
 class ShadowRuntimeStateTests(unittest.TestCase):
+    def test_acquisition_terminal_evidence_survives_restart(self):
+        terminal = {
+            "root_id": "cash-acquisition:old",
+            "status": "TERMINATED_CAUSAL_FALSIFIER",
+            "reason": "DUAL_CASH_FLOW_PRICE_CONTRADICTION",
+        }
+        with tempfile.TemporaryDirectory() as temp, patch.dict(
+            "os.environ", {"SMC_JOURNAL_DIR": temp}
+        ):
+            source = SimpleNamespace(
+                code_version="code-v16",
+                strategy_config_version="config-v16",
+                mainnet_shadow_position=None,
+                bias_acquisition_terminal_events={
+                    terminal["root_id"]: terminal,
+                },
+            )
+            runtime_state.save(SimpleNamespace(
+                app=SimpleNamespace(state=source), QTY_BTC=0.001,
+            ))
+            target = SimpleNamespace(
+                code_version="code-v16",
+                strategy_config_version="config-v16",
+            )
+            runtime_state.restore(SimpleNamespace(
+                app=SimpleNamespace(state=target), QTY_BTC=0.001,
+            ))
+        self.assertEqual(
+            target.bias_acquisition_terminal_events[terminal["root_id"]],
+            terminal,
+        )
+
     def test_unfinished_execution_transaction_restores_fail_closed(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(
             'os.environ', {'SMC_JOURNAL_DIR': temp}
@@ -228,6 +260,15 @@ class ShadowRuntimeStateTests(unittest.TestCase):
                 guardian_s_candidate_since=0.0, entry_client_order_id='entry-1',
                 hard_sl_algo_id=7, hard_sl_client_algo_id='stop-1',
                 mainnet_risk_plan={'eligible': True}, entry_lane='CORE',
+                market_wave_id='cash-acquisition:root-a',
+                position_thesis_seed={
+                    'version': 'POSITION_THESIS_SEED_V1',
+                    'status': 'BOUND',
+                    'identity_kind': 'BIAS_CASH_ACQUISITION',
+                    'root_id': 'cash-acquisition:root-a',
+                    'root_hash': 'root-hash-a',
+                    'side': 'LONG', 'authority': False,
+                },
                 entry_causal_thesis={
                     'version': 'ENTRY_CAUSAL_THESIS_V1',
                     'primary_cash_anchor': 'spot',
@@ -241,6 +282,13 @@ class ShadowRuntimeStateTests(unittest.TestCase):
             source_state = SimpleNamespace(
                 mainnet_shadow_position=position,
                 guardian_latency_samples_total=321,
+                market_truth_wave_tombstones={
+                    'cash-acquisition:root-a': {
+                        'root_id': 'cash-acquisition:root-a',
+                        'reason': 'OPPOSITE_DUAL_CASH_CONTROL',
+                        'terminal': True,
+                    },
+                },
             )
             runtime_state.save(SimpleNamespace(
                 app=SimpleNamespace(state=source_state), QTY_BTC=0.001
@@ -261,6 +309,20 @@ class ShadowRuntimeStateTests(unittest.TestCase):
             'spot',
         )
         self.assertEqual(target_state.guardian_latency_samples_total, 321)
+        self.assertEqual(
+            target_state.mainnet_shadow_position.position_thesis_seed[
+                'root_id'
+            ],
+            'cash-acquisition:root-a',
+        )
+        self.assertEqual(
+            target_state.mainnet_shadow_position.market_wave_id,
+            'cash-acquisition:root-a',
+        )
+        self.assertIn(
+            'cash-acquisition:root-a',
+            target_state.market_truth_wave_tombstones,
+        )
         self.assertEqual(
             target_state.mainnet_shadow_position.authority_contracts['version'],
             'FOUR_AUTHORITY_CONTRACTS_V1',
