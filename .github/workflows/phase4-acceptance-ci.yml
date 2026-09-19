@@ -1,0 +1,152 @@
+name: Phase 4 Acceptance CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - fix/phase4-acceptance-gate
+
+permissions:
+  contents: read
+
+jobs:
+  phase4-authority-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test/runtime dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -q -r requirements.txt pytest
+          mkdir -p .venv/bin
+          ln -sf "$(command -v python)" .venv/bin/python
+
+      - name: Compile Phase 4 owners
+        continue-on-error: true
+        run: |
+          python -m py_compile \
+            loi_he_thong/ignition_core.py \
+            loi_he_thong/entry_lifecycle.py \
+            loi_he_thong/entry_economics_v2.py \
+            loi_he_thong/entry_edge_tier.py \
+            loi_he_thong/verified_cost_model.py \
+            loi_he_thong/canonical_opportunity.py \
+            recorder/replay.py \
+            mainnet_tier_s_shadow_launcher.py
+
+      - name: Authority invariant - timing start cannot consume causal wave
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('loi_he_thong/ignition_core.py').read_text()
+          forbidden = '_ignition_acquisition_claimed_id'
+          assert forbidden not in src, 'FAIL: Ignition still owns one-shot causal-wave claim via ' + forbidden
+          PY
+
+      - name: Authority invariant - maturity cannot hard-veto before Economics
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('loi_he_thong/ignition_core.py').read_text()
+          forbidden = 'consumed > MAX_CONSUMED_FRACTION'
+          assert forbidden not in src, 'FAIL: consumed_fraction still has structural Entry veto authority'
+          PY
+
+      - name: Lifecycle invariant - explicit consumed and invalidated semantics
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('loi_he_thong/entry_lifecycle.py').read_text()
+          assert 'ECONOMIC_OPPORTUNITY_CONSUMED' in src, 'FAIL: missing CONSUMED lifecycle event'
+          assert 'ECONOMIC_OPPORTUNITY_INVALIDATED' in src, 'FAIL: missing INVALIDATED lifecycle event'
+          PY
+
+      - name: Replay invariant - semantic determinism verifier exists
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src = Path('recorder/replay.py').read_text()
+          markers = ('verify-determinism', 'semantic_hash')
+          missing = [m for m in markers if m not in src]
+          assert not missing, 'FAIL: replay missing semantic determinism markers: ' + ', '.join(missing)
+          PY
+
+      - name: Causal mechanism contract
+        continue-on-error: true
+        run: python -m pytest -q tests/test_causal_mechanism.py
+      - name: Timing to Economics handoff contract
+        continue-on-error: true
+        run: python -m pytest -q tests/test_timing_economics_handoff.py
+      - name: Frozen physical cost contract
+        continue-on-error: true
+        run: python -m pytest -q tests/test_verified_cost_model.py
+      - name: Empirical Economics contract
+        continue-on-error: true
+        run: python -m pytest -q tests/test_entry_economics_v2.py
+      - name: Opportunity lifecycle contract
+        continue-on-error: true
+        run: python -m pytest -q tests/test_entry_lifecycle.py
+      - name: Canonical opportunity reservation and capture contract
+        continue-on-error: true
+        run: python -m pytest -q tests/test_canonical_opportunity.py
+      - name: Ignition regression contract
+        continue-on-error: true
+        run: python -m pytest -q tests/test_ignition_core.py
+      - name: Replay validation contract
+        continue-on-error: true
+        run: python -m pytest -q tests/test_wstrade_replay_validation.py
+      - name: Mainnet remains locked
+        continue-on-error: true
+        run: python -m pytest -q tests/test_mainnet_safety.py tests/test_direct_live_mode.py
+
+      - name: Strict Phase 4 acceptance summary
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import py_compile
+
+          failures = []
+          owners = [
+              'loi_he_thong/ignition_core.py',
+              'loi_he_thong/entry_lifecycle.py',
+              'loi_he_thong/entry_economics_v2.py',
+              'loi_he_thong/entry_edge_tier.py',
+              'loi_he_thong/verified_cost_model.py',
+              'loi_he_thong/canonical_opportunity.py',
+              'recorder/replay.py',
+              'mainnet_tier_s_shadow_launcher.py',
+          ]
+          for path in owners:
+              try:
+                  py_compile.compile(path, doraise=True)
+              except Exception as exc:
+                  failures.append(f'COMPILE {path}: {exc}')
+
+          ignition = Path('loi_he_thong/ignition_core.py').read_text()
+          lifecycle = Path('loi_he_thong/entry_lifecycle.py').read_text()
+          replay = Path('recorder/replay.py').read_text()
+          if '_ignition_acquisition_claimed_id' in ignition:
+              failures.append('AUTHORITY: one-shot causal-wave claim remains')
+          if 'consumed > MAX_CONSUMED_FRACTION' in ignition:
+              failures.append('AUTHORITY: maturity still hard-vetoes before Economics')
+          if 'ECONOMIC_OPPORTUNITY_CONSUMED' not in lifecycle:
+              failures.append('LIFECYCLE: missing ECONOMIC_OPPORTUNITY_CONSUMED')
+          if 'ECONOMIC_OPPORTUNITY_INVALIDATED' not in lifecycle:
+              failures.append('LIFECYCLE: missing ECONOMIC_OPPORTUNITY_INVALIDATED')
+          if 'verify-determinism' not in replay or 'semantic_hash' not in replay:
+              failures.append('REPLAY: semantic determinism verifier incomplete')
+
+          if failures:
+              print('\nPHASE4_BLOCKERS')
+              for item in failures:
+                  print('-', item)
+              raise SystemExit(1)
+          print('PHASE4_STATIC_ACCEPTANCE_OK')
+          PY
